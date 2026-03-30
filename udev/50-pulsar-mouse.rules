@@ -1,0 +1,23 @@
+# udev rules for Pulsar gaming mice
+# Allows members of the 'plugdev' group to access HID devices without sudo.
+#
+# Install:
+#   sudo cp udev/50-pulsar-mouse.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+
+# Pulsar X2A Medium Wired (VID 0x3710, PID 0x1404)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="1404", MODE="0660", GROUP="plugdev"
+KERNEL=="hidraw*", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="1404", MODE="0660", GROUP="plugdev"
+
+# Pulsar X2H Wired Medium (VID 0x3710, PID 0x1403)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="1403", MODE="0660", GROUP="plugdev"
+KERNEL=="hidraw*", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="1403", MODE="0660", GROUP="plugdev"
+
+# Pulsar Xlite v4 (VID 0x3710, PID 0x3401)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="3401", MODE="0660", GROUP="plugdev"
+KERNEL=="hidraw*", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="3401", MODE="0660", GROUP="plugdev"
+
+# Add additional Pulsar mice below:
+# Pulsar X2 v2 Mini Wired (VID 0x3554, PID 0xf507)
+# SUBSYSTEM=="usb", ATTRS{idVendor}=="3554", ATTRS{idProduct}=="f507", MODE="0660", GROUP="plugdev"
+# KERNEL=="hidraw*", ATTRS{idVendor}=="3554", ATTRS{idProduct}=="f507", MODE="0660", GROUP="plugdev"
