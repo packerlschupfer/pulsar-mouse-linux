@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pulsar-mouse-linux"
+version = "0.1.0"
+description = "Linux configuration tool for Pulsar gaming mice"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = ["pyusb"]
+
+[project.scripts]
+pulsar-mouse = "pulsar_mouse.cli:main"
+pulsar-mouse-gui = "pulsar_mouse.gui:main"
+
+[project.entry-points."pulsar_mouse.drivers"]
+x2a = "pulsar_mouse.drivers.x2a:PulsarX2A"
+x2h = "pulsar_mouse.drivers.x2h:PulsarX2H"
+xlite_v4 = "pulsar_mouse.drivers.xlite_v4:PulsarXliteV4"
+
+[tool.setuptools.packages.find]
+where = ["src"]

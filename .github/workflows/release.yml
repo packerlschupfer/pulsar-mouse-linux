@@ -1,0 +1,112 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-deb:
+    name: Build .deb package
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            dpkg-dev \
+            fakeroot
+
+      - name: Set version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Build .deb
+        run: |
+          PKG=pulsar-mouse-linux
+          VER=$VERSION
+          ARCH=all
+          DIR="${PKG}_${VER}_${ARCH}"
+
+          # Package tree
+          mkdir -p "${DIR}/DEBIAN"
+          mkdir -p "${DIR}/usr/local/bin"
+          mkdir -p "${DIR}/usr/share/applications"
+          mkdir -p "${DIR}/etc/udev/rules.d"
+
+          # Python package
+          PKG_DIR="${DIR}/usr/lib/python3/dist-packages/pulsar_mouse"
+          DRIVERS_DIR="${PKG_DIR}/drivers"
+          mkdir -p "${DRIVERS_DIR}"
+
+          install -m 644 src/pulsar_mouse/__init__.py  "${PKG_DIR}/"
+          install -m 644 src/pulsar_mouse/base.py      "${PKG_DIR}/"
+          install -m 644 src/pulsar_mouse/hid.py       "${PKG_DIR}/"
+          install -m 644 src/pulsar_mouse/cli.py       "${PKG_DIR}/"
+          install -m 644 src/pulsar_mouse/gui.py       "${PKG_DIR}/"
+          install -m 644 src/pulsar_mouse/drivers/__init__.py "${DRIVERS_DIR}/"
+          install -m 644 src/pulsar_mouse/drivers/x2a.py     "${DRIVERS_DIR}/"
+          install -m 644 src/pulsar_mouse/drivers/x2h.py     "${DRIVERS_DIR}/"
+          install -m 644 src/pulsar_mouse/drivers/xlite_v4.py "${DRIVERS_DIR}/"
+
+          # CLI entry point
+          cat > "${DIR}/usr/local/bin/pulsar-mouse" << 'SCRIPT'
+          #!/usr/bin/env python3
+          from pulsar_mouse.cli import main
+          main()
+          SCRIPT
+          chmod 755 "${DIR}/usr/local/bin/pulsar-mouse"
+
+          # GUI entry point
+          cat > "${DIR}/usr/local/bin/pulsar-mouse-gui" << 'SCRIPT'
+          #!/usr/bin/env python3
+          from pulsar_mouse.gui import main
+          main()
+          SCRIPT
+          chmod 755 "${DIR}/usr/local/bin/pulsar-mouse-gui"
+
+          # udev rules
+          install -m 644 udev/50-pulsar-mouse.rules \
+            "${DIR}/etc/udev/rules.d/50-pulsar-mouse.rules"
+
+          # Desktop entry
+          install -m 644 data/pulsar-mouse.desktop \
+            "${DIR}/usr/share/applications/pulsar-mouse.desktop"
+
+          # control file
+          cat > "${DIR}/DEBIAN/control" << EOF
+          Package: pulsar-mouse-linux
+          Version: ${VER}
+          Architecture: ${ARCH}
+          Maintainer: packerlschupfer
+          Depends: python3, python3-usb, python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1, gir1.2-dbusmenu-glib-0.4
+          Replaces: pulsar-x2a-linux
+          Conflicts: pulsar-x2a-linux
+          Description: Linux configuration tool for Pulsar gaming mice
+           Plugin-based tool providing CLI and GTK4/libadwaita GUI for
+           configuring Pulsar gaming mice. Supports multiple mouse models
+           via device-specific protocol drivers.
+          EOF
+
+          # postinst: reload udev rules
+          cat > "${DIR}/DEBIAN/postinst" << 'EOF'
+          #!/bin/sh
+          set -e
+          udevadm control --reload-rules || true
+          udevadm trigger || true
+          EOF
+          chmod 755 "${DIR}/DEBIAN/postinst"
+
+          fakeroot dpkg-deb --build "${DIR}"
+          echo "DEB_PATH=${DIR}.deb" >> "$GITHUB_ENV"
+
+      - name: Upload .deb to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "*.deb"
+          generate_release_notes: true
