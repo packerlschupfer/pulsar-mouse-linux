@@ -28,6 +28,13 @@ def _parse_bool(s, name):
 
 def print_global(device: PulsarDevice):
     caps = device.capabilities
+    if hasattr(device, 'get_power'):
+        try:
+            pwr = device.get_power()
+            charging = "  (charging)" if pwr['power_connected'] else ""
+            print(f"  Battery:          {pwr['battery_percent']}%  {pwr['battery_mv']} mV{charging}")
+        except Exception as e:
+            print(f"  Battery:          error ({e})")
     try:
         print(f"  Polling rate:     {device.get_polling_rate()} Hz")
     except Exception as e:
