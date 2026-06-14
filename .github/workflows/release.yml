@@ -262,13 +262,11 @@ jobs:
           cp src/pulsar_mouse/drivers/xlite_v4.py "${SITE}/pulsar_mouse/drivers/"
           cp src/pulsar_mouse/drivers/nordic.py  "${SITE}/pulsar_mouse/drivers/"
 
-          # Desktop file + icon
-          cp data/pulsar-mouse.desktop "${APPDIR}/usr/share/applications/"
-          cp data/pulsar-mouse.desktop "${APPDIR}/pulsar-mouse.desktop"
+          # Desktop file + icon (AppImage needs Icon= to match a file in AppDir root)
+          sed 's/Icon=input-mouse/Icon=pulsar-mouse/' data/pulsar-mouse.desktop \
+            > "${APPDIR}/pulsar-mouse.desktop"
           rsvg-convert -w 256 -h 256 data/pulsar-mouse.svg \
-            -o "${APPDIR}/usr/share/icons/hicolor/256x256/apps/pulsar-mouse.png"
-          cp "${APPDIR}/usr/share/icons/hicolor/256x256/apps/pulsar-mouse.png" \
-            "${APPDIR}/pulsar-mouse.png"
+            -o "${APPDIR}/pulsar-mouse.png"
 
           # AppRun
           cat > "${APPDIR}/AppRun" << 'APPRUN'
