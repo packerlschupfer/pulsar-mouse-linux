@@ -174,7 +174,7 @@ jobs:
           via device-specific protocol drivers.
 
           %install
-          SITE=%{buildroot}/usr/lib/python3/dist-packages/pulsar_mouse
+          SITE=%{buildroot}%{python3_sitelib}/pulsar_mouse
           install -d \${SITE}/drivers
           install -m 644 ${SRC}/src/pulsar_mouse/__init__.py  \${SITE}/
           install -m 644 ${SRC}/src/pulsar_mouse/base.py      \${SITE}/
@@ -205,7 +205,7 @@ jobs:
           %files
           /usr/local/bin/pulsar-mouse
           /usr/local/bin/pulsar-mouse-gui
-          /usr/lib/python3/dist-packages/pulsar_mouse/
+          %{python3_sitelib}/pulsar_mouse/
           /etc/udev/rules.d/50-pulsar-mouse.rules
           /usr/share/applications/pulsar-mouse.desktop
           /usr/share/icons/hicolor/scalable/apps/pulsar-mouse.svg

@@ -2,7 +2,7 @@
 set -e
 
 PREFIX="${PREFIX:-/usr/local}"
-PYTHON_SITE="${PYTHON_SITE:-/usr/lib/python3/dist-packages}"
+PYTHON_SITE="${PYTHON_SITE:-$(python3 -c 'import site; print(site.getsitepackages()[0])' 2>/dev/null || echo /usr/lib/python3/dist-packages)}"
 
 echo "Installing pulsar-mouse-linux..."
 echo "  PREFIX=$PREFIX"
