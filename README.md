@@ -72,7 +72,18 @@ sudo dpkg -i pulsar-mouse-linux_*.deb
 sudo dnf install ./pulsar-mouse-linux-*.noarch.rpm
 ```
 
-### Option 2: Tarball (any distro)
+### Option 2: AppImage (any distro, no install)
+
+```bash
+chmod +x pulsar-mouse-linux-*-x86_64.AppImage
+./pulsar-mouse-linux-*-x86_64.AppImage          # GUI
+./pulsar-mouse-linux-*-x86_64.AppImage --cli     # CLI
+```
+
+Bundles Python + pyusb. The GUI still needs system GTK4/libadwaita installed.
+udev rules must be installed separately (see below).
+
+### Option 3: Tarball (any distro)
 
 ```bash
 tar xzf pulsar-mouse-linux-*.tar.gz
@@ -80,7 +91,7 @@ cd pulsar-mouse-linux-*
 sudo ./install.sh
 ```
 
-### Option 3: From git
+### Option 4: From git
 
 ```bash
 git clone https://github.com/packerlschupfer/pulsar-mouse-linux
