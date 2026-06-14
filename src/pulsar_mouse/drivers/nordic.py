@@ -75,11 +75,8 @@ BUTTON_ADDRS = {
     'left':    0x60,
     'right':   0x64,
     'wheel':   0x68,
-    'thumb1':  0x6C,   # left side front
-    'thumb2':  0x70,   # left side back
-    'thumb3':  0x74,   # right side front (X2A only, unconfirmed addr)
-    'thumb4':  0x78,   # right side back  (X2A only, unconfirmed addr)
-    'dpi':     0x7C,   # DPI button       (X2A only, unconfirmed addr)
+    'thumb1':  0x6C,   # side front (forward)
+    'thumb2':  0x70,   # side back  (backward)
 }
 
 ADDR_DEBOUNCE         = 0xA9
@@ -99,8 +96,22 @@ LED_EFFECT_BREATHE = 0x02
 BUTTON_MODE_DISABLED       = 0x00
 BUTTON_MODE_MOUSE          = 0x01
 BUTTON_MODE_DPI_CHANGE     = 0x02
+BUTTON_MODE_CUSTOM         = 0x05
 BUTTON_MODE_PROFILE_CHANGE = 0x09
 BUTTON_MODE_DPI_LOCK       = 0x0A
+
+# Nordic mouse action values are bitmasks, Sonix are sequential.
+# Translate so hid.py's describe_button() works universally.
+_NORDIC_MOUSE_TO_SONIX = {
+    0x01: 0x01,  # left
+    0x02: 0x02,  # right
+    0x04: 0x03,  # wheel
+    0x08: 0x05,  # backward (back)
+    0x10: 0x04,  # forward
+}
+
+from pulsar_mouse.hid import (BTN_TYPE_MOUSE, BTN_TYPE_KEYBOARD,
+                               BTN_TYPE_DPI, BTN_TYPE_PROFILE)
 
 
 # ── DPI encoding (50 DPI steps, 3 bytes per stage) ──────────────────────────
@@ -143,11 +154,8 @@ class PulsarNordic(PulsarDevice):
             'left':    0x01,
             'right':   0x02,
             'wheel':   0x03,
-            'thumb1':  0x04,   # left side front
-            'thumb2':  0x05,   # left side back
-            'thumb3':  0x06,   # right side front
-            'thumb4':  0x07,   # right side back
-            'dpi':     0x08,
+            'thumb1':  0x04,   # side front (forward)
+            'thumb2':  0x05,   # side back  (backward)
         },
         polling_rates=[125, 250, 500, 1000],
         lod_values=[1, 2],
@@ -158,9 +166,7 @@ class PulsarNordic(PulsarDevice):
         button_labels={
             'left': 'Left Click', 'right': 'Right Click',
             'wheel': 'Wheel Click',
-            'thumb1': 'Thumb 1 (forward)', 'thumb2': 'Thumb 2 (back)',
-            'thumb3': 'Thumb 3 (forward)', 'thumb4': 'Thumb 4 (back)',
-            'dpi': 'DPI Button',
+            'thumb1': 'Side Front (forward)', 'thumb2': 'Side Back (backward)',
         },
     )
 
@@ -435,9 +441,25 @@ class PulsarNordic(PulsarDevice):
         if name is None:
             raise ValueError(f"Unknown button ID 0x{btn_id:02x}")
         addr = BUTTON_ADDRS[name]
-        return (self._mem.get(addr, 0),
-                self._mem.get(addr + 1, 0),
-                self._mem.get(addr + 2, 0))
+        raw_type = self._mem.get(addr, 0)
+        raw_a1 = self._mem.get(addr + 1, 0)
+        raw_a2 = self._mem.get(addr + 2, 0)
+        return self._translate_button(raw_type, raw_a1, raw_a2)
+
+    @staticmethod
+    def _translate_button(raw_type, a1, a2):
+        """Translate Nordic button encoding to Sonix-compatible values."""
+        if raw_type == BUTTON_MODE_MOUSE:
+            return (BTN_TYPE_MOUSE, _NORDIC_MOUSE_TO_SONIX.get(a1, a1), a2)
+        if raw_type == BUTTON_MODE_DPI_CHANGE:
+            return (BTN_TYPE_DPI, a1, a2)
+        if raw_type == BUTTON_MODE_PROFILE_CHANGE:
+            return (BTN_TYPE_PROFILE, a1, a2)
+        if raw_type == BUTTON_MODE_CUSTOM:
+            return (BTN_TYPE_KEYBOARD, a1, a2)
+        if raw_type == BUTTON_MODE_DISABLED:
+            return (BTN_TYPE_MOUSE, 0x00, 0x00)
+        return (raw_type, a1, a2)
 
     def set_button(self, btn_id: int, btn_type: int, a1: int, a2: int,
                    profile: int) -> None:
