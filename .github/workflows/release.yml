@@ -249,9 +249,9 @@ jobs:
           cp /usr/bin/python3 "${APPDIR}/usr/bin/python3"
           cp -a "/usr/lib/python${PYVER}" "${APPDIR}/usr/lib/"
 
-          # Install pyusb + our package into the bundled stdlib
+          # Install pyusb into the bundled stdlib
           SITE="${APPDIR}/usr/lib/python${PYVER}"
-          "${APPDIR}/usr/bin/python3" -c "import pip; pip.main(['install','--target','${SITE}','--quiet','pyusb'])"
+          pip install --target="${SITE}" --quiet pyusb
 
           mkdir -p "${SITE}/pulsar_mouse/drivers"
           cp src/pulsar_mouse/__init__.py  "${SITE}/pulsar_mouse/"
