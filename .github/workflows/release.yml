@@ -151,49 +151,12 @@ jobs:
         run: |
           PKG=pulsar-mouse-linux
           VER=$VERSION
+          TOPDIR="$(pwd)/rpmbuild"
+          SRC="$(pwd)"
 
-          mkdir -p rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
-          BUILDROOT="$(pwd)/rpmbuild/BUILDROOT/${PKG}-${VER}-1.noarch"
+          mkdir -p "${TOPDIR}"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 
-          mkdir -p "${BUILDROOT}/usr/local/bin"
-          mkdir -p "${BUILDROOT}/usr/share/applications"
-          mkdir -p "${BUILDROOT}/etc/udev/rules.d"
-
-          SITE="${BUILDROOT}/usr/lib/python3/dist-packages/pulsar_mouse"
-          mkdir -p "${SITE}/drivers"
-
-          install -m 644 src/pulsar_mouse/__init__.py  "${SITE}/"
-          install -m 644 src/pulsar_mouse/base.py      "${SITE}/"
-          install -m 644 src/pulsar_mouse/hid.py       "${SITE}/"
-          install -m 644 src/pulsar_mouse/cli.py       "${SITE}/"
-          install -m 644 src/pulsar_mouse/gui.py       "${SITE}/"
-          install -m 644 src/pulsar_mouse/drivers/__init__.py "${SITE}/drivers/"
-          install -m 644 src/pulsar_mouse/drivers/x2a.py     "${SITE}/drivers/"
-          install -m 644 src/pulsar_mouse/drivers/x2h.py     "${SITE}/drivers/"
-          install -m 644 src/pulsar_mouse/drivers/xlite_v4.py "${SITE}/drivers/"
-          install -m 644 src/pulsar_mouse/drivers/nordic.py  "${SITE}/drivers/"
-
-          cat > "${BUILDROOT}/usr/local/bin/pulsar-mouse" << 'SCRIPT'
-          #!/usr/bin/env python3
-          from pulsar_mouse.cli import main
-          main()
-          SCRIPT
-          chmod 755 "${BUILDROOT}/usr/local/bin/pulsar-mouse"
-
-          cat > "${BUILDROOT}/usr/local/bin/pulsar-mouse-gui" << 'SCRIPT'
-          #!/usr/bin/env python3
-          from pulsar_mouse.gui import main
-          main()
-          SCRIPT
-          chmod 755 "${BUILDROOT}/usr/local/bin/pulsar-mouse-gui"
-
-          install -m 644 udev/50-pulsar-mouse.rules \
-            "${BUILDROOT}/etc/udev/rules.d/50-pulsar-mouse.rules"
-
-          install -m 644 data/pulsar-mouse.desktop \
-            "${BUILDROOT}/usr/share/applications/pulsar-mouse.desktop"
-
-          cat > rpmbuild/SPECS/${PKG}.spec << SPEC
+          cat > "${TOPDIR}/SPECS/${PKG}.spec" << SPEC
           Name:           ${PKG}
           Version:        ${VER}
           Release:        1
@@ -207,6 +170,32 @@ jobs:
           configuring Pulsar gaming mice. Supports multiple mouse models
           via device-specific protocol drivers.
 
+          %install
+          SITE=%{buildroot}/usr/lib/python3/dist-packages/pulsar_mouse
+          install -d \${SITE}/drivers
+          install -m 644 ${SRC}/src/pulsar_mouse/__init__.py  \${SITE}/
+          install -m 644 ${SRC}/src/pulsar_mouse/base.py      \${SITE}/
+          install -m 644 ${SRC}/src/pulsar_mouse/hid.py       \${SITE}/
+          install -m 644 ${SRC}/src/pulsar_mouse/cli.py       \${SITE}/
+          install -m 644 ${SRC}/src/pulsar_mouse/gui.py       \${SITE}/
+          install -m 644 ${SRC}/src/pulsar_mouse/drivers/__init__.py \${SITE}/drivers/
+          install -m 644 ${SRC}/src/pulsar_mouse/drivers/x2a.py     \${SITE}/drivers/
+          install -m 644 ${SRC}/src/pulsar_mouse/drivers/x2h.py     \${SITE}/drivers/
+          install -m 644 ${SRC}/src/pulsar_mouse/drivers/xlite_v4.py \${SITE}/drivers/
+          install -m 644 ${SRC}/src/pulsar_mouse/drivers/nordic.py  \${SITE}/drivers/
+
+          install -d %{buildroot}/usr/local/bin
+          printf '#!/usr/bin/env python3\nfrom pulsar_mouse.cli import main\nmain()\n' > %{buildroot}/usr/local/bin/pulsar-mouse
+          chmod 755 %{buildroot}/usr/local/bin/pulsar-mouse
+          printf '#!/usr/bin/env python3\nfrom pulsar_mouse.gui import main\nmain()\n' > %{buildroot}/usr/local/bin/pulsar-mouse-gui
+          chmod 755 %{buildroot}/usr/local/bin/pulsar-mouse-gui
+
+          install -d %{buildroot}/etc/udev/rules.d
+          install -m 644 ${SRC}/udev/50-pulsar-mouse.rules %{buildroot}/etc/udev/rules.d/
+
+          install -d %{buildroot}/usr/share/applications
+          install -m 644 ${SRC}/data/pulsar-mouse.desktop %{buildroot}/usr/share/applications/
+
           %files
           /usr/local/bin/pulsar-mouse
           /usr/local/bin/pulsar-mouse-gui
@@ -219,8 +208,8 @@ jobs:
           udevadm trigger || true
           SPEC
 
-          rpmbuild --define "_topdir $(pwd)/rpmbuild" -bb rpmbuild/SPECS/${PKG}.spec
-          cp rpmbuild/RPMS/noarch/*.rpm .
+          rpmbuild --define "_topdir ${TOPDIR}" -bb "${TOPDIR}/SPECS/${PKG}.spec"
+          cp "${TOPDIR}"/RPMS/noarch/*.rpm .
 
       - name: Upload .rpm
         uses: softprops/action-gh-release@v2
