@@ -2,7 +2,7 @@
 Name=Pulsar Mouse
 Comment=Configure Pulsar gaming mouse settings
 Exec=pulsar-mouse-gui
-Icon=input-mouse
+Icon=pulsar-mouse
 Type=Application
 Categories=Settings;HardwareSettings;
 Keywords=mouse;gaming;dpi;pulsar;

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="data/pulsar-mouse.svg" alt="Pulsar Mouse Linux" width="128">
+</p>
+
 # pulsar-mouse-linux
 
 Linux configuration tool for **Pulsar gaming mice**.
@@ -233,6 +237,11 @@ Then run `sudo update-grub && reboot`.
 
 Packet: 64 bytes, Interface 3, HID Feature report (wValue=0x0300).
 Checksum: bytes[62:64] = LE uint16(sum(bytes[0:62])).
+
+## Credits
+
+- [@Scout339](https://github.com/Scout339) — Logo design, wireless mouse testing
+- [andrewrabert](https://github.com/andrewrabert) — [python-pulsar-mouse-tool](https://github.com/andrewrabert/python-pulsar-mouse-tool), reference implementation for the Nordic wireless protocol
 
 ## Related Projects
 

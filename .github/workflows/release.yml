@@ -75,9 +75,12 @@ jobs:
           install -m 644 udev/50-pulsar-mouse.rules \
             "${DIR}/etc/udev/rules.d/50-pulsar-mouse.rules"
 
-          # Desktop entry
+          # Desktop entry + icon
           install -m 644 data/pulsar-mouse.desktop \
             "${DIR}/usr/share/applications/pulsar-mouse.desktop"
+          mkdir -p "${DIR}/usr/share/icons/hicolor/scalable/apps"
+          install -m 644 data/pulsar-mouse.svg \
+            "${DIR}/usr/share/icons/hicolor/scalable/apps/pulsar-mouse.svg"
 
           # control file
           cat > "${DIR}/DEBIAN/control" << EOF
@@ -196,12 +199,16 @@ jobs:
           install -d %{buildroot}/usr/share/applications
           install -m 644 ${SRC}/data/pulsar-mouse.desktop %{buildroot}/usr/share/applications/
 
+          install -d %{buildroot}/usr/share/icons/hicolor/scalable/apps
+          install -m 644 ${SRC}/data/pulsar-mouse.svg %{buildroot}/usr/share/icons/hicolor/scalable/apps/
+
           %files
           /usr/local/bin/pulsar-mouse
           /usr/local/bin/pulsar-mouse-gui
           /usr/lib/python3/dist-packages/pulsar_mouse/
           /etc/udev/rules.d/50-pulsar-mouse.rules
           /usr/share/applications/pulsar-mouse.desktop
+          /usr/share/icons/hicolor/scalable/apps/pulsar-mouse.svg
 
           %post
           udevadm control --reload-rules || true
@@ -229,8 +236,7 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            python3-pip librsvg2-bin
+          sudo apt-get install -y --no-install-recommends python3-pip
 
       - name: Build AppImage
         run: |
@@ -265,11 +271,9 @@ jobs:
           cp src/pulsar_mouse/drivers/xlite_v4.py "${SITE}/pulsar_mouse/drivers/"
           cp src/pulsar_mouse/drivers/nordic.py  "${SITE}/pulsar_mouse/drivers/"
 
-          # Desktop file + icon (AppImage needs Icon= to match a file in AppDir root)
-          sed 's/Icon=input-mouse/Icon=pulsar-mouse/' data/pulsar-mouse.desktop \
-            > "${APPDIR}/pulsar-mouse.desktop"
-          rsvg-convert -w 256 -h 256 data/pulsar-mouse.svg \
-            -o "${APPDIR}/pulsar-mouse.png"
+          # Desktop file + icon
+          cp data/pulsar-mouse.desktop "${APPDIR}/pulsar-mouse.desktop"
+          cp data/pulsar-mouse.png "${APPDIR}/pulsar-mouse.png"
 
           # AppRun
           cat > "${APPDIR}/AppRun" << 'APPRUN'

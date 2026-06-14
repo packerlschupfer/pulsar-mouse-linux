@@ -45,9 +45,11 @@ install -m 644 udev/50-pulsar-mouse.rules /etc/udev/rules.d/
 udevadm control --reload-rules 2>/dev/null || true
 udevadm trigger 2>/dev/null || true
 
-# Desktop entry
+# Desktop entry + icon
 install -d "$PREFIX/share/applications"
 install -m 644 data/pulsar-mouse.desktop "$PREFIX/share/applications/"
+install -d "$PREFIX/share/icons/hicolor/scalable/apps"
+install -m 644 data/pulsar-mouse.svg "$PREFIX/share/icons/hicolor/scalable/apps/pulsar-mouse.svg"
 
 echo
 echo "Done! You may need to install dependencies:"
