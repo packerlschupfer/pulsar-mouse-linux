@@ -17,6 +17,12 @@ KERNEL=="hidraw*", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="1403", MODE="0660
 SUBSYSTEM=="usb", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="3401", MODE="0660", GROUP="plugdev"
 KERNEL=="hidraw*", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="3401", MODE="0660", GROUP="plugdev"
 
+# Pulsar Nordic chipset — X2A Wireless, X2 V2 Mini (VID 0x3554)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="3554", ATTRS{idProduct}=="f507", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="3554", ATTRS{idProduct}=="f508", MODE="0660", GROUP="plugdev"
+KERNEL=="hidraw*", ATTRS{idVendor}=="3554", ATTRS{idProduct}=="f507", MODE="0660", GROUP="plugdev"
+KERNEL=="hidraw*", ATTRS{idVendor}=="3554", ATTRS{idProduct}=="f508", MODE="0660", GROUP="plugdev"
+
 # Add additional Pulsar mice below:
 # Pulsar X2 v2 Mini Wired (VID 0x3554, PID 0xf507)
 # SUBSYSTEM=="usb", ATTRS{idVendor}=="3554", ATTRS{idProduct}=="f507", MODE="0660", GROUP="plugdev"

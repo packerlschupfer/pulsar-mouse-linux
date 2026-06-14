@@ -53,6 +53,7 @@ jobs:
           install -m 644 src/pulsar_mouse/drivers/x2a.py     "${DRIVERS_DIR}/"
           install -m 644 src/pulsar_mouse/drivers/x2h.py     "${DRIVERS_DIR}/"
           install -m 644 src/pulsar_mouse/drivers/xlite_v4.py "${DRIVERS_DIR}/"
+          install -m 644 src/pulsar_mouse/drivers/nordic.py  "${DRIVERS_DIR}/"
 
           # CLI entry point
           cat > "${DIR}/usr/local/bin/pulsar-mouse" << 'SCRIPT'

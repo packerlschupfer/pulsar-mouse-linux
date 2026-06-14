@@ -19,6 +19,7 @@ pulsar-mouse-gui = "pulsar_mouse.gui:main"
 x2a = "pulsar_mouse.drivers.x2a:PulsarX2A"
 x2h = "pulsar_mouse.drivers.x2h:PulsarX2H"
 xlite_v4 = "pulsar_mouse.drivers.xlite_v4:PulsarXliteV4"
+nordic = "pulsar_mouse.drivers.nordic:PulsarNordic"
 
 [tool.setuptools.packages.find]
 where = ["src"]

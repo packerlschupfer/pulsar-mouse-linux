@@ -24,6 +24,7 @@ Reverse-engineered from USB HID captures of Pulsar Fusion on Windows 11.
 | Pulsar X2A Medium Wired | `x2a` | `3710:1404` | Fully supported |
 | Pulsar X2H Wired Medium | `x2h` | `3710:1403` | Fully supported |
 | Pulsar Xlite v4 | `xlite_v4` | `3710:3401` | Untested (same Sonix protocol as X2A) |
+| Pulsar X2A Wireless / X2 V2 Mini | `nordic` | `3554:f507` `3554:f508` | Untested (Nordic chipset, different protocol) |
 
 Want to add support for your mouse? See [Adding a new driver](#adding-a-new-driver) below.
 
