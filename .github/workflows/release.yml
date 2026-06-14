@@ -216,10 +216,92 @@ jobs:
         with:
           files: "*.rpm"
 
+  build-appimage:
+    name: Build AppImage
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            python3-venv librsvg2-bin
+
+      - name: Build AppImage
+        run: |
+          set -e
+          APP="Pulsar_Mouse"
+          APPDIR="${APP}.AppDir"
+
+          # Create AppDir structure
+          mkdir -p "${APPDIR}/usr/bin"
+          mkdir -p "${APPDIR}/usr/lib"
+          mkdir -p "${APPDIR}/usr/share/applications"
+          mkdir -p "${APPDIR}/usr/share/icons/hicolor/256x256/apps"
+
+          # Bundle Python + pyusb in a venv
+          python3 -m venv --copies "${APPDIR}/usr"
+          "${APPDIR}/usr/bin/python3" -m pip install --quiet pyusb
+
+          # Install our package
+          SITE=$("${APPDIR}/usr/bin/python3" -c "import site; print(site.getsitepackages()[0])")
+          mkdir -p "${SITE}/pulsar_mouse/drivers"
+          cp src/pulsar_mouse/__init__.py  "${SITE}/pulsar_mouse/"
+          cp src/pulsar_mouse/base.py      "${SITE}/pulsar_mouse/"
+          cp src/pulsar_mouse/hid.py       "${SITE}/pulsar_mouse/"
+          cp src/pulsar_mouse/cli.py       "${SITE}/pulsar_mouse/"
+          cp src/pulsar_mouse/gui.py       "${SITE}/pulsar_mouse/"
+          cp src/pulsar_mouse/drivers/__init__.py "${SITE}/pulsar_mouse/drivers/"
+          cp src/pulsar_mouse/drivers/x2a.py     "${SITE}/pulsar_mouse/drivers/"
+          cp src/pulsar_mouse/drivers/x2h.py     "${SITE}/pulsar_mouse/drivers/"
+          cp src/pulsar_mouse/drivers/xlite_v4.py "${SITE}/pulsar_mouse/drivers/"
+          cp src/pulsar_mouse/drivers/nordic.py  "${SITE}/pulsar_mouse/drivers/"
+
+          # Desktop file + icon
+          cp data/pulsar-mouse.desktop "${APPDIR}/usr/share/applications/"
+          cp data/pulsar-mouse.desktop "${APPDIR}/pulsar-mouse.desktop"
+          rsvg-convert -w 256 -h 256 data/pulsar-mouse.svg \
+            -o "${APPDIR}/usr/share/icons/hicolor/256x256/apps/pulsar-mouse.png"
+          cp "${APPDIR}/usr/share/icons/hicolor/256x256/apps/pulsar-mouse.png" \
+            "${APPDIR}/pulsar-mouse.png"
+
+          # AppRun
+          cat > "${APPDIR}/AppRun" << 'APPRUN'
+          #!/bin/bash
+          HERE="$(dirname "$(readlink -f "$0")")"
+          export PATH="${HERE}/usr/bin:${PATH}"
+          export PYTHONHOME="${HERE}/usr"
+          if [ "$1" = "--cli" ]; then
+              shift
+              exec "${HERE}/usr/bin/python3" -m pulsar_mouse.cli "$@"
+          else
+              exec "${HERE}/usr/bin/python3" -m pulsar_mouse.gui "$@"
+          fi
+          APPRUN
+          chmod 755 "${APPDIR}/AppRun"
+
+          # Download appimagetool
+          curl -sL -o appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+
+          ARCH=x86_64 ./appimagetool --no-appstream "${APPDIR}" \
+            "pulsar-mouse-linux-${VERSION}-x86_64.AppImage"
+
+      - name: Upload AppImage
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "*.AppImage"
+
   release-notes:
     name: Generate release notes
     runs-on: ubuntu-24.04
-    needs: [build-deb, build-tarball, build-rpm]
+    needs: [build-deb, build-tarball, build-rpm, build-appimage]
 
     steps:
       - uses: softprops/action-gh-release@v2
