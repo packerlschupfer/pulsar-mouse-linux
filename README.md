@@ -3,9 +3,10 @@
 Linux configuration tool for **Pulsar gaming mice**.
 
 Plugin architecture — each mouse model has its own protocol driver.
-Currently supports the **Pulsar X2A Medium Wired** and **Pulsar X2H Wired Medium**.
+Currently supports the **Pulsar X2A Medium Wired**, **Pulsar X2H Wired Medium**, and **Pulsar X2A Wireless**.
 
 Reverse-engineered from USB HID captures of Pulsar Fusion on Windows 11.
+Wireless (Nordic) protocol based on [python-pulsar-mouse-tool](https://github.com/andrewrabert/python-pulsar-mouse-tool) by andrewrabert.
 
 ## Screenshots
 
@@ -24,24 +25,30 @@ Reverse-engineered from USB HID captures of Pulsar Fusion on Windows 11.
 | Pulsar X2A Medium Wired | `x2a` | `3710:1404` | Fully supported |
 | Pulsar X2H Wired Medium | `x2h` | `3710:1403` | Fully supported |
 | Pulsar Xlite v4 | `xlite_v4` | `3710:3401` | Untested (same Sonix protocol as X2A) |
-| Pulsar X2A Wireless / X2 V2 Mini | `nordic` | `3554:f507` `3554:f508` | Untested (Nordic chipset, different protocol) |
+| Pulsar X2A Wireless / X2 V2 Mini | `nordic` | `3554:f507` `3554:f508` | Supported (Nordic chipset, battery status) |
 
 Want to add support for your mouse? See [Adding a new driver](#adding-a-new-driver) below.
 
 ## Requirements
 
-```
-sudo apt install python3-usb python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
+**Debian / Ubuntu:**
+```bash
+sudo apt install python3-usb python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-dbusmenu-glib-0.4
 ```
 
-For the system-tray applet:
+**Fedora:**
+```bash
+sudo dnf install python3-pyusb python3-gobject gtk4 libadwaita libdbusmenu
 ```
-sudo apt install gir1.2-dbusmenu-glib-0.4
+
+**Arch Linux:**
+```bash
+sudo pacman -S python-pyusb python-gobject gtk4 libadwaita libdbusmenu-glib
 ```
 
 On GNOME you also need the AppIndicator shell extension for the tray icon to appear:
-```
-sudo apt install gnome-shell-extension-appindicator
+```bash
+sudo apt install gnome-shell-extension-appindicator   # Debian/Ubuntu
 # then enable it (Ubuntu):
 gnome-extensions enable ubuntu-appindicators@ubuntu.com
 # or on other distros:
@@ -49,12 +56,46 @@ gnome-extensions enable appindicatorsupport@rgcjonas.gmail.com
 ```
 Then restart GNOME Shell (log out/in, or Alt+F2 → r → Enter on X11).
 
-## Installation (optional — run without sudo)
+KDE Plasma supports the system tray natively — no extra extensions needed.
+
+## Installation
+
+### Option 1: Package (.deb / .rpm)
+
+Download from the [latest release](https://github.com/packerlschupfer/pulsar-mouse-linux/releases):
+
+```bash
+# Debian / Ubuntu
+sudo dpkg -i pulsar-mouse-linux_*.deb
+
+# Fedora
+sudo dnf install ./pulsar-mouse-linux-*.noarch.rpm
+```
+
+### Option 2: Tarball (any distro)
+
+```bash
+tar xzf pulsar-mouse-linux-*.tar.gz
+cd pulsar-mouse-linux-*
+sudo ./install.sh
+```
+
+### Option 3: From git
+
+```bash
+git clone https://github.com/packerlschupfer/pulsar-mouse-linux
+cd pulsar-mouse-linux
+pip install --user -e .
+```
+
+### udev rules (run without sudo)
+
+Packages install udev rules automatically. For git installs:
 
 ```bash
 sudo cp udev/50-pulsar-mouse.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules && sudo udevadm trigger
-sudo usermod -aG plugdev $USER   # re-login after this
+sudo groupadd -f plugdev && sudo usermod -aG plugdev $USER   # re-login after this
 ```
 
 ## GUI + System Tray
