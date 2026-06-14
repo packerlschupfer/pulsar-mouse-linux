@@ -281,6 +281,15 @@ jobs:
           HERE="$(dirname "$(readlink -f "$0")")"
           export PATH="${HERE}/usr/bin:${PATH}"
           export PYTHONHOME="${HERE}/usr"
+
+          # Add system site-packages so gi (PyGObject), dbus, etc. are found
+          for d in /usr/lib/python3/dist-packages \
+                   /usr/lib/python3.*/dist-packages \
+                   /usr/lib64/python3.*/site-packages; do
+              [ -d "$d" ] && PYTHONPATH="${PYTHONPATH:+${PYTHONPATH}:}${d}"
+          done
+          export PYTHONPATH
+
           if [ "$1" = "--cli" ]; then
               shift
               exec "${HERE}/usr/bin/python3" -m pulsar_mouse.cli "$@"
