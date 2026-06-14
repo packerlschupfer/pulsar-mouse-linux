@@ -106,8 +106,133 @@ jobs:
           fakeroot dpkg-deb --build "${DIR}"
           echo "DEB_PATH=${DIR}.deb" >> "$GITHUB_ENV"
 
-      - name: Upload .deb to release
+      - name: Upload .deb
         uses: softprops/action-gh-release@v2
         with:
           files: "*.deb"
+
+  build-tarball:
+    name: Build tarball
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Build tarball
+        run: |
+          DIR="pulsar-mouse-linux-${VERSION}"
+          mkdir -p "$DIR"
+          cp -r src/ udev/ data/ install.sh pyproject.toml README.md LICENSE "$DIR/"
+          tar czf "${DIR}.tar.gz" "$DIR"
+
+      - name: Upload tarball
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "*.tar.gz"
+
+  build-rpm:
+    name: Build .rpm package
+    runs-on: ubuntu-24.04
+    container: fedora:44
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: dnf install -y rpm-build
+
+      - name: Set version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Build .rpm
+        run: |
+          PKG=pulsar-mouse-linux
+          VER=$VERSION
+
+          mkdir -p rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+          BUILDROOT="$(pwd)/rpmbuild/BUILDROOT/${PKG}-${VER}-1.noarch"
+
+          mkdir -p "${BUILDROOT}/usr/local/bin"
+          mkdir -p "${BUILDROOT}/usr/share/applications"
+          mkdir -p "${BUILDROOT}/etc/udev/rules.d"
+
+          SITE="${BUILDROOT}/usr/lib/python3/dist-packages/pulsar_mouse"
+          mkdir -p "${SITE}/drivers"
+
+          install -m 644 src/pulsar_mouse/__init__.py  "${SITE}/"
+          install -m 644 src/pulsar_mouse/base.py      "${SITE}/"
+          install -m 644 src/pulsar_mouse/hid.py       "${SITE}/"
+          install -m 644 src/pulsar_mouse/cli.py       "${SITE}/"
+          install -m 644 src/pulsar_mouse/gui.py       "${SITE}/"
+          install -m 644 src/pulsar_mouse/drivers/__init__.py "${SITE}/drivers/"
+          install -m 644 src/pulsar_mouse/drivers/x2a.py     "${SITE}/drivers/"
+          install -m 644 src/pulsar_mouse/drivers/x2h.py     "${SITE}/drivers/"
+          install -m 644 src/pulsar_mouse/drivers/xlite_v4.py "${SITE}/drivers/"
+          install -m 644 src/pulsar_mouse/drivers/nordic.py  "${SITE}/drivers/"
+
+          cat > "${BUILDROOT}/usr/local/bin/pulsar-mouse" << 'SCRIPT'
+          #!/usr/bin/env python3
+          from pulsar_mouse.cli import main
+          main()
+          SCRIPT
+          chmod 755 "${BUILDROOT}/usr/local/bin/pulsar-mouse"
+
+          cat > "${BUILDROOT}/usr/local/bin/pulsar-mouse-gui" << 'SCRIPT'
+          #!/usr/bin/env python3
+          from pulsar_mouse.gui import main
+          main()
+          SCRIPT
+          chmod 755 "${BUILDROOT}/usr/local/bin/pulsar-mouse-gui"
+
+          install -m 644 udev/50-pulsar-mouse.rules \
+            "${BUILDROOT}/etc/udev/rules.d/50-pulsar-mouse.rules"
+
+          install -m 644 data/pulsar-mouse.desktop \
+            "${BUILDROOT}/usr/share/applications/pulsar-mouse.desktop"
+
+          cat > rpmbuild/SPECS/${PKG}.spec << SPEC
+          Name:           ${PKG}
+          Version:        ${VER}
+          Release:        1
+          Summary:        Linux configuration tool for Pulsar gaming mice
+          License:        MIT
+          BuildArch:      noarch
+          Requires:       python3, python3-pyusb, python3-gobject, gtk4, libadwaita
+
+          %description
+          Plugin-based tool providing CLI and GTK4/libadwaita GUI for
+          configuring Pulsar gaming mice. Supports multiple mouse models
+          via device-specific protocol drivers.
+
+          %files
+          /usr/local/bin/pulsar-mouse
+          /usr/local/bin/pulsar-mouse-gui
+          /usr/lib/python3/dist-packages/pulsar_mouse/
+          /etc/udev/rules.d/50-pulsar-mouse.rules
+          /usr/share/applications/pulsar-mouse.desktop
+
+          %post
+          udevadm control --reload-rules || true
+          udevadm trigger || true
+          SPEC
+
+          rpmbuild --define "_topdir $(pwd)/rpmbuild" -bb rpmbuild/SPECS/${PKG}.spec
+          cp rpmbuild/RPMS/noarch/*.rpm .
+
+      - name: Upload .rpm
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "*.rpm"
+
+  release-notes:
+    name: Generate release notes
+    runs-on: ubuntu-24.04
+    needs: [build-deb, build-tarball, build-rpm]
+
+    steps:
+      - uses: softprops/action-gh-release@v2
+        with:
           generate_release_notes: true
