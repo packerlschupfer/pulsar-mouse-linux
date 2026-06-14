@@ -75,8 +75,11 @@ BUTTON_ADDRS = {
     'left':    0x60,
     'right':   0x64,
     'wheel':   0x68,
-    'back':    0x6C,
-    'forward': 0x70,
+    'thumb1':  0x6C,   # left side front
+    'thumb2':  0x70,   # left side back
+    'thumb3':  0x74,   # right side front (X2A only, unconfirmed addr)
+    'thumb4':  0x78,   # right side back  (X2A only, unconfirmed addr)
+    'dpi':     0x7C,   # DPI button       (X2A only, unconfirmed addr)
 }
 
 ADDR_DEBOUNCE         = 0xA9
@@ -140,8 +143,11 @@ class PulsarNordic(PulsarDevice):
             'left':    0x01,
             'right':   0x02,
             'wheel':   0x03,
-            'back':    0x04,
-            'forward': 0x05,
+            'thumb1':  0x04,   # left side front
+            'thumb2':  0x05,   # left side back
+            'thumb3':  0x06,   # right side front
+            'thumb4':  0x07,   # right side back
+            'dpi':     0x08,
         },
         polling_rates=[125, 250, 500, 1000],
         lod_values=[1, 2],
@@ -152,7 +158,9 @@ class PulsarNordic(PulsarDevice):
         button_labels={
             'left': 'Left Click', 'right': 'Right Click',
             'wheel': 'Wheel Click',
-            'back': 'Side Back', 'forward': 'Side Front',
+            'thumb1': 'Thumb 1 (forward)', 'thumb2': 'Thumb 2 (back)',
+            'thumb3': 'Thumb 3 (forward)', 'thumb4': 'Thumb 4 (back)',
+            'dpi': 'DPI Button',
         },
     )
 
