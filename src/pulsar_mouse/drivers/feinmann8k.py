@@ -173,21 +173,25 @@ class PulsarFeinmann8K(PulsarDevice):
         self._poll_ack()
 
     def _query(self, cat, reg, sub, profile=0x01, payload=(),
-               match=None, timeout_ms=300) -> bytes:
+               match=None, timeout_ms=500, retries=3) -> bytes:
         """Issue a read command and wait for its async reply on EP 0x82.
 
         `match` is an optional predicate over the raw reply bytes, used to
         pick the right reply out of the response stream (the device also
-        emits an unrelated ~1Hz heartbeat on the same endpoint).
+        emits an unrelated ~1Hz heartbeat on the same endpoint). The reply
+        depends on a live RF round-trip to the mouse, which occasionally
+        drops a packet or arrives late - retry the whole request rather
+        than just waiting longer on a single window.
         """
-        self._set_report(self._build_read(cat, reg, sub, profile, payload))
-        self._poll_ack()
-        for resp in self._drain_responses(timeout_ms):
-            if match is None or match(resp):
-                return resp
+        for attempt in range(retries):
+            self._set_report(self._build_read(cat, reg, sub, profile, payload))
+            self._poll_ack()
+            for resp in self._drain_responses(timeout_ms):
+                if match is None or match(resp):
+                    return resp
         raise IOError(
             f"No matching response from device for cat=0x{cat:02x} "
-            f"reg=0x{reg:02x} sub=0x{sub:02x} within {timeout_ms}ms "
+            f"reg=0x{reg:02x} sub=0x{sub:02x} after {retries} attempts "
             "(mouse may be asleep - try moving it or clicking a button)")
 
     # ── Global settings ─────────────────────────────────────────────────────
