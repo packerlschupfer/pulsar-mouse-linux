@@ -571,6 +571,7 @@ class MainWindow(Adw.ApplicationWindow):
             ('performance', 'Performance', 'preferences-system-symbolic'),
             ('customize', 'Customize', 'preferences-desktop-symbolic'),
             ('power', 'Power', 'battery-good-symbolic'),
+            ('tools', 'Tools', 'applications-utilities-symbolic'),
         ]
         for _name, label, icon in self._nav_pages:
             row = Adw.ActionRow()
@@ -634,6 +635,7 @@ class MainWindow(Adw.ApplicationWindow):
         self._view_stack.add_named(self._build_performance_page(), 'performance')
         self._view_stack.add_named(self._build_customize_page(), 'customize')
         self._view_stack.add_named(self._build_power_page(), 'power')
+        self._view_stack.add_named(self._build_tools_page(), 'tools')
 
         content_page = Adw.NavigationPage.new(content_toolbar, 'Settings')
         split_view.set_content(content_page)
@@ -713,17 +715,6 @@ class MainWindow(Adw.ApplicationWindow):
             Gtk.Image.new_from_icon_name('network-wireless-symbolic'))
         status_group.add(self._home_mode_row)
 
-        device = self._device
-        if hasattr(device, 'get_power'):
-            self._home_battery_row = Adw.ActionRow()
-            self._home_battery_row.set_title('Battery')
-            self._home_battery_row.set_subtitle('—')
-            self._home_battery_row.add_prefix(
-                Gtk.Image.new_from_icon_name('battery-good-symbolic'))
-            status_group.add(self._home_battery_row)
-        else:
-            self._home_battery_row = None
-
         # Always shown even though we can't know in advance whether this
         # model actually pushes signal-quality events - it just stays
         # "—" harmlessly if nothing ever arrives (see
@@ -734,6 +725,17 @@ class MainWindow(Adw.ApplicationWindow):
         self._home_signal_row.add_prefix(
             Gtk.Image.new_from_icon_name('network-wireless-signal-good-symbolic'))
         status_group.add(self._home_signal_row)
+
+        device = self._device
+        if hasattr(device, 'get_power'):
+            self._home_battery_row = Adw.ActionRow()
+            self._home_battery_row.set_title('Battery')
+            self._home_battery_row.set_subtitle('—')
+            self._home_battery_row.add_prefix(
+                Gtk.Image.new_from_icon_name('battery-good-symbolic'))
+            status_group.add(self._home_battery_row)
+        else:
+            self._home_battery_row = None
 
         return box
 
@@ -888,6 +890,14 @@ class MainWindow(Adw.ApplicationWindow):
             btn_group.add(row)
             self._btn_rows[btn_id] = row
 
+        groups = []
+        if caps.has_led:
+            groups.append(led_group)
+        groups.append(btn_group)
+        return self._wrap_page(*groups)
+
+    def _build_tools_page(self):
+        caps = self._caps
         actions_group = Adw.PreferencesGroup()
 
         test_row = Adw.ButtonRow()
@@ -902,12 +912,7 @@ class MainWindow(Adw.ApplicationWindow):
             reset_row.connect('activated', self._on_reset_clicked)
             actions_group.add(reset_row)
 
-        groups = []
-        if caps.has_led:
-            groups.append(led_group)
-        groups.append(btn_group)
-        groups.append(actions_group)
-        return self._wrap_page(*groups)
+        return self._wrap_page(actions_group)
 
     def _build_power_page(self):
         device = self._device
@@ -1640,8 +1645,6 @@ class InputTestDialog(Adw.Window):
         thumb_buttons = [
             ('left',  0.38, 'FWD',  9),
             ('left',  0.52, 'BACK', 8),
-            ('right', 0.38, 'FWD',  9),
-            ('right', 0.52, 'BACK', 8),
         ]
         for side, ty, label, btn_id in thumb_buttons:
             if side == 'left':
