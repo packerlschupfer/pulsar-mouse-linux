@@ -1600,42 +1600,42 @@ class InputTestDialog(Adw.Window):
         cr.paint()
 
         mx, my, mw, mh = w * 0.15, h * 0.02, w * 0.7, h * 0.92
-        r = mw * 0.35
         cx = mx + mw / 2
         cr.set_source_rgb(0.30, 0.30, 0.33)
-        cr.new_path()
-        # Feinmann 8K-ish silhouette: domed shoulders up top, a very mild
-        # inward taper around the grip area, and a properly rounded (not
-        # pointed) tail at the bottom - subtler than the first pass at
-        # this, which pinched/flared too aggressively and taped to a
-        # point at the back.
-        cr.move_to(cx, my)
-        cr.curve_to(mx + mw * 0.80, my,
-                    mx + mw * 0.94, my + mh * 0.04,
-                    mx + mw * 0.94, my + mh * 0.12)
-        cr.curve_to(mx + mw * 0.94, my + mh * 0.30,
-                    mx + mw * 0.90, my + mh * 0.40,
-                    mx + mw * 0.90, my + mh * 0.50)
-        cr.curve_to(mx + mw * 0.90, my + mh * 0.62,
-                    mx + mw * 0.93, my + mh * 0.72,
-                    mx + mw * 0.92, my + mh * 0.82)
-        cr.curve_to(mx + mw * 0.91, my + mh * 0.92,
-                    mx + mw * 0.75, my + mh,
-                    cx, my + mh)
-        cr.curve_to(mx + mw * 0.25, my + mh,
-                    mx + mw * 0.09, my + mh * 0.92,
-                    mx + mw * 0.08, my + mh * 0.82)
-        cr.curve_to(mx + mw * 0.07, my + mh * 0.72,
-                    mx + mw * 0.10, my + mh * 0.62,
-                    mx + mw * 0.10, my + mh * 0.50)
-        cr.curve_to(mx + mw * 0.10, my + mh * 0.40,
-                    mx + mw * 0.06, my + mh * 0.30,
-                    mx + mw * 0.06, my + mh * 0.12)
-        cr.curve_to(mx + mw * 0.06, my + mh * 0.04,
-                    mx + mw * 0.20, my,
-                    cx, my)
-        cr.close_path()
+        self._body_path(cr, mx, my, mw, mh, cx)
         cr.fill()
+
+        # Left/right click zones - drawn as persistent visible buttons
+        # (like the thumb buttons below), not just a highlight that only
+        # appears while clicked, so they read as obvious click targets.
+        # Clipped to the body outline so they follow the domed shell
+        # shape (rounded top corners etc.) instead of overflowing it as
+        # plain rectangles - rects below are sized to overshoot the body
+        # edges slightly and let the clip do the rounding. Drawn before
+        # the scroll wheel/divider so those render on top, like they
+        # physically sit above the button housings.
+        cr.save()
+        self._body_path(cr, mx, my, mw, mh, cx)
+        cr.clip()
+        lr_buttons = {1: 'L', 3: 'R'}
+        lr_zones = {
+            1: (mx, my, mw * 0.49, mh * 0.36),
+            3: (mx + mw * 0.51, my, mw * 0.49, mh * 0.36),
+        }
+        for btn_id, label in lr_buttons.items():
+            zx, zy, zw, zh = lr_zones[btn_id]
+            if self._active_btn == btn_id:
+                cr.set_source_rgb(0.3, 0.7, 1.0)
+            else:
+                cr.set_source_rgb(0.40, 0.40, 0.44)
+            self._rounded_rect(cr, zx, zy, zw, zh, 10)
+            cr.fill()
+            cr.set_source_rgb(0.9, 0.9, 0.9)
+            cr.set_font_size(12)
+            ext = cr.text_extents(label)
+            cr.move_to(zx + zw / 2 - ext.width / 2, zy + zh * 0.55)
+            cr.show_text(label)
+        cr.restore()
 
         cr.set_source_rgb(0.20, 0.20, 0.22)
         cr.set_line_width(2)
@@ -1643,7 +1643,7 @@ class InputTestDialog(Adw.Window):
         cr.line_to(w * 0.5, my + mh * 0.40)
         cr.stroke()
 
-        ww, wh = mw * 0.12, mh * 0.12
+        ww, wh = mw * 0.18, mh * 0.18
         wx = w * 0.5 - ww / 2
         wy = my + mh * 0.08
         is_scroll = isinstance(self._active_btn, str) and self._active_btn.startswith('scroll')
@@ -1693,23 +1693,6 @@ class InputTestDialog(Adw.Window):
             cr.move_to(bx + bw / 2 - ext.width / 2, by + bh / 2 + ext.height / 2)
             cr.show_text(label)
 
-        zones_on_body = {
-            1: (mx, my, mw * 0.49, mh * 0.38),
-            3: (mx + mw * 0.51, my, mw * 0.49, mh * 0.38),
-        }
-        if self._active_btn in zones_on_body:
-            zx, zy, zw, zh = zones_on_body[self._active_btn]
-            cr.set_source_rgba(0.3, 0.7, 1.0, 0.35)
-            self._rounded_rect(cr, zx, zy, zw, zh, r if self._active_btn != 3 else 6)
-            cr.fill()
-
-        cr.set_source_rgb(0.85, 0.85, 0.85)
-        cr.set_font_size(12)
-        for label, lx_frac, ly_frac in [('L', 0.38, 0.22), ('R', 0.60, 0.22)]:
-            ext = cr.text_extents(label)
-            cr.move_to(w * lx_frac - ext.width / 2, my + mh * ly_frac)
-            cr.show_text(label)
-
         dx, dy = mx + mw * 0.22, my + mh * 0.45
         dr = 7 if self._active_btn == 'dpi' else 5
         if self._active_btn == 'dpi':
@@ -1723,6 +1706,39 @@ class InputTestDialog(Adw.Window):
         ext = cr.text_extents('DPI')
         cr.move_to(dx - ext.width / 2, dy + dr + ext.height + 2)
         cr.show_text('DPI')
+
+    @staticmethod
+    def _body_path(cr, mx, my, mw, mh, cx):
+        """Traces the mouse body silhouette without filling it - shared
+        by the body fill and the L/R button clip so both use the exact
+        same outline (see _draw())."""
+        cr.new_path()
+        cr.move_to(cx, my)
+        cr.curve_to(mx + mw * 0.80, my,
+                    mx + mw * 0.94, my + mh * 0.04,
+                    mx + mw * 0.94, my + mh * 0.12)
+        cr.curve_to(mx + mw * 0.94, my + mh * 0.30,
+                    mx + mw * 0.90, my + mh * 0.40,
+                    mx + mw * 0.90, my + mh * 0.50)
+        cr.curve_to(mx + mw * 0.90, my + mh * 0.62,
+                    mx + mw * 0.93, my + mh * 0.72,
+                    mx + mw * 0.92, my + mh * 0.82)
+        cr.curve_to(mx + mw * 0.91, my + mh * 0.92,
+                    mx + mw * 0.75, my + mh,
+                    cx, my + mh)
+        cr.curve_to(mx + mw * 0.25, my + mh,
+                    mx + mw * 0.09, my + mh * 0.92,
+                    mx + mw * 0.08, my + mh * 0.82)
+        cr.curve_to(mx + mw * 0.07, my + mh * 0.72,
+                    mx + mw * 0.10, my + mh * 0.62,
+                    mx + mw * 0.10, my + mh * 0.50)
+        cr.curve_to(mx + mw * 0.10, my + mh * 0.40,
+                    mx + mw * 0.06, my + mh * 0.30,
+                    mx + mw * 0.06, my + mh * 0.12)
+        cr.curve_to(mx + mw * 0.06, my + mh * 0.04,
+                    mx + mw * 0.20, my,
+                    cx, my)
+        cr.close_path()
 
     @staticmethod
     def _rounded_rect(cr, x, y, w, h, r):
