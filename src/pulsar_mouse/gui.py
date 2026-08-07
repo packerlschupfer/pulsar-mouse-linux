@@ -22,7 +22,7 @@ import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 gi.require_version('Dbusmenu', '0.4')
-from gi.repository import Gtk, Adw, GLib, Gio, Dbusmenu
+from gi.repository import Gtk, Adw, GLib, Gio, Gdk, Dbusmenu
 
 from pulsar_mouse import find_device, scan_devices, __version__
 from pulsar_mouse.base import PulsarDevice, DeviceCapabilities
@@ -571,9 +571,17 @@ class MainWindow(Adw.ApplicationWindow):
         dpi_group.add(self._active_stage_row)
 
         self._dpi_rows = []
+        self._color_buttons = []
         for i in range(1, caps.max_dpi_stages + 1):
             row = Adw.SpinRow.new_with_range(caps.dpi_min, caps.dpi_max, caps.dpi_step)
             row.set_title(f'Stage {i}')
+            if caps.has_stage_colors:
+                color_btn = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog())
+                color_btn.set_rgba(Gdk.RGBA(red=1.0, green=1.0, blue=1.0, alpha=1.0))
+                color_btn.set_valign(Gtk.Align.CENTER)
+                color_btn.set_tooltip_text(f'Stage {i} LED color')
+                row.add_suffix(color_btn)
+                self._color_buttons.append(color_btn)
             dpi_group.add(row)
             self._dpi_rows.append(row)
 
@@ -752,6 +760,12 @@ class MainWindow(Adw.ApplicationWindow):
             s['led'] = caps.led_effects[self._led_row.get_selected()]
         if self._breath_row:
             s['breath'] = int(self._breath_row.get_value())
+        if self._color_buttons:
+            colors = []
+            for btn in self._color_buttons:
+                rgba = btn.get_rgba()
+                colors.append((round(rgba.red * 255), round(rgba.green * 255), round(rgba.blue * 255)))
+            s['colors'] = colors
         self._run_bg(lambda: self._do_apply(s))
 
     # ── USB workers (run in background threads) ──────────────────────────
@@ -806,20 +820,42 @@ class MainWindow(Adw.ApplicationWindow):
         self._do_reload_profile_inner()
         self._close_dev()
 
+    def _read_field(self, fn, *args):
+        # Drivers may only implement a subset of get_* methods (e.g. a
+        # write-only-so-far driver like feinmann8k.py) - one missing getter
+        # shouldn't block every other field from loading.
+        try:
+            return fn(*args)
+        except NotImplementedError:
+            return None
+
     def _do_reload_profile_inner(self):
         caps = self._caps
         device = self._device
         p = self._profile
         try:
-            lod = device.get_lod(p) if caps.lod_values else None
-            brightness = device.get_brightness(p) if caps.has_led else None
-            led = device.get_led_effect(p) if caps.has_led else None
-            breath = device.get_breath_speed(p) if caps.has_led and caps.has_breath_speed else None
-            dpi_info = device.get_dpi_stages(p)
-            buttons = {bid: device.get_button(bid, p)
+            lod = self._read_field(device.get_lod, p) if caps.lod_values else None
+            brightness = self._read_field(device.get_brightness, p) if caps.has_led else None
+            led = self._read_field(device.get_led_effect, p) if caps.has_led else None
+            breath = (self._read_field(device.get_breath_speed, p)
+                      if caps.has_led and caps.has_breath_speed else None)
+            try:
+                # NOTE: on drivers like feinmann8k.py, get_dpi_stages() is
+                # known to mutate the device's active DPI stage as a side
+                # effect of reading it (see that driver's docstring) - every
+                # reload here can silently change what the user thinks is
+                # selected. Not fixed here; tracked as a driver-level issue.
+                dpi_info = device.get_dpi_stages(p)
+            except NotImplementedError:
+                dpi_info = {'active': -1, 'count': caps.max_dpi_stages, 'stages': []}
+            colors = None
+            if caps.has_stage_colors:
+                colors = [self._read_field(device.get_stage_color, i, p)
+                         for i in range(1, caps.max_dpi_stages + 1)]
+            buttons = {bid: self._read_field(device.get_button, bid, p)
                        for bid in caps.buttons.values()}
             GLib.idle_add(self._populate_profile,
-                          lod, brightness, led, breath, dpi_info, buttons)
+                          lod, brightness, led, breath, dpi_info, colors, buttons)
         except Exception as e:
             GLib.idle_add(self._show_error, f'Read error (profile {p}): {e}')
 
@@ -850,7 +886,17 @@ class MainWindow(Adw.ApplicationWindow):
                     device.set_breath_speed(s['breath'], p)
 
             stages = s['dpi_values'][:s['num_stages']]
-            device.set_dpi_stages(stages, s['active'], p)
+            try:
+                device.set_dpi_stages(stages, s['active'], p)
+            except NotImplementedError:
+                # Per-stage DPI values aren't writable on this driver yet -
+                # still apply the active-stage selection on its own so that
+                # part of the DPI Stages section isn't silently a no-op.
+                device.set_active_dpi_stage(s['active'], p)
+
+            if 'colors' in s:
+                for i, (r, g, b) in enumerate(s['colors'][:s['num_stages']], start=1):
+                    device.set_stage_color(i, r, g, b, p)
 
             GLib.idle_add(self._show_toast, 'Settings applied')
         except Exception as e:
@@ -890,7 +936,7 @@ class MainWindow(Adw.ApplicationWindow):
             self._motion_row.set_active(motion)
         self._building = False
 
-    def _populate_profile(self, lod, brightness, led, breath, dpi_info, buttons):
+    def _populate_profile(self, lod, brightness, led, breath, dpi_info, colors, buttons):
         caps = self._caps
         self._building = True
         if self._lod_row and lod is not None:
@@ -921,8 +967,17 @@ class MainWindow(Adw.ApplicationWindow):
             row.set_value(stages[i][0] if i < len(stages) else 800)
             row.set_sensitive(i < num)
 
-        for btn_id, (t, a1, a2) in buttons.items():
-            if btn_id in self._btn_rows:
+        if self._color_buttons and colors:
+            for i, btn in enumerate(self._color_buttons):
+                rgb = colors[i] if i < len(colors) else None
+                if rgb is not None:
+                    r, g, b = rgb
+                    btn.set_rgba(Gdk.RGBA(red=r / 255, green=g / 255, blue=b / 255, alpha=1.0))
+                btn.set_sensitive(i < num)
+
+        for btn_id, bind in buttons.items():
+            if bind is not None and btn_id in self._btn_rows:
+                t, a1, a2 = bind
                 self._btn_rows[btn_id].set_subtitle(describe_button(t, a1, a2))
         self._building = False
 
