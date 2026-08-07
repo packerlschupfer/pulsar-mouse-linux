@@ -261,9 +261,11 @@ class PulsarFeinmann8K(PulsarDevice):
         lo, hi = self.capabilities.brightness_range
         if not lo <= value <= hi:
             raise ValueError(f"Brightness must be {lo}-{hi}")
-        # Decoded from capture only (levels 7, 10, 20 tested) - not
-        # independently replayed against hardware this session.
-        self._cmd(0x07, 0x02, 0x03, 0x01, [0x02, value])
+        # Re-captured 2026-08-07: dragging the brightness slider in Fusion
+        # produced cat=0x03/reg=0x03/sub=0x03, payload=[0x01, value] every
+        # time - the old cat=0x07/reg=0x02/sub=0x03 payload=[0x02, value]
+        # guess was wrong in every field. Live-verified fixed.
+        self._cmd(0x03, 0x03, 0x03, 0x01, [0x01, value])
 
     def get_brightness(self, profile: int) -> int:
         raise NotImplementedError
