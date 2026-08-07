@@ -44,10 +44,10 @@ Confirmed subtypes:
                                               capture sessions)
 
 Status: PARTIALLY VERIFIED. Polling rate, DPI-stage read/write, LED
-brightness, angle snap, ripple control, motion sync, debounce, and LOD are
-all live-verified against real hardware. LED effect/breath, stage colors,
-and button bindings were observed as read-only queries in the capture
-with no decodable response, and are NOT implemented — see
+brightness, angle snap, ripple control, motion sync, debounce, LOD, LED
+effect, and breath speed are all live-verified against real hardware.
+Stage colors and button bindings were observed as read-only queries in
+the capture with no decodable response, and are NOT implemented — see
 base.PulsarDevice defaults (NotImplementedError) for those. Note:
 get_dpi_stages() has a known side effect of also changing the active DPI
 stage (see its docstring) - no side-effect-free per-stage DPI read has
@@ -69,6 +69,10 @@ from pulsar_mouse.base import PulsarDevice, DeviceCapabilities
 POLL_HZ_TO_VAL = {125: 0x01, 250: 0x02, 500: 0x04, 1000: 0x08,
                   2000: 0x10, 4000: 0x20, 8000: 0x40}
 POLL_VAL_TO_HZ = {v: k for k, v in POLL_HZ_TO_VAL.items()}
+
+# Same cat=0x03/reg=0x04/sub=0x0f command and value mapping as x2a.py.
+LED_NAME_TO_VAL = {'off': 0, 'steady': 1, 'breath': 2}
+LED_VAL_TO_NAME = {v: k for k, v in LED_NAME_TO_VAL.items()}
 
 
 class PulsarFeinmann8K(PulsarDevice):
@@ -311,6 +315,30 @@ class PulsarFeinmann8K(PulsarDevice):
         # time - the old cat=0x07/reg=0x02/sub=0x03 payload=[0x02, value]
         # guess was wrong in every field. Live-verified fixed.
         self._cmd(0x03, 0x03, 0x03, 0x01, [0x01, value])
+
+    def set_led_effect(self, effect: str, profile: int) -> None:
+        # Captured 2026-08-07: cat=0x03/reg=0x04/sub=0x0f, payload=[0x01,
+        # val] - identical command and value mapping (off=0/steady=1/
+        # breath=2) to x2a.py's set_led_effect. Feinmann 8K's GET_REPORT is
+        # always a dead echo (see module docstring), so unlike x2a there's
+        # no working get_led_effect() here without a decoded async reply.
+        val = LED_NAME_TO_VAL.get(effect)
+        if val is None:
+            raise ValueError(f"Effect must be one of {list(LED_NAME_TO_VAL)}")
+        self._cmd(0x03, 0x04, 0x0F, 0x01, [0x01, val])
+
+    def set_breath_speed(self, speed: int, profile: int) -> None:
+        # Same command as set_led_effect, with effect pinned to breath (2)
+        # and a raw byte appended - same command shape as x2a.py's
+        # set_breath_speed, but live-tested 2026-08-07 and confirmed
+        # INVERTED on this model: raw=100 pulsed visibly slower than
+        # raw=5. Unlike x2a (which sends `speed` directly), the raw byte
+        # sent to the device is `hi - speed` so the public speed=0..100
+        # API stays intuitive (0=slowest, 100=fastest) across drivers.
+        lo, hi = self.capabilities.breath_speed_range
+        if not lo <= speed <= hi:
+            raise ValueError(f"Breath speed must be {lo}-{hi}")
+        self._cmd(0x03, 0x04, 0x0F, 0x01, [0x01, 0x02, 0x00, 0x00, hi - speed])
 
     def get_brightness(self, profile: int) -> int:
         raise NotImplementedError
