@@ -45,9 +45,9 @@ Confirmed subtypes:
 
 Status: PARTIALLY VERIFIED. Polling rate, DPI-stage read/write, LED
 brightness, angle snap, ripple control, motion sync, debounce, LOD, LED
-effect, and breath speed are all live-verified against real hardware.
-Stage colors and button bindings were observed as read-only queries in
-the capture with no decodable response, and are NOT implemented — see
+effect, breath speed, and stage colors are all live-verified against real
+hardware. Button bindings were observed as read-only queries in the
+capture with no decodable response, and are NOT implemented — see
 base.PulsarDevice defaults (NotImplementedError) for those. Note:
 get_dpi_stages() has a known side effect of also changing the active DPI
 stage (see its docstring) - no side-effect-free per-stage DPI read has
@@ -342,6 +342,23 @@ class PulsarFeinmann8K(PulsarDevice):
 
     def get_brightness(self, profile: int) -> int:
         raise NotImplementedError
+
+    def set_stage_color(self, stage: int, r: int, g: int, b: int,
+                        profile: int) -> None:
+        # Captured 2026-08-07: Fusion's LED tab auto-populated a rainbow
+        # preset across all 6 stages, giving a clean sample of this command
+        # at cat=0x05/reg=0x05/sub=0x05, payload=[stage, r, g, b] - byte-
+        # identical to x2a.py's set_stage_color (direct RGB, no inversion
+        # needed here unlike breath speed). Note: observing this traffic
+        # required cycling through all 6 stages in the UI, which - per
+        # get_dpi_stages()'s known side effect - also changed the mouse's
+        # active DPI stage each time; not an issue for this write itself.
+        for val, name in [(r, 'R'), (g, 'G'), (b, 'B')]:
+            if not 0 <= val <= 255:
+                raise ValueError(f"{name} must be 0-255")
+        if not 1 <= stage <= self.capabilities.max_dpi_stages:
+            raise ValueError(f"Stage must be 1-{self.capabilities.max_dpi_stages}")
+        self._cmd(0x05, 0x05, 0x05, 0x01, [stage, r, g, b])
 
     # ── Hidraw support ───────────────────────────────────────────────────────
 
