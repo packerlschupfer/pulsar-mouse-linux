@@ -1601,12 +1601,39 @@ class InputTestDialog(Adw.Window):
 
         mx, my, mw, mh = w * 0.15, h * 0.02, w * 0.7, h * 0.92
         r = mw * 0.35
+        cx = mx + mw / 2
         cr.set_source_rgb(0.30, 0.30, 0.33)
         cr.new_path()
-        cr.arc(mx + r, my + r, r, math.pi, 1.5 * math.pi)
-        cr.arc(mx + mw - r, my + r, r, 1.5 * math.pi, 2 * math.pi)
-        cr.arc(mx + mw - r, my + mh - r, r, 0, 0.5 * math.pi)
-        cr.arc(mx + r, my + mh - r, r, 0.5 * math.pi, math.pi)
+        # Feinmann 8K-ish silhouette: domed shoulders up top, a very mild
+        # inward taper around the grip area, and a properly rounded (not
+        # pointed) tail at the bottom - subtler than the first pass at
+        # this, which pinched/flared too aggressively and taped to a
+        # point at the back.
+        cr.move_to(cx, my)
+        cr.curve_to(mx + mw * 0.80, my,
+                    mx + mw * 0.94, my + mh * 0.04,
+                    mx + mw * 0.94, my + mh * 0.12)
+        cr.curve_to(mx + mw * 0.94, my + mh * 0.30,
+                    mx + mw * 0.90, my + mh * 0.40,
+                    mx + mw * 0.90, my + mh * 0.50)
+        cr.curve_to(mx + mw * 0.90, my + mh * 0.62,
+                    mx + mw * 0.93, my + mh * 0.72,
+                    mx + mw * 0.92, my + mh * 0.82)
+        cr.curve_to(mx + mw * 0.91, my + mh * 0.92,
+                    mx + mw * 0.75, my + mh,
+                    cx, my + mh)
+        cr.curve_to(mx + mw * 0.25, my + mh,
+                    mx + mw * 0.09, my + mh * 0.92,
+                    mx + mw * 0.08, my + mh * 0.82)
+        cr.curve_to(mx + mw * 0.07, my + mh * 0.72,
+                    mx + mw * 0.10, my + mh * 0.62,
+                    mx + mw * 0.10, my + mh * 0.50)
+        cr.curve_to(mx + mw * 0.10, my + mh * 0.40,
+                    mx + mw * 0.06, my + mh * 0.30,
+                    mx + mw * 0.06, my + mh * 0.12)
+        cr.curve_to(mx + mw * 0.06, my + mh * 0.04,
+                    mx + mw * 0.20, my,
+                    cx, my)
         cr.close_path()
         cr.fill()
 
@@ -1683,7 +1710,7 @@ class InputTestDialog(Adw.Window):
             cr.move_to(w * lx_frac - ext.width / 2, my + mh * ly_frac)
             cr.show_text(label)
 
-        dx, dy = w * 0.5, my + mh * 0.28
+        dx, dy = mx + mw * 0.22, my + mh * 0.45
         dr = 7 if self._active_btn == 'dpi' else 5
         if self._active_btn == 'dpi':
             cr.set_source_rgb(0.3, 0.7, 1.0)
