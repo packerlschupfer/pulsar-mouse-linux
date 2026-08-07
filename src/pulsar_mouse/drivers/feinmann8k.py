@@ -130,6 +130,12 @@ class PulsarFeinmann8K(PulsarDevice):
                 self._dev.attach_kernel_driver(iface)
             except Exception:
                 pass
+        # release_interface()/attach_kernel_driver() only affect the
+        # interface claim - the underlying libusb device handle stays open
+        # until pyusb's backend is explicitly disposed (or GC eventually
+        # gets to it, which is not deterministic). Without this, the next
+        # open() races the leaked handle and fails with "Resource busy".
+        usb.util.dispose_resources(self._dev)
         self._dev = None
 
     # ── Low-level protocol helpers ──────────────────────────────────────────

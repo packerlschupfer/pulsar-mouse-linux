@@ -243,9 +243,18 @@ class PulsarMouseApp(Adw.Application):
             try:
                 with _USB_LOCK:
                     device.open()
-                    hz = device.get_polling_rate()
-                    dpi_info = device.get_dpi_stages(profile=1)
-                    device.close()
+                    # device.close() must run even if a getter below raises
+                    # (e.g. NotImplementedError on a partial driver like
+                    # feinmann8k.py) - otherwise the device is left open with
+                    # both interfaces claimed for the rest of the process's
+                    # life, and every later _open_dev() call fails with
+                    # "Resource busy" since nothing else can release a claim
+                    # this thread never lets go of.
+                    try:
+                        hz = device.get_polling_rate()
+                        dpi_info = device.get_dpi_stages(profile=1)
+                    finally:
+                        device.close()
                 dpi = dpi_info['stages'][dpi_info['active'] - 1][0]
                 GLib.idle_add(self._update_tray_label, dpi, hz, True)
             except Exception:
