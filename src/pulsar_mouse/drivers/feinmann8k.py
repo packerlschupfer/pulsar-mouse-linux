@@ -173,7 +173,7 @@ class PulsarFeinmann8K(PulsarDevice):
         self._poll_ack()
 
     def _query(self, cat, reg, sub, profile=0x01, payload=(),
-               match=None, timeout_ms=500, retries=3, apply_read_bit=True) -> bytes:
+               match=None, timeout_ms=500, retries=5, apply_read_bit=True) -> bytes:
         """Issue a read command and wait for its async reply on EP 0x82.
 
         `match` is an optional predicate over the raw reply bytes, used to
