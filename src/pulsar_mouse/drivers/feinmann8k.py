@@ -61,15 +61,17 @@ Confirmed subtypes:
                                               range shifted a lot between
                                               capture sessions)
 
-Status: All writes are live-verified against real hardware. Reads
-(polling rate, debounce, LOD, angle snap, ripple control, motion sync,
-brightness, LED effect, breath speed, stage colors, active DPI stage,
-button bindings) are implemented and high-confidence but NOT live-
-verified from Linux - see the dead-echo note above. set_button() (writing
-a new binding) was never captured and is still NotImplemented. Note:
-get_dpi_stages() has a known side effect of also changing the active DPI
-stage (see its docstring) - no side-effect-free per-stage DPI *value*
-read has been found yet, though get_active_dpi_stage() (just the index,
+Status: All writes, including set_button(), are implemented (see
+set_button()'s docstring - it's a same-command-as-x2a.py, byte-layout
+match rather than a live-verified changed-value capture). Every write
+except set_button() itself has been live-verified against real hardware.
+Reads (polling rate, debounce, LOD, angle snap, ripple control, motion
+sync, brightness, LED effect, breath speed, stage colors, active DPI
+stage, button bindings) are implemented and high-confidence but NOT live-
+verified from Linux - see the dead-echo note above. Note: get_dpi_stages()
+has a known side effect of also changing the active DPI stage (see its
+docstring) - no side-effect-free per-stage DPI *value* read has been
+found yet, though get_active_dpi_stage() (just the index,
 not the six values) is side-effect-free (and does share the same
 unverified-on-Linux caveat as the other reads above).
 """
@@ -472,6 +474,19 @@ class PulsarFeinmann8K(PulsarDevice):
 
     # ── Buttons ──────────────────────────────────────────────────────────────
 
+    def set_button(self, btn_id: int, btn_type: int, a1: int, a2: int,
+                    profile: int) -> None:
+        # Found 2026-08-07 in the original broad pulsar.pcapng capture (not
+        # the later targeted ones): cat=0x04/reg=0x01(bare)/sub=0x06,
+        # payload=[btn_id, btn_type, a1, a2] - identical command to
+        # x2a.py's set_button. The captured instances were Fusion
+        # re-applying the untouched factory-default binding for each
+        # button (not an actual remap to something else), but the byte
+        # layout matches get_button()'s reply layout exactly (byte[7]=id,
+        # [8]=type, [9]=a1, [10]=a2), which is independently confirmed -
+        # high confidence despite no *changed*-value sample.
+        self._cmd(0x04, 0x01, 0x06, profile, [btn_id, btn_type, a1, a2])
+
     def get_button(self, btn_id: int, profile: int) -> tuple[int, int, int]:
         # cat=0x04/reg=0x81(=0x01|0x80)/sub=0x06, payload=[btn_id] - reply
         # byte[7] echoes the button ID, byte[8]=type, byte[9]=a1,
@@ -483,8 +498,6 @@ class PulsarFeinmann8K(PulsarDevice):
         # hid.MOUSE_ACTIONS), and the dpi button (0x0b) decoded as
         # BTN_TYPE_DPI/dpiloop (type=9, a1=3) - exactly the expected
         # untouched defaults, which is what confirmed the byte offsets.
-        # Writing new bindings (set_button) was never captured and is
-        # still NotImplementedError (see base.PulsarDevice).
         resp = self._query_ctrl(0x04, 0x01, 0x06, profile, [btn_id])
         return (resp[8], resp[9], resp[10])
 
