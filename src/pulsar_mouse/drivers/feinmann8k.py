@@ -173,7 +173,7 @@ class PulsarFeinmann8K(PulsarDevice):
         self._poll_ack()
 
     def _query(self, cat, reg, sub, profile=0x01, payload=(),
-               match=None, timeout_ms=500, retries=3) -> bytes:
+               match=None, timeout_ms=500, retries=3, apply_read_bit=True) -> bytes:
         """Issue a read command and wait for its async reply on EP 0x82.
 
         `match` is an optional predicate over the raw reply bytes, used to
@@ -182,9 +182,16 @@ class PulsarFeinmann8K(PulsarDevice):
         depends on a live RF round-trip to the mouse, which occasionally
         drops a packet or arrives late - retry the whole request rather
         than just waiting longer on a single window.
+
+        `apply_read_bit` ORs `reg` with 0x80 to mark it as a read, matching
+        the convention most categories use (e.g. polling rate: 0x09 write /
+        0x89 read). Not universal though - the DPI-stage query (cat=0x05,
+        reg=0x01) was captured with the bare register and no write
+        counterpart, so callers for that one must pass False.
         """
+        build = self._build_read if apply_read_bit else self._build
         for attempt in range(retries):
-            self._set_report(self._build_read(cat, reg, sub, profile, payload))
+            self._set_report(build(cat, reg, sub, profile, payload))
             self._poll_ack()
             for resp in self._drain_responses(timeout_ms):
                 if match is None or match(resp):
@@ -213,7 +220,7 @@ class PulsarFeinmann8K(PulsarDevice):
         stages = []
         for stage in range(1, self.capabilities.max_dpi_stages + 1):
             resp = self._query(
-                0x05, 0x01, 0x02, 0x01, [stage],
+                0x05, 0x01, 0x02, 0x01, [stage], apply_read_bit=False,
                 match=lambda r: r[0] == 0x05 and r[1] == 0x05 and r[2] == stage)
             dpi = struct.unpack_from('<H', resp, 3)[0]
             stages.append((dpi, dpi))
