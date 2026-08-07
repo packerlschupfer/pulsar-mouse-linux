@@ -217,6 +217,14 @@ class PulsarFeinmann8K(PulsarDevice):
     # ── Per-profile: DPI stages ─────────────────────────────────────────────
 
     def get_dpi_stages(self, profile: int) -> dict:
+        # WARNING: cat=0x05/reg=0x01/sub=0x02 is the *set active stage*
+        # command (see set_active_dpi_stage below) - re-captured traffic
+        # confirmed it's the same request Fusion sends when the user clicks
+        # to change stage. Calling this therefore leaves the mouse on
+        # whatever stage was queried last (stage 6 if the full loop
+        # completes), and can strand it on an earlier stage if a reply is
+        # missed mid-loop. Left as-is pending a real side-effect-free read;
+        # do not call this casually.
         stages = []
         for stage in range(1, self.capabilities.max_dpi_stages + 1):
             resp = self._query(
@@ -229,9 +237,13 @@ class PulsarFeinmann8K(PulsarDevice):
     def set_active_dpi_stage(self, stage: int, profile: int) -> None:
         if not 1 <= stage <= self.capabilities.max_dpi_stages:
             raise ValueError(f"DPI stage must be 1-{self.capabilities.max_dpi_stages}")
-        # Pattern confirmed from 5 samples in the capture (stages 1,2,3,4,5);
-        # stage index is repeated in the payload for reasons unconfirmed.
-        self._cmd(0x04, 0x01, 0x06, 0x01, [stage, 0x01, stage])
+        # Re-captured traffic (cycling stages 1->2->3->4->5->6->1 in Fusion)
+        # showed 7 SET_REPORTs, all cat=0x05/reg=0x01/sub=0x02 with a
+        # single-byte payload equal to the target stage - the same command
+        # get_dpi_stages() calls per-stage above. The earlier cat=0x04/
+        # reg=0x01/sub=0x06 payload=[stage,0x01,stage] guess (inferred from
+        # only 5 ambiguous samples) was wrong; live-verified fixed.
+        self._cmd(0x05, 0x01, 0x02, 0x01, [stage])
 
     def get_active_dpi_stage(self, profile: int) -> int:
         # A "05 08 <stage> <enabled>" reply was seen sporadically in the
