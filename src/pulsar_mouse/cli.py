@@ -187,18 +187,24 @@ def main():
 
     device_name = getattr(args, 'device', None)
 
-    write_ops = any([
+    # `is not None` (not plain truthiness) - `--debounce 0`, `--brightness 0`,
+    # `--breath-speed 0`, etc. are legitimate values, and a truthy check made
+    # them indistinguishable from the flag being omitted entirely, silently
+    # falling through to read-mode instead of performing the write.
+    # `args.reset` is a plain store_true flag, not an optional value, so it's
+    # checked separately rather than folded into the `is not None` list.
+    write_ops = args.reset or any(x is not None for x in [
         args.poll, args.debounce,
         args.angle_snap, args.ripple, args.motion_sync,
         args.lod, args.dpi, args.active_stage,
         args.brightness, args.led, args.breath_speed,
-        args.stage_color, args.button, args.reset,
+        args.stage_color, args.button,
     ])
 
-    profile_required = any([
+    profile_required = args.reset or any(x is not None for x in [
         args.lod, args.dpi, args.active_stage,
         args.brightness, args.led, args.breath_speed,
-        args.stage_color, args.button, args.reset,
+        args.stage_color, args.button,
     ])
 
     if profile_required and args.profile is None:
