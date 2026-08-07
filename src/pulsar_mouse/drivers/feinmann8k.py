@@ -17,16 +17,17 @@ delays/retries, draining the interrupt endpoint in parallel, sending the
 same SET_IDLE Windows sends first, a software USB reset, and a full
 physical replug) — on Linux the same request consistently gets the dead
 echo the original version of this file described. All of the get_*
-methods below that rely on this mechanism (everything except
-get_dpi_stages()) are therefore based on decoding the capture and
-cross-referencing the values against independently-known device state
-(exact hex match to a named GNOME palette color, exact match to factory-
-default button bindings, exact match to session values set moments
-earlier) rather than a live pyusb round-trip. High confidence, but flag
-this if one ever behaves oddly. get_dpi_stages() is unaffected — it still
-uses the async reply on interrupt IN endpoint 0x82 (interface 1), which
-does not have this problem — so both interface 1 and interface 3 must be
-claimed regardless.
+methods below (including get_dpi_stages() as of 2026-08-07 - see its
+docstring) are therefore based on decoding the capture and cross-
+referencing the values against independently-known device state (exact
+hex match to a named GNOME palette color, exact match to factory-default
+button bindings, exact match to session values set moments earlier, exact
+match to all six known DPI stage values in two independent capture
+instances) rather than a live pyusb round-trip. High confidence, but flag
+this if one ever behaves oddly. Only interface 3 is claimed - an earlier
+version of this file also claimed interface 1 for the interrupt-endpoint
+mechanism get_dpi_stages() used to rely on (see its docstring), but
+nothing here needs that anymore.
 
 Packet format (64 bytes, sent via SET_REPORT, wValue=0x0300 Feature/ID0):
   [0]     direction: 0x00=CMD (host->device)
@@ -46,8 +47,12 @@ the actual reply data in the same layout the write side used for that
 command (e.g. get_brightness's byte[8] lines up with set_brightness's
 payload=[0x01, value] landing at byte[7],byte[8]).
 
-Async reply format (interrupt IN, EP 0x82, up to 24 bytes) — only used by
-get_dpi_stages():
+Async reply format (interrupt IN, EP 0x82, up to 24 bytes) — this driver
+no longer reads this endpoint itself (see get_dpi_stages()'s docstring
+for why), but it's what parse_hidraw_event() decodes from
+/dev/hidrawN for the GUI's live tray-icon DPI notifications (the kernel's
+hidraw layer exposes the same endpoint without needing pyusb to claim
+interface 1 - see the note above on why only interface 3 is claimed now):
   [0]     reply category (mirrors the command's category byte)
   [1]     reply subtype
   [2..]   payload, meaning depends on subtype
@@ -55,6 +60,9 @@ get_dpi_stages():
 Confirmed subtypes:
   05 05 <stage> <dpiLoLE16> <dpiLoLE16>   -- DPI value for `stage` (1-6),
                                               X and Y repeated, uint16 LE
+                                              (this is what's pushed when
+                                              the physical DPI button is
+                                              pressed, not a query reply)
   05 0d <val>                             -- periodic ~1Hz heartbeat,
                                               meaning unconfirmed (battery?
                                               signal? cursor rate? — value
@@ -65,19 +73,15 @@ Status: All writes, including set_button(), are implemented (see
 set_button()'s docstring - it's a same-command-as-x2a.py, byte-layout
 match rather than a live-verified changed-value capture). Every write
 except set_button() itself has been live-verified against real hardware.
-Reads (polling rate, debounce, LOD, angle snap, ripple control, motion
-sync, brightness, LED effect, breath speed, stage colors, active DPI
-stage, button bindings) are implemented and high-confidence but NOT live-
-verified from Linux - see the dead-echo note above. Note: get_dpi_stages()
-has a known side effect of also changing the active DPI stage (see its
-docstring) - no side-effect-free per-stage DPI *value* read has been
-found yet, though get_active_dpi_stage() (just the index,
-not the six values) is side-effect-free (and does share the same
-unverified-on-Linux caveat as the other reads above).
+All reads (polling rate, debounce, LOD, angle snap, ripple control,
+motion sync, brightness, LED effect, breath speed, stage colors, DPI
+stages, active DPI stage, button bindings) are implemented and high-
+confidence but NOT live-verified from Linux - see the dead-echo note
+above. get_dpi_stages() is, as of 2026-08-07, genuinely side-effect-free
+(no longer mutates the active DPI stage - see its docstring for the fix).
 """
 
 import struct
-import time
 from typing import Optional
 
 import usb.core
@@ -133,8 +137,6 @@ class PulsarFeinmann8K(PulsarDevice):
     )
 
     _WVALUE = 0x0300      # HID Feature report, report ID 0
-    _RESPONSE_IFACE = 1   # owns EP 0x82, separate from the command interface
-    _RESPONSE_EP = 0x82
 
     def __init__(self):
         self._dev = None
@@ -149,21 +151,21 @@ class PulsarFeinmann8K(PulsarDevice):
             raise RuntimeError(
                 f"{caps.name} not found (VID=0x{vid:04x}, PID=0x{pid:04x}). "
                 "Is the dongle plugged in?")
-        for iface in (caps.interface_num, self._RESPONSE_IFACE):
-            if dev.is_kernel_driver_active(iface):
-                dev.detach_kernel_driver(iface)
-            usb.util.claim_interface(dev, iface)
+        iface = caps.interface_num
+        if dev.is_kernel_driver_active(iface):
+            dev.detach_kernel_driver(iface)
+        usb.util.claim_interface(dev, iface)
         self._dev = dev
 
     def close(self) -> None:
         if self._dev is None:
             return
-        for iface in (self.capabilities.interface_num, self._RESPONSE_IFACE):
-            usb.util.release_interface(self._dev, iface)
-            try:
-                self._dev.attach_kernel_driver(iface)
-            except Exception:
-                pass
+        iface = self.capabilities.interface_num
+        usb.util.release_interface(self._dev, iface)
+        try:
+            self._dev.attach_kernel_driver(iface)
+        except Exception:
+            pass
         # release_interface()/attach_kernel_driver() only affect the
         # interface claim - the underlying libusb device handle stays open
         # until pyusb's backend is explicitly disposed (or GC eventually
@@ -224,50 +226,10 @@ class PulsarFeinmann8K(PulsarDevice):
         self._set_report(self._build_read(cat, reg, sub, profile, payload))
         return self._poll_ack()
 
-    def _drain_responses(self, timeout_ms=300) -> list[bytes]:
-        out = []
-        deadline = time.time() + timeout_ms / 1000.0
-        while time.time() < deadline:
-            try:
-                out.append(bytes(self._dev.read(
-                    self._RESPONSE_EP, 64, timeout=50)))
-            except usb.core.USBError:
-                pass
-        return out
-
     def _cmd(self, cat, reg, sub, profile=0x01, payload=()) -> None:
         """Fire a write command. No reply is expected/awaited."""
         self._set_report(self._build(cat, reg, sub, profile, payload))
         self._poll_ack()
-
-    def _query(self, cat, reg, sub, profile=0x01, payload=(),
-               match=None, timeout_ms=500, retries=5, apply_read_bit=True) -> bytes:
-        """Issue a read command and wait for its async reply on EP 0x82.
-
-        `match` is an optional predicate over the raw reply bytes, used to
-        pick the right reply out of the response stream (the device also
-        emits an unrelated ~1Hz heartbeat on the same endpoint). The reply
-        depends on a live RF round-trip to the mouse, which occasionally
-        drops a packet or arrives late - retry the whole request rather
-        than just waiting longer on a single window.
-
-        `apply_read_bit` ORs `reg` with 0x80 to mark it as a read, matching
-        the convention most categories use (e.g. polling rate: 0x09 write /
-        0x89 read). Not universal though - the DPI-stage query (cat=0x05,
-        reg=0x01) was captured with the bare register and no write
-        counterpart, so callers for that one must pass False.
-        """
-        build = self._build_read if apply_read_bit else self._build
-        for attempt in range(retries):
-            self._set_report(build(cat, reg, sub, profile, payload))
-            self._poll_ack()
-            for resp in self._drain_responses(timeout_ms):
-                if match is None or match(resp):
-                    return resp
-        raise IOError(
-            f"No matching response from device for cat=0x{cat:02x} "
-            f"reg=0x{reg:02x} sub=0x{sub:02x} after {retries} attempts "
-            "(mouse may be asleep - try moving it or clicking a button)")
 
     # ── Global settings ─────────────────────────────────────────────────────
 
@@ -324,22 +286,31 @@ class PulsarFeinmann8K(PulsarDevice):
     # ── Per-profile: DPI stages ─────────────────────────────────────────────
 
     def get_dpi_stages(self, profile: int) -> dict:
-        # WARNING: cat=0x05/reg=0x01/sub=0x02 is the *set active stage*
-        # command (see set_active_dpi_stage below) - re-captured traffic
-        # confirmed it's the same request Fusion sends when the user clicks
-        # to change stage. Calling this therefore leaves the mouse on
-        # whatever stage was queried last (stage 6 if the full loop
-        # completes), and can strand it on an earlier stage if a reply is
-        # missed mid-loop. Left as-is pending a real side-effect-free read;
-        # do not call this casually.
+        # Genuinely side-effect-free, unlike the previous implementation
+        # here (see git history) which reused the *set active stage*
+        # command per-stage and mutated the mouse's active stage as a
+        # result. Found 2026-08-07 in a capture of opening Fusion's DPI tab
+        # without touching any stage: cat=0x05/reg=0x04(bare)/sub=0x15, no
+        # stage in the payload (just profile) - a genuinely different
+        # command from set_active_dpi_stage's cat=0x05/reg=0x01/sub=0x02.
+        # Reply echoes back reg=0x84 as expected but oddly sub=0x21 rather
+        # than the queried 0x15 (harmless, ignored - not worth chasing).
+        # byte[7]=stage count, then `count` 5-byte blocks starting at
+        # byte[9]: [stage_num, dpi_x_lo, dpi_x_hi, dpi_y_lo, dpi_y_hi].
+        # Confirmed against all 6 known stage values (400/1200/2000/3200/
+        # 6400/12800) byte-exact, in two independent instances in the same
+        # capture.
+        resp = self._query_ctrl(0x05, 0x04, 0x15, profile)
+        count = resp[7]
         stages = []
-        for stage in range(1, self.capabilities.max_dpi_stages + 1):
-            resp = self._query(
-                0x05, 0x01, 0x02, 0x01, [stage], apply_read_bit=False,
-                match=lambda r: r[0] == 0x05 and r[1] == 0x05 and r[2] == stage)
-            dpi = struct.unpack_from('<H', resp, 3)[0]
-            stages.append((dpi, dpi))
-        return {'active': -1, 'count': len(stages), 'stages': stages}
+        off = 9
+        for _ in range(count):
+            x = struct.unpack_from('<H', resp, off + 1)[0]
+            y = struct.unpack_from('<H', resp, off + 3)[0]
+            stages.append((x, y))
+            off += 5
+        active = self.get_active_dpi_stage(profile)
+        return {'active': active, 'count': count, 'stages': stages}
 
     def set_active_dpi_stage(self, stage: int, profile: int) -> None:
         if not 1 <= stage <= self.capabilities.max_dpi_stages:
