@@ -96,6 +96,7 @@ already-confirmed layout. get_dpi_stages() is genuinely side-effect-free
 (no longer mutates the active DPI stage - see its docstring).
 """
 
+import glob
 import struct
 import time
 from typing import Optional
@@ -599,9 +600,41 @@ class PulsarFeinmann8K(PulsarDevice):
 
     # ── Hidraw support ───────────────────────────────────────────────────────
 
+    def find_hidraw(self) -> Optional[str]:
+        # DPI-change and signal-quality events (see parse_hidraw_event())
+        # arrive on interrupt endpoint 0x82, which belongs to interface 1
+        # - same pattern as x2a.py's find_hidraw(), just checking for
+        # interface 1 instead of x2a's interface 1 too (coincidentally
+        # the same number, not assumed to always be - confirmed via
+        # sysfs: hidraw2's HID_PHYS ends in /input1 and its device path
+        # resolves to this device's "...:1.1" (interface 1) node).
+        vid = f'{self.capabilities.vid_pid_pairs[0][0]:04x}'
+        for path in sorted(glob.glob('/sys/class/hidraw/hidraw*/device/uevent')):
+            try:
+                text = open(path).read()
+                if vid not in text.lower():
+                    continue
+                phys_line = [l for l in text.splitlines() if 'HID_PHYS' in l]
+                if phys_line and phys_line[0].endswith('/input1'):
+                    return '/dev/' + path.split('/')[4]
+            except OSError:
+                continue
+        return None
+
     def parse_hidraw_event(self, data: bytes) -> Optional[dict]:
         if len(data) >= 5 and data[0] == 0x05 and data[1] == 0x05:
             dpi = struct.unpack_from('<H', data, 3)[0]
             stage = data[2]
             return {'dpi': dpi, 'stage': stage}
+        # Periodic ~1Hz push, previously unidentified and suspected to be
+        # a duplicate battery-percent channel since its typical idle range
+        # (high 80s-90s) coincidentally overlapped get_power()'s battery
+        # reading. Confirmed 2026-08-07 via a Windows capture where the
+        # user moved the mouse away from the dongle mid-capture: this
+        # value dropped sharply (as low as 39) for the ~15s the mouse was
+        # far away, then recovered to 90-100 once moved back close -
+        # battery cannot fluctuate like that in 45 seconds, so this is
+        # wireless signal/connection quality (0-100), not battery.
+        if len(data) >= 3 and data[0] == 0x05 and data[1] == 0x0d:
+            return {'signal_percent': data[2]}
         return None
