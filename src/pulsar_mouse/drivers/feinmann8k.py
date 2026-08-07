@@ -43,13 +43,15 @@ Confirmed subtypes:
                                               range shifted a lot between
                                               capture sessions)
 
-Status: PARTIALLY VERIFIED. Polling rate and DPI-stage read/write decoded
-and confirmed against a live device. LED brightness decoded from capture
-only (not independently replayed). Debounce, angle snap, ripple control,
-motion sync, LOD, LED effect/breath, stage colors, and button bindings
-were observed as read-only queries in the capture with no decodable
-response, and are NOT implemented — see base.PulsarDevice defaults
-(NotImplementedError) for those.
+Status: PARTIALLY VERIFIED. Polling rate, DPI-stage read/write, LED
+brightness, angle snap, ripple control, and motion sync are all
+live-verified against real hardware. Debounce, LOD, LED effect/breath,
+stage colors, and button bindings were observed as read-only queries in
+the capture with no decodable response, and are NOT implemented — see
+base.PulsarDevice defaults (NotImplementedError) for those. Note:
+get_dpi_stages() has a known side effect of also changing the active DPI
+stage (see its docstring) - no side-effect-free per-stage DPI read has
+been found yet.
 """
 
 import struct
@@ -213,6 +215,19 @@ class PulsarFeinmann8K(PulsarDevice):
         # The read variant (cat=0x01, reg=0x89) was captured but its async
         # reply was never observed/decoded - needs another capture pass.
         raise NotImplementedError
+
+    # Captured 2026-08-07: toggling each on Fusion produced a single-byte
+    # SET_REPORT, cat=0x07/sub=0x02/profile=0x01, payload=[1 or 0], differing
+    # only by reg. Live-verified working (no async reply observed or needed,
+    # same as other fire-and-forget global settings).
+    def set_angle_snap(self, enabled: bool) -> None:
+        self._cmd(0x07, 0x04, 0x02, 0x01, [1 if enabled else 0])
+
+    def set_ripple_control(self, enabled: bool) -> None:
+        self._cmd(0x07, 0x03, 0x02, 0x01, [1 if enabled else 0])
+
+    def set_motion_sync(self, enabled: bool) -> None:
+        self._cmd(0x07, 0x05, 0x02, 0x01, [1 if enabled else 0])
 
     # ── Per-profile: DPI stages ─────────────────────────────────────────────
 
