@@ -285,9 +285,27 @@ class PulsarFeinmann8K(PulsarDevice):
             "(mouse may be asleep - try moving it or clicking a button)")
 
     def _cmd(self, cat, reg, sub, profile=0x01, payload=()) -> None:
-        """Fire a write command. No reply is expected/awaited."""
+        """Fire a write command. No reply is expected/awaited.
+
+        The GET_REPORT poll below only confirms the dongle accepted the
+        command over USB - it does NOT mean the command has finished
+        forwarding to the mouse over RF (same underlying latency as the
+        read side's "answer not ready yet" quirk in _query_ctrl()). Live-
+        verified 2026-08-07: two writes fired back-to-back with no delay
+        (e.g. set_brightness() immediately followed by set_breath_speed())
+        silently lose the *first* one - the dongle appears to have only
+        one in-flight RF command slot, and a second SET_REPORT before the
+        first has actually reached the mouse just overwrites it. Confirmed
+        with a single-byte payload difference between the affected
+        writes (different cat/reg pairs, not just LED-family commands
+        colliding), so the settle delay is applied unconditionally here
+        rather than only between specific settings known to be adjacent
+        in the GUI/CLI. 0.3s reliably avoided the drop in repeated tests;
+        anything close to 0s reproduced it every time.
+        """
         self._set_report(self._build(cat, reg, sub, profile, payload))
         self._poll_ack()
+        time.sleep(0.3)
 
     # ── Battery / power ──────────────────────────────────────────────────────
 
