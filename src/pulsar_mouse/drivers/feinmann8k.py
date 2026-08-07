@@ -44,10 +44,10 @@ Confirmed subtypes:
                                               capture sessions)
 
 Status: PARTIALLY VERIFIED. Polling rate, DPI-stage read/write, LED
-brightness, angle snap, ripple control, and motion sync are all
-live-verified against real hardware. Debounce, LOD, LED effect/breath,
-stage colors, and button bindings were observed as read-only queries in
-the capture with no decodable response, and are NOT implemented — see
+brightness, angle snap, ripple control, motion sync, debounce, and LOD are
+all live-verified against real hardware. LED effect/breath, stage colors,
+and button bindings were observed as read-only queries in the capture
+with no decodable response, and are NOT implemented — see
 base.PulsarDevice defaults (NotImplementedError) for those. Note:
 get_dpi_stages() has a known side effect of also changing the active DPI
 stage (see its docstring) - no side-effect-free per-stage DPI read has
@@ -86,7 +86,12 @@ class PulsarFeinmann8K(PulsarDevice):
         dpi_step=100,
         buttons={},                # not reverse-engineered yet
         polling_rates=sorted(POLL_HZ_TO_VAL),
-        lod_values=[1, 2],         # unconfirmed for this model
+        # Confirmed 2026-08-07: on-wire protocol actually supports 0.1mm
+        # steps (captured 0.7/1.0/2.0mm all as raw byte = mm*10), but the
+        # shared int-only set_lod()/--lod CLI interface only exposes whole
+        # mm - listing the two values every other model in this codebase
+        # supports until the API is extended to carry finer precision.
+        lod_values=[1, 2],
     )
 
     _WVALUE = 0x0300      # HID Feature report, report ID 0
@@ -229,6 +234,16 @@ class PulsarFeinmann8K(PulsarDevice):
     def set_motion_sync(self, enabled: bool) -> None:
         self._cmd(0x07, 0x05, 0x02, 0x01, [1 if enabled else 0])
 
+    def set_debounce(self, ms: int) -> None:
+        # Captured 2026-08-07: dragging the debounce slider 0->15 then back
+        # to 0 in Fusion produced a linear single-byte SET_REPORT per step,
+        # cat=0x04/reg=0x03/sub=0x03/profile=0x01, payload=[ms]. Each set was
+        # followed by a read (reg=0x03|0x80) but its async reply was never
+        # captured - get_debounce() still unimplemented.
+        if not 0 <= ms <= 15:
+            raise ValueError("Debounce must be 0-15 ms")
+        self._cmd(0x04, 0x03, 0x03, 0x01, [ms])
+
     # ── Per-profile: DPI stages ─────────────────────────────────────────────
 
     def get_dpi_stages(self, profile: int) -> dict:
@@ -269,6 +284,21 @@ class PulsarFeinmann8K(PulsarDevice):
         # Only single-stage reads/active-stage switching were decoded;
         # writing new DPI values for a stage was never captured.
         raise NotImplementedError
+
+    def get_lod(self, profile: int) -> int:
+        raise NotImplementedError
+
+    def set_lod(self, mm: int, profile: int) -> None:
+        # Captured 2026-08-07: dragging the LOD slider 0.7mm -> 1.0mm ->
+        # 2.0mm -> 0.7mm in Fusion produced cat=0x07/reg=0x02/sub=0x03,
+        # payload=[0x02, raw] where raw = mm*10 (0.7mm->7, 1.0mm->10,
+        # 2.0mm->20) - the device clearly supports 0.1mm steps, but the
+        # set_lod()/--lod interface here is int-only like every other
+        # driver in this codebase, so only whole-mm values are reachable
+        # through this method for now.
+        if mm not in self.capabilities.lod_values:
+            raise ValueError(f"LOD must be one of {self.capabilities.lod_values}")
+        self._cmd(0x07, 0x02, 0x03, 0x01, [0x02, mm * 10])
 
     # ── Per-profile: LED ─────────────────────────────────────────────────────
 
