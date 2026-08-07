@@ -1,6 +1,10 @@
 # udev rules for Pulsar gaming mice
-# Grants device access to the logged-in user (via TAG+="uaccess") and
-# to members of the 'plugdev' group as a fallback.
+# Grants device access to the logged-in seat user via TAG+="uaccess"
+# (systemd-logind ACL - no group needed). MODE="0660" is a fallback for
+# non-logind setups. Deliberately no GROUP="plugdev": many modern distros
+# (including stock NixOS) don't create that group, and udev treats a rule
+# referencing an unresolvable group as invalid *in its entirety* - MODE and
+# TAG on the same line silently stop applying too, not just GROUP.
 #
 # Install:
 #   sudo cp udev/50-pulsar-mouse.rules /etc/udev/rules.d/
@@ -8,23 +12,23 @@
 #   (then re-plug the mouse or reboot)
 
 # Pulsar X2A Medium Wired (VID 0x3710, PID 0x1404)
-SUBSYSTEM=="usb", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="1404", MODE="0660", GROUP="plugdev", TAG+="uaccess"
-KERNEL=="hidraw*", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="1404", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="1404", MODE="0660", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="1404", MODE="0660", TAG+="uaccess"
 
 # Pulsar X2H Wired Medium (VID 0x3710, PID 0x1403)
-SUBSYSTEM=="usb", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="1403", MODE="0660", GROUP="plugdev", TAG+="uaccess"
-KERNEL=="hidraw*", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="1403", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="1403", MODE="0660", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="1403", MODE="0660", TAG+="uaccess"
 
 # Pulsar Xlite v4 (VID 0x3710, PID 0x3401)
-SUBSYSTEM=="usb", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="3401", MODE="0660", GROUP="plugdev", TAG+="uaccess"
-KERNEL=="hidraw*", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="3401", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="3401", MODE="0660", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="3401", MODE="0660", TAG+="uaccess"
 
 # Pulsar Feinmann 8K Dongle (VID 0x3710, PID 0x5404)
-SUBSYSTEM=="usb", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="5404", MODE="0660", GROUP="plugdev", TAG+="uaccess"
-KERNEL=="hidraw*", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="5404", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="5404", MODE="0660", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="5404", MODE="0660", TAG+="uaccess"
 
 # Pulsar Nordic chipset — X2A Wireless, X2 V2 Mini (VID 0x3554)
-SUBSYSTEM=="usb", ATTRS{idVendor}=="3554", ATTRS{idProduct}=="f507", MODE="0660", GROUP="plugdev", TAG+="uaccess"
-SUBSYSTEM=="usb", ATTRS{idVendor}=="3554", ATTRS{idProduct}=="f508", MODE="0660", GROUP="plugdev", TAG+="uaccess"
-KERNEL=="hidraw*", ATTRS{idVendor}=="3554", ATTRS{idProduct}=="f507", MODE="0660", GROUP="plugdev", TAG+="uaccess"
-KERNEL=="hidraw*", ATTRS{idVendor}=="3554", ATTRS{idProduct}=="f508", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="3554", ATTRS{idProduct}=="f507", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="3554", ATTRS{idProduct}=="f508", MODE="0660", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="3554", ATTRS{idProduct}=="f507", MODE="0660", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="3554", ATTRS{idProduct}=="f508", MODE="0660", TAG+="uaccess"
