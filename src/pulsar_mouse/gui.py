@@ -878,15 +878,17 @@ class MainWindow(Adw.ApplicationWindow):
             return
         caps = self._caps
         device = self._device
-        try:
-            poll_hz = device.get_polling_rate()
-            debounce = device.get_debounce() if caps.has_debounce else None
-            angle = device.get_angle_snap() if caps.has_angle_snap else None
-            ripple = device.get_ripple_control() if caps.has_ripple_control else None
-            motion = device.get_motion_sync() if caps.has_motion_sync else None
-            GLib.idle_add(self._populate_global, poll_hz, debounce, angle, ripple, motion)
-        except Exception as e:
-            GLib.idle_add(self._show_error, f'Read error (global): {e}')
+        # Each field guarded independently via _read_field (same reasoning
+        # as _do_reload_profile_inner() below) - a reload is 20+ individual
+        # USB reads in quick succession, and a transient timeout on any one
+        # of them (mouse's RF link briefly asleep) shouldn't blank out
+        # every other already-successful field, including these.
+        poll_hz = self._read_field(device.get_polling_rate)
+        debounce = self._read_field(device.get_debounce) if caps.has_debounce else None
+        angle = self._read_field(device.get_angle_snap) if caps.has_angle_snap else None
+        ripple = self._read_field(device.get_ripple_control) if caps.has_ripple_control else None
+        motion = self._read_field(device.get_motion_sync) if caps.has_motion_sync else None
+        GLib.idle_add(self._populate_global, poll_hz, debounce, angle, ripple, motion)
         self._do_reload_profile_inner()
         self._close_dev()
 
@@ -899,10 +901,16 @@ class MainWindow(Adw.ApplicationWindow):
     def _read_field(self, fn, *args):
         # Drivers may only implement a subset of get_* methods (e.g. a
         # write-only-so-far driver like feinmann8k.py) - one missing getter
-        # shouldn't block every other field from loading.
+        # shouldn't block every other field from loading. Also covers a
+        # read that times out (raises IOError/OSError - see
+        # feinmann8k.py's _query_ctrl()) because the mouse's RF link
+        # happened to be asleep for that one field: a reload can involve
+        # 20+ individual reads in quick succession, so hitting a transient
+        # timeout on any single one of them is expected, not exceptional -
+        # it shouldn't blank out every other already-successful field.
         try:
             return fn(*args)
-        except NotImplementedError:
+        except (NotImplementedError, OSError):
             return None
 
     def _do_reload_profile_inner(self):
@@ -916,13 +924,13 @@ class MainWindow(Adw.ApplicationWindow):
             breath = (self._read_field(device.get_breath_speed, p)
                       if caps.has_led and caps.has_breath_speed else None)
             try:
-                # NOTE: on drivers like feinmann8k.py, get_dpi_stages() is
-                # known to mutate the device's active DPI stage as a side
-                # effect of reading it (see that driver's docstring) - every
+                # NOTE: on some drivers, get_dpi_stages() is known to
+                # mutate the device's active DPI stage as a side effect of
+                # reading it (see that driver's docstring, if so) - every
                 # reload here can silently change what the user thinks is
                 # selected. Not fixed here; tracked as a driver-level issue.
                 dpi_info = device.get_dpi_stages(p)
-            except NotImplementedError:
+            except (NotImplementedError, OSError):
                 dpi_info = {'active': -1, 'count': caps.max_dpi_stages, 'stages': []}
             colors = None
             if caps.has_stage_colors:
