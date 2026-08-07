@@ -554,10 +554,10 @@ class MainWindow(Adw.ApplicationWindow):
         self._debounce_row = None
         if caps.has_debounce:
             lo, hi = caps.debounce_range
-            self._debounce_row = Adw.SpinRow.new_with_range(lo, hi, 1)
-            self._debounce_row.set_title('Debounce')
-            self._debounce_row.set_subtitle(f'milliseconds ({lo} – {hi})')
-            global_group.add(self._debounce_row)
+            row, self._debounce_row = self._make_slider_row(
+                'Debounce', f'milliseconds ({lo} – {hi})', lo, hi, 1,
+                format_value=lambda v: f'{int(v)} ms')
+            global_group.add(row)
 
         # Angle snap
         self._angle_row = None
@@ -599,14 +599,16 @@ class MainWindow(Adw.ApplicationWindow):
             )
             profile_group.add(self._lod_row)
 
-        # LED brightness
+        # LED brightness - shown/edited as 0-100%, converted to the
+        # device's raw brightness_range (usually 0-255) at apply/reload
+        # time (see _apply()/_populate_profile()) so the on-wire value and
+        # the on-screen value don't have to match.
         self._bright_row = None
         if caps.has_led:
-            lo, hi = caps.brightness_range
-            self._bright_row = Adw.SpinRow.new_with_range(lo, hi, 5)
-            self._bright_row.set_title('LED Brightness')
-            self._bright_row.set_subtitle(f'{lo} – {hi}')
-            profile_group.add(self._bright_row)
+            row, self._bright_row = self._make_slider_row(
+                'LED Brightness', '0% – 100%', 0, 100, 5,
+                format_value=lambda v: f'{int(v)}%')
+            profile_group.add(row)
 
         # LED effect
         self._led_row = None
@@ -619,15 +621,20 @@ class MainWindow(Adw.ApplicationWindow):
             self._led_row.connect('notify::selected', self._on_led_changed)
             profile_group.add(self._led_row)
 
-        # Breath speed
+        # Breath speed - self._breath_row is the Gtk.Scale (get_value/
+        # set_value, as elsewhere), self._breath_row_container is the
+        # wrapping Adw.ActionRow (title + slider together) - the visibility
+        # toggle below needs to hide/show the whole row, not just the
+        # slider inside it.
         self._breath_row = None
+        self._breath_row_container = None
         if caps.has_led and caps.has_breath_speed:
             lo, hi = caps.breath_speed_range
-            self._breath_row = Adw.SpinRow.new_with_range(lo, hi, 1)
-            self._breath_row.set_title('Breath Speed')
-            self._breath_row.set_subtitle(f'{lo} – {hi}')
-            self._breath_row.set_visible(False)
-            profile_group.add(self._breath_row)
+            self._breath_row_container, self._breath_row = self._make_slider_row(
+                'Breath Speed', '', lo, hi, 1,
+                marks=[(lo, 'Slow'), (hi, 'Fast')])
+            self._breath_row_container.set_visible(False)
+            profile_group.add(self._breath_row_container)
 
         # ── DPI stages ───────────────────────────────────────────────────
         dpi_group = Adw.PreferencesGroup()
@@ -660,6 +667,31 @@ class MainWindow(Adw.ApplicationWindow):
                 self._color_buttons.append(color_btn)
             dpi_group.add(row)
             self._dpi_rows.append(row)
+
+        # ── Power Management ─────────────────────────────────────────────
+        self._power_saving_row = None
+        self._low_power_row = None
+        device = self._device
+        if hasattr(device, 'set_power_saving_timeout') or hasattr(device, 'set_low_power_threshold'):
+            power_group = Adw.PreferencesGroup()
+            power_group.set_title('Power Management')
+            power_group.set_description('Wireless power-saving behaviour')
+            page_box.append(power_group)
+
+            if hasattr(device, 'set_power_saving_timeout'):
+                row, self._power_saving_row = self._make_slider_row(
+                    'Wireless Power Saving',
+                    'Inactivity before the mouse sleeps (30 sec – 15 min)',
+                    30, 900, 30,
+                    format_value=lambda v: f'{int(v) // 60}:{int(v) % 60:02d}')
+                power_group.add(row)
+
+            if hasattr(device, 'set_low_power_threshold'):
+                row, self._low_power_row = self._make_slider_row(
+                    'Low Power Mode',
+                    'Battery percentage that triggers low power mode (0 – 100)',
+                    0, 100, 5)
+                power_group.add(row)
 
         # ── Button bindings (read-only display) ──────────────────────────
         btn_group = Adw.PreferencesGroup()
@@ -696,60 +728,52 @@ class MainWindow(Adw.ApplicationWindow):
         test_row.connect('activated', self._on_test_clicked)
         test_group.add(test_row)
 
-        # ── OS / Desktop Settings ────────────────────────────────────────
-        os_group = Adw.PreferencesGroup()
-        os_group.set_title('Desktop Mouse Settings')
-        os_group.set_description('System-wide GNOME settings (affects all mice)')
-        page_box.append(os_group)
+    def _make_slider_row(self, title, subtitle, lo, hi, step,
+                         format_value=None, marks=None):
+        """An Adw.ActionRow with a real Gtk.Scale slider as its suffix,
+        rather than a SpinRow's +/- stepper. Gtk.Scale (a Gtk.Range
+        subclass) already has the same get_value()/set_value() API a
+        SpinRow does, so callers can use the returned scale exactly like
+        the SpinRow fields elsewhere in this file - no other code needs
+        to know the difference.
 
-        self._accel_row = Adw.ComboRow()
-        self._accel_row.set_title('Acceleration Profile')
-        self._accel_row.set_subtitle('Use "Flat" for raw input (recommended for gaming)')
-        self._accel_row.set_model(Gtk.StringList.new(['Flat (raw)', 'Adaptive (default)']))
-        self._accel_row.connect('notify::selected', self._on_accel_changed)
-        os_group.add(self._accel_row)
-
-        adj_speed = Gtk.Adjustment(lower=-1.0, upper=1.0, step_increment=0.05,
-                                   page_increment=0.1)
-        self._speed_row = Adw.SpinRow(adjustment=adj_speed, digits=2)
-        self._speed_row.set_title('Pointer Speed')
-        self._speed_row.set_subtitle('Multiplier from -1.0 (slow) to 1.0 (fast), 0 = no change')
-        os_group.add(self._speed_row)
-
-        speed_apply = Adw.ButtonRow()
-        speed_apply.set_title('Apply Desktop Settings')
-        speed_apply.connect('activated', self._on_os_apply)
-        os_group.add(speed_apply)
-
-        self._load_os_settings()
-
-    def _load_os_settings(self):
-        try:
-            import subprocess
-            accel = subprocess.check_output(
-                ['gsettings', 'get', 'org.gnome.desktop.peripherals.mouse', 'accel-profile'],
-                text=True).strip().strip("'")
-            speed = subprocess.check_output(
-                ['gsettings', 'get', 'org.gnome.desktop.peripherals.mouse', 'speed'],
-                text=True).strip()
-            self._building = True
-            self._accel_row.set_selected(0 if accel == 'flat' else 1)
-            self._speed_row.set_value(float(speed))
-            self._building = False
-        except Exception:
-            pass
-
-    def _on_accel_changed(self, combo, _param):
-        pass  # applied via button
-
-    def _on_os_apply(self, _row):
-        accel = 'flat' if self._accel_row.get_selected() == 0 else 'adaptive'
-        speed = self._speed_row.get_value()
-        import subprocess
-        subprocess.run(['gsettings', 'set', 'org.gnome.desktop.peripherals.mouse',
-                        'accel-profile', accel])
-        subprocess.run(['gsettings', 'set', 'org.gnome.desktop.peripherals.mouse',
-                        'speed', str(speed)])
+        `format_value(value) -> str`, if given, replaces the plain numeric
+        readout (e.g. seconds -> "4:30", a raw 0-255 brightness -> "62%").
+        `marks`, if given, is a list of (value, label) endpoint captions
+        drawn below the trough (e.g. [(0, 'Slow'), (100, 'Fast')]) -
+        these are direction cues alongside the numeric readout, not a
+        replacement for it.
+        """
+        row = Adw.ActionRow()
+        row.set_title(title)
+        row.set_subtitle(subtitle)
+        adj = Gtk.Adjustment(lower=lo, upper=hi, step_increment=step,
+                             page_increment=step * 2)
+        scale = Gtk.Scale(orientation=Gtk.Orientation.HORIZONTAL, adjustment=adj)
+        scale.set_valign(Gtk.Align.CENTER)
+        scale.set_hexpand(True)
+        scale.set_size_request(180, -1)
+        for mark_value, label in (marks or []):
+            scale.add_mark(mark_value, Gtk.PositionType.BOTTOM, label)
+        if format_value is not None:
+            # GtkScale's own "format-value" is a C-only vfunc, not
+            # connectable as a signal in this GI binding (raises
+            # "unknown signal name" at runtime) - a plain label kept in
+            # sync via the standard value-changed signal works everywhere.
+            scale.set_draw_value(False)
+            value_label = Gtk.Label(label=format_value(adj.get_value()))
+            value_label.set_valign(Gtk.Align.CENTER)
+            value_label.set_width_chars(5)
+            scale.connect('value-changed',
+                          lambda s: value_label.set_label(format_value(s.get_value())))
+            row.add_suffix(scale)
+            row.add_suffix(value_label)
+        else:
+            scale.set_digits(0)
+            scale.set_draw_value(True)
+            scale.set_value_pos(Gtk.PositionType.RIGHT)
+            row.add_suffix(scale)
+        return row, scale
 
     # ── UI event handlers ────────────────────────────────────────────────
 
@@ -767,10 +791,16 @@ class MainWindow(Adw.ApplicationWindow):
         if self._building:
             return
         caps = self._caps
-        if caps and self._breath_row:
+        if caps and self._breath_row_container:
             effects = caps.led_effects
             selected = effects[combo.get_selected()] if combo.get_selected() < len(effects) else ''
-            self._breath_row.set_visible(selected == 'breath')
+            # The pulsing/breathing effect is always the last entry in
+            # led_effects, by convention of every driver in this codebase
+            # (['off', 'steady', <that one>]) - checked this way rather
+            # than a hardcoded name since drivers differ on what to call
+            # it (feinmann8k.py: 'pulse', base.py's shared default and
+            # other drivers: 'breath').
+            self._breath_row_container.set_visible(selected == effects[-1])
 
     def _on_stage_count_changed(self, row, _param):
         if self._building:
@@ -828,10 +858,16 @@ class MainWindow(Adw.ApplicationWindow):
             s['ripple'] = self._ripple_row.get_active()
         if self._motion_row:
             s['motion'] = self._motion_row.get_active()
+        if self._power_saving_row:
+            s['power_saving'] = int(self._power_saving_row.get_value())
+        if self._low_power_row:
+            s['low_power'] = int(self._low_power_row.get_value())
         if self._lod_row:
             s['lod'] = caps.lod_values[self._lod_row.get_selected()]
         if self._bright_row:
-            s['brightness'] = int(self._bright_row.get_value())
+            lo, hi = caps.brightness_range
+            pct = self._bright_row.get_value()
+            s['brightness'] = round(lo + pct / 100 * (hi - lo))
         if self._led_row:
             s['led'] = caps.led_effects[self._led_row.get_selected()]
         if self._breath_row:
@@ -888,7 +924,12 @@ class MainWindow(Adw.ApplicationWindow):
         angle = self._read_field(device.get_angle_snap) if caps.has_angle_snap else None
         ripple = self._read_field(device.get_ripple_control) if caps.has_ripple_control else None
         motion = self._read_field(device.get_motion_sync) if caps.has_motion_sync else None
-        GLib.idle_add(self._populate_global, poll_hz, debounce, angle, ripple, motion)
+        power_saving = (self._read_field(device.get_power_saving_timeout)
+                        if hasattr(device, 'get_power_saving_timeout') else None)
+        low_power = (self._read_field(device.get_low_power_threshold)
+                    if hasattr(device, 'get_low_power_threshold') else None)
+        GLib.idle_add(self._populate_global, poll_hz, debounce, angle, ripple, motion,
+                      power_saving, low_power)
         self._do_reload_profile_inner()
         self._close_dev()
 
@@ -958,6 +999,10 @@ class MainWindow(Adw.ApplicationWindow):
                 device.set_ripple_control(s['ripple'])
             if 'motion' in s:
                 device.set_motion_sync(s['motion'])
+            if 'power_saving' in s:
+                device.set_power_saving_timeout(s['power_saving'])
+            if 'low_power' in s:
+                device.set_low_power_threshold(s['low_power'])
 
             p = s['profile']
             if 'lod' in s:
@@ -966,7 +1011,9 @@ class MainWindow(Adw.ApplicationWindow):
                 device.set_brightness(s['brightness'], p)
             if 'led' in s:
                 device.set_led_effect(s['led'], p)
-                if s['led'] == 'breath' and 'breath' in s:
+                # See _on_led_changed()'s comment - the pulsing effect's
+                # name varies per driver, so check by position not string.
+                if s['led'] == caps.led_effects[-1] and 'breath' in s:
                     device.set_breath_speed(s['breath'], p)
 
             stages = s['dpi_values'][:s['num_stages']]
@@ -1001,7 +1048,8 @@ class MainWindow(Adw.ApplicationWindow):
 
     # ── UI population helpers ────────────────────────────────────────────
 
-    def _populate_global(self, poll_hz, debounce, angle, ripple, motion):
+    def _populate_global(self, poll_hz, debounce, angle, ripple, motion,
+                         power_saving=None, low_power=None):
         caps = self._caps
         self._building = True
         # Find index of polling rate
@@ -1018,6 +1066,10 @@ class MainWindow(Adw.ApplicationWindow):
             self._ripple_row.set_active(ripple)
         if self._motion_row and motion is not None:
             self._motion_row.set_active(motion)
+        if self._power_saving_row and power_saving is not None:
+            self._power_saving_row.set_value(power_saving)
+        if self._low_power_row and low_power is not None:
+            self._low_power_row.set_value(low_power)
         self._building = False
 
     def _populate_profile(self, lod, brightness, led, breath, dpi_info, colors, buttons):
@@ -1030,7 +1082,9 @@ class MainWindow(Adw.ApplicationWindow):
                 lod_idx = 0
             self._lod_row.set_selected(lod_idx)
         if self._bright_row and brightness is not None:
-            self._bright_row.set_value(brightness)
+            lo, hi = caps.brightness_range
+            pct = round((brightness - lo) / (hi - lo) * 100) if hi > lo else 0
+            self._bright_row.set_value(pct)
         if self._led_row and led is not None:
             try:
                 led_idx = caps.led_effects.index(led)
@@ -1039,8 +1093,8 @@ class MainWindow(Adw.ApplicationWindow):
             self._led_row.set_selected(led_idx)
         if self._breath_row and breath is not None:
             self._breath_row.set_value(breath)
-            if led:
-                self._breath_row.set_visible(led == 'breath')
+            if led and self._breath_row_container:
+                self._breath_row_container.set_visible(led == caps.led_effects[-1])
 
         stages = dpi_info['stages']
         num    = dpi_info['count']

@@ -60,6 +60,16 @@ def print_global(device: PulsarDevice):
             print(f"  Motion sync:      {_on_off(device.get_motion_sync())}")
         except Exception as e:
             print(f"  Motion sync:      error ({e})")
+    if hasattr(device, 'get_power_saving_timeout'):
+        try:
+            print(f"  Power saving:     {device.get_power_saving_timeout()} s")
+        except Exception as e:
+            print(f"  Power saving:     error ({e})")
+    if hasattr(device, 'get_low_power_threshold'):
+        try:
+            print(f"  Low power mode:   {device.get_low_power_threshold()}%")
+        except Exception as e:
+            print(f"  Low power mode:   error ({e})")
 
 
 def print_profile(device: PulsarDevice, profile: int):
@@ -86,7 +96,11 @@ def print_profile(device: PulsarDevice, profile: int):
         try:
             effect = device.get_led_effect(profile)
             bright = device.get_brightness(profile)
-            if effect == 'breath' and caps.has_breath_speed:
+            # The pulsing effect's name varies per driver (feinmann8k.py:
+            # 'pulse', base.py's shared default: 'breath') - it's always
+            # the last entry in led_effects by convention, so check that
+            # way instead of a hardcoded name.
+            if caps.has_breath_speed and effect == caps.led_effects[-1]:
                 speed = device.get_breath_speed(profile)
                 print(f"  LED:              {effect}  speed={speed}/{caps.breath_speed_range[1]}  brightness={bright}/{caps.brightness_range[1]}")
             else:
@@ -159,6 +173,10 @@ Examples:
     g.add_argument('--angle-snap', metavar='on|off')
     g.add_argument('--ripple', metavar='on|off')
     g.add_argument('--motion-sync', metavar='on|off')
+    g.add_argument('--power-saving', type=int, metavar='SECONDS',
+                   help='Wireless power-saving timeout (30-900 seconds)')
+    g.add_argument('--low-power', type=int, metavar='PERCENT',
+                   help='Low power mode battery threshold (0-100)')
 
     # Per-profile settings
     pp = p.add_argument_group('per-profile settings (require --profile N)')
@@ -197,6 +215,7 @@ def main():
     write_ops = args.reset or any(x is not None for x in [
         args.poll, args.debounce,
         args.angle_snap, args.ripple, args.motion_sync,
+        args.power_saving, args.low_power,
         args.lod, args.dpi, args.active_stage,
         args.brightness, args.led, args.breath_speed,
         args.stage_color, args.button,
@@ -247,6 +266,14 @@ def main():
                 v = _parse_bool(args.motion_sync, 'motion-sync')
                 device.set_motion_sync(v)
                 print(f"Motion sync: {_on_off(v)}")
+
+            if args.power_saving is not None:
+                device.set_power_saving_timeout(args.power_saving)
+                print(f"Power saving timeout set to {args.power_saving} s")
+
+            if args.low_power is not None:
+                device.set_low_power_threshold(args.low_power)
+                print(f"Low power mode threshold set to {args.low_power}%")
 
             # ── Per-profile writes ────────────────────────────────────
             prof = args.profile

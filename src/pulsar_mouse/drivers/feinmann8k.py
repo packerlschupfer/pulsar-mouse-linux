@@ -113,7 +113,10 @@ POLL_HZ_TO_VAL = {125: 0x01, 250: 0x02, 500: 0x04, 1000: 0x08,
 POLL_VAL_TO_HZ = {v: k for k, v in POLL_HZ_TO_VAL.items()}
 
 # Same cat=0x03/reg=0x04/sub=0x0f command and value mapping as x2a.py.
-LED_NAME_TO_VAL = {'off': 0, 'steady': 1, 'breath': 2}
+# Named 'pulse' here (not base.DeviceCapabilities' shared default 'breath')
+# to match this model's actual name for the effect - overridden in
+# capabilities.led_effects below to match.
+LED_NAME_TO_VAL = {'off': 0, 'steady': 1, 'pulse': 2}
 LED_VAL_TO_NAME = {v: k for k, v in LED_NAME_TO_VAL.items()}
 
 
@@ -139,6 +142,11 @@ class PulsarFeinmann8K(PulsarDevice):
             'dpi':    0x0b,
         },
         polling_rates=sorted(POLL_HZ_TO_VAL),
+        # Overrides DeviceCapabilities' shared default (['off','steady',
+        # 'breath']) - this model's third LED effect is named 'pulse', not
+        # 'breath'. list(dict) preserves LED_NAME_TO_VAL's insertion order,
+        # so this always matches that dict's keys.
+        led_effects=list(LED_NAME_TO_VAL),
         # Confirmed 2026-08-07: on-wire protocol actually supports 0.1mm
         # steps (captured 0.7/1.0/2.0mm all as raw byte = mm*10), but the
         # shared int-only set_lod()/--lod CLI interface only exposes whole
@@ -307,6 +315,38 @@ class PulsarFeinmann8K(PulsarDevice):
             'power_connected': charging,
             'battery_mv': None,
         }
+
+    def set_power_saving_timeout(self, seconds: int) -> None:
+        # Fusion's "Wireless Power Saving" slider (30s-15min). Captured
+        # 2026-08-07 dragging it through its full range: cat=0x08/reg=0x05/
+        # sub=0x03, profile=0x01, payload=uint16 LE seconds directly - every
+        # value seen (30, 60, 120, ..., 900) round-tripped byte-exact, no
+        # scaling/offset needed.
+        if not 30 <= seconds <= 900:
+            raise ValueError("Power-saving timeout must be 30-900 seconds")
+        self._cmd(0x08, 0x05, 0x03, 0x01, list(struct.pack('<H', seconds)))
+
+    def get_power_saving_timeout(self) -> int:
+        # cat=0x08/reg=0x85(=0x05|0x80)/sub=0x03, profile=0x01, payload=
+        # [0x01] (marker byte - without it this gets no reply, same as
+        # get_brightness/get_led_effect). Reply bytes[7:9] are the same
+        # uint16 LE seconds value as the write.
+        resp = self._query_ctrl(0x08, 0x05, 0x03, profile=0x01, payload=[0x01])
+        return struct.unpack_from('<H', resp, 7)[0]
+
+    def set_low_power_threshold(self, percent: int) -> None:
+        # Fusion's "Low Power Mode" slider (0-100%). Captured 2026-08-07
+        # dragging it through its range: cat=0x08/reg=0x08/sub=0x02,
+        # profile=0x01, payload=[percent] directly, single byte, no
+        # scaling.
+        if not 0 <= percent <= 100:
+            raise ValueError("Low power threshold must be 0-100")
+        self._cmd(0x08, 0x08, 0x02, 0x01, [percent])
+
+    def get_low_power_threshold(self) -> int:
+        # cat=0x08/reg=0x88(=0x08|0x80)/sub=0x02, profile=0x00, no payload -
+        # reply byte[7] is the percentage directly.
+        return self._query_ctrl(0x08, 0x08, 0x02, profile=0x00)[7]
 
     # ── Global settings ─────────────────────────────────────────────────────
 
