@@ -34,6 +34,28 @@ APP_ID = 'io.github.packerlschupfer.PulsarMouse'
 # Serialises all USB open/close operations so the tray and window don't collide.
 _USB_LOCK = threading.Lock()
 
+# Minimum time between forwarded signal_percent hidraw events (the device
+# pushes these at ~1Hz - that's overkill for a status readout, so both the
+# Home page and the tray throttle down to this).
+_SIGNAL_UPDATE_INTERVAL = 20.0
+
+
+def _connection_quality_label(pct):
+    # Bands are this app's own estimate, not confirmed against Fusion's
+    # exact thresholds - see feinmann8k.py's parse_hidraw_event() docstring
+    # for how the underlying value was confirmed to mean signal quality at
+    # all (a capture where moving the mouse away from the dongle dropped it
+    # from ~90 to ~39).
+    if pct >= 80:
+        return 'Excellent'
+    if pct >= 60:
+        return 'Good'
+    if pct >= 40:
+        return 'Fair'
+    if pct >= 20:
+        return 'Weak'
+    return 'Poor'
+
 _SNI_XML = """
 <node>
   <interface name="org.kde.StatusNotifierItem">
@@ -187,6 +209,9 @@ class PulsarMouseApp(Adw.Application):
         item_open.connect('item-activated', lambda _i, _t: win.present())
         root.child_append(item_open)
 
+        self._battery_text = None
+        self._conn_text = None
+
         self._battery_item = None
         if hasattr(device, 'get_power'):
             battery_item = Dbusmenu.Menuitem.new()
@@ -197,6 +222,21 @@ class PulsarMouseApp(Adw.Application):
                 pass  # cosmetic only - fine if this binding doesn't support it
             root.child_append(battery_item)
             self._battery_item = battery_item
+
+        # Connection Quality has no synchronous getter (see the Home page's
+        # own comment on this) - it only ever arrives via async hidraw
+        # events, so unlike Battery this item stays "—" until the first one
+        # shows up rather than being read up front.
+        self._conn_item = None
+        if hasattr(device, 'find_hidraw'):
+            conn_item = Dbusmenu.Menuitem.new()
+            conn_item.property_set(Dbusmenu.MENUITEM_PROP_LABEL, 'Connection Quality: —')
+            try:
+                conn_item.property_set_bool(Dbusmenu.MENUITEM_PROP_ENABLED, False)
+            except Exception:
+                pass
+            root.child_append(conn_item)
+            self._conn_item = conn_item
 
         sep1 = Dbusmenu.Menuitem.new()
         sep1.property_set(Dbusmenu.MENUITEM_PROP_TYPE, Dbusmenu.CLIENT_TYPES_SEPARATOR)
@@ -322,11 +362,23 @@ class PulsarMouseApp(Adw.Application):
     def _set_battery_label(self, pwr):
         pct = pwr['battery_percent']
         charging = ' (charging)' if pwr['power_connected'] else ''
-        text = f'Battery: {pct}%{charging}'
+        self._battery_text = f'Battery: {pct}%{charging}'
         if self._battery_item is not None:
-            self._battery_item.property_set(Dbusmenu.MENUITEM_PROP_LABEL, text)
-        if self._sni is not None:
-            self._sni.set_tooltip(text)
+            self._battery_item.property_set(Dbusmenu.MENUITEM_PROP_LABEL, self._battery_text)
+        self._update_tray_tooltip()
+
+    def _set_conn_quality_label(self, pct):
+        self._conn_text = f'Connection Quality: {pct}%  —  {_connection_quality_label(pct)}'
+        if self._conn_item is not None:
+            self._conn_item.property_set(Dbusmenu.MENUITEM_PROP_LABEL, self._conn_text)
+        self._update_tray_tooltip()
+
+    def _update_tray_tooltip(self):
+        if self._sni is None:
+            return
+        lines = [t for t in (self._battery_text, self._conn_text) if t]
+        if lines:
+            self._sni.set_tooltip('\n'.join(lines))
 
     def _hidraw_listener(self):
         device = self._device
@@ -339,14 +391,22 @@ class PulsarMouseApp(Adw.Application):
             fd = os.open(path, os.O_RDONLY)
         except OSError:
             return
+        last_signal_update = 0.0
         try:
             while True:
                 data = os.read(fd, 256)
                 if not data:
                     break
                 event = device.parse_hidraw_event(data)
-                if event:
+                if not event:
+                    continue
+                if 'dpi' in event:
                     GLib.idle_add(self._update_tray_label, event['dpi'], None)
+                elif 'signal_percent' in event:
+                    now = time.monotonic()
+                    if now - last_signal_update >= _SIGNAL_UPDATE_INTERVAL:
+                        last_signal_update = now
+                        GLib.idle_add(self._set_conn_quality_label, event['signal_percent'])
         except OSError:
             pass
         finally:
@@ -469,17 +529,67 @@ class MainWindow(Adw.ApplicationWindow):
 
         self._build_ui()
         GLib.idle_add(self._reload)
+        GLib.idle_add(self._start_home_updates)
 
     def _build_ui(self):
         caps = self._caps
-        toolbar_view = Adw.ToolbarView()
-        self.set_content(toolbar_view)
 
-        # ── Header bar ───────────────────────────────────────────────────
-        header = Adw.HeaderBar()
+        if not caps:
+            # No device found - a minimal single-pane message instead of
+            # the tabbed layout below, which assumes caps/device exist
+            # throughout.
+            toolbar_view = Adw.ToolbarView()
+            self.set_content(toolbar_view)
+            toolbar_view.add_top_bar(Adw.HeaderBar())
+            self._banner = Adw.Banner()
+            self._banner.set_title('No supported mouse found')
+            self._banner.set_revealed(True)
+            toolbar_view.set_content(self._banner)
+            self._toast_overlay = None
+            return
 
-        # Profile selector (hidden if only 1 profile)
-        if caps and caps.num_profiles > 1:
+        split_view = Adw.NavigationSplitView()
+        split_view.set_min_sidebar_width(180)
+        split_view.set_max_sidebar_width(220)
+        self.set_content(split_view)
+
+        # ── Sidebar navigation ─────────────────────────────────────────
+        sidebar_toolbar = Adw.ToolbarView()
+        sidebar_header = Adw.HeaderBar()
+        sidebar_header.set_show_end_title_buttons(False)
+        sidebar_toolbar.add_top_bar(sidebar_header)
+
+        nav_list = Gtk.ListBox()
+        nav_list.add_css_class('navigation-sidebar')
+        nav_list.set_selection_mode(Gtk.SelectionMode.SINGLE)
+
+        # (view-stack page name, sidebar label, icon) - order here is the
+        # order rows appear in the sidebar and must line up with
+        # nav_list's row index in _on_nav_row_selected() below.
+        self._nav_pages = [
+            ('home', 'Home', 'go-home-symbolic'),
+            ('performance', 'Performance', 'preferences-system-symbolic'),
+            ('customize', 'Customize', 'preferences-desktop-symbolic'),
+            ('power', 'Power', 'battery-good-symbolic'),
+        ]
+        for _name, label, icon in self._nav_pages:
+            row = Adw.ActionRow()
+            row.set_title(label)
+            row.add_prefix(Gtk.Image.new_from_icon_name(icon))
+            nav_list.append(row)
+        nav_list.connect('row-selected', self._on_nav_row_selected)
+        sidebar_toolbar.set_content(nav_list)
+        sidebar_page = Adw.NavigationPage.new(sidebar_toolbar, caps.name)
+        split_view.set_sidebar(sidebar_page)
+
+        # ── Content: header bar (Apply/Reload/profile - shared across all
+        # tabs, not per-tab, since Apply always writes everything pending
+        # regardless of which tab is showing) + a ViewStack switched by
+        # the sidebar ─────────────────────────────────────────────────
+        content_toolbar = Adw.ToolbarView()
+        content_header = Adw.HeaderBar()
+
+        if caps.num_profiles > 1:
             profile_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
             profile_box.append(Gtk.Label(label='Profile:'))
             self._profile_combo = Gtk.DropDown.new_from_strings(
@@ -487,33 +597,62 @@ class MainWindow(Adw.ApplicationWindow):
             )
             self._profile_combo.connect('notify::selected', self._on_profile_changed)
             profile_box.append(self._profile_combo)
-            header.set_title_widget(profile_box)
+            content_header.set_title_widget(profile_box)
         else:
             self._profile_combo = None
 
         reload_btn = Gtk.Button(icon_name='view-refresh-symbolic')
         reload_btn.set_tooltip_text('Reload from mouse')
         reload_btn.connect('clicked', lambda _: self._reload())
-        header.pack_start(reload_btn)
+        content_header.pack_start(reload_btn)
 
         apply_btn = Gtk.Button(label='Apply')
         apply_btn.add_css_class('suggested-action')
         apply_btn.connect('clicked', lambda _: self._apply())
-        header.pack_end(apply_btn)
+        content_header.pack_end(apply_btn)
 
-        toolbar_view.add_top_bar(header)
+        content_toolbar.add_top_bar(content_header)
 
-        # ── Toast overlay ────────────────────────────────────────────────
         toast_overlay = Adw.ToastOverlay()
-        toolbar_view.set_content(toast_overlay)
         self._toast_overlay = toast_overlay
+        content_toolbar.set_content(toast_overlay)
 
-        # ── Scrollable content ───────────────────────────────────────────
+        content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        toast_overlay.set_child(content_box)
+
+        # Error banner - shared across tabs (sits above whichever page is
+        # visible), same as the single-page layout this replaced.
+        self._banner = Adw.Banner()
+        self._banner.set_revealed(False)
+        content_box.append(self._banner)
+
+        self._view_stack = Adw.ViewStack()
+        self._view_stack.set_vexpand(True)
+        content_box.append(self._view_stack)
+
+        self._view_stack.add_named(self._build_home_page(), 'home')
+        self._view_stack.add_named(self._build_performance_page(), 'performance')
+        self._view_stack.add_named(self._build_customize_page(), 'customize')
+        self._view_stack.add_named(self._build_power_page(), 'power')
+
+        content_page = Adw.NavigationPage.new(content_toolbar, 'Settings')
+        split_view.set_content(content_page)
+
+        nav_list.select_row(nav_list.get_row_at_index(0))
+
+    def _on_nav_row_selected(self, _listbox, row):
+        if row is None:
+            return
+        name = self._nav_pages[row.get_index()][0]
+        self._view_stack.set_visible_child_name(name)
+
+    def _wrap_page(self, *groups):
+        """Common scrolled+clamp wrapper for a ViewStack page - same
+        max-width clamp and margins the single-page layout used to use
+        for its one long page, just repeated per tab now."""
         scroll = Gtk.ScrolledWindow()
         scroll.set_hexpand(True)
         scroll.set_vexpand(True)
-        toast_overlay.set_child(scroll)
-
         clamp = Adw.Clamp()
         clamp.set_maximum_size(600)
         clamp.set_margin_top(24)
@@ -521,27 +660,90 @@ class MainWindow(Adw.ApplicationWindow):
         clamp.set_margin_start(12)
         clamp.set_margin_end(12)
         scroll.set_child(clamp)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=24)
+        clamp.set_child(box)
+        for g in groups:
+            box.append(g)
+        return scroll
 
-        page_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=24)
-        clamp.set_child(page_box)
+    def _build_home_page(self):
+        """Status/landing tab: device name, connection, battery, and
+        wireless signal quality - populated live by _start_home_updates(),
+        called once from __init__ after the window itself exists.
+        """
+        caps = self._caps
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.set_valign(Gtk.Align.START)
+        box.set_margin_top(48)
+        box.set_margin_start(24)
+        box.set_margin_end(24)
 
-        # Error banner
-        self._banner = Adw.Banner()
-        self._banner.set_revealed(False)
-        page_box.append(self._banner)
+        icon = Gtk.Image.new_from_icon_name('input-mouse-symbolic')
+        icon.set_pixel_size(96)
+        icon.set_halign(Gtk.Align.CENTER)
+        box.append(icon)
 
-        if not caps:
-            self._banner.set_title('No supported mouse found')
-            self._banner.set_revealed(True)
-            return
+        title = Gtk.Label(label=caps.name)
+        title.add_css_class('title-1')
+        title.set_margin_top(12)
+        title.set_halign(Gtk.Align.CENTER)
+        box.append(title)
 
-        # ── Global settings ──────────────────────────────────────────────
+        status_group = Adw.PreferencesGroup()
+        status_group.set_margin_top(24)
+        box.append(status_group)
+
+        conn_row = Adw.ActionRow()
+        conn_row.set_title('Connection')
+        conn_row.set_subtitle('Wireless')
+        conn_row.add_prefix(Gtk.Image.new_from_icon_name('network-wireless-symbolic'))
+        connected_label = Gtk.Label(label='Connected')
+        connected_label.add_css_class('success')
+        conn_row.add_suffix(connected_label)
+        status_group.add(conn_row)
+
+        # Polling rate, kept in sync elsewhere: _populate_global() (on
+        # reload) and _apply() (immediately on Apply, before the write even
+        # finishes) - not event-driven, since polling rate only ever
+        # changes via this app, not something the device pushes on its own.
+        self._home_mode_row = Adw.ActionRow()
+        self._home_mode_row.set_title('Wireless Mode')
+        self._home_mode_row.set_subtitle('—')
+        self._home_mode_row.add_prefix(
+            Gtk.Image.new_from_icon_name('network-wireless-symbolic'))
+        status_group.add(self._home_mode_row)
+
+        device = self._device
+        if hasattr(device, 'get_power'):
+            self._home_battery_row = Adw.ActionRow()
+            self._home_battery_row.set_title('Battery')
+            self._home_battery_row.set_subtitle('—')
+            self._home_battery_row.add_prefix(
+                Gtk.Image.new_from_icon_name('battery-good-symbolic'))
+            status_group.add(self._home_battery_row)
+        else:
+            self._home_battery_row = None
+
+        # Always shown even though we can't know in advance whether this
+        # model actually pushes signal-quality events - it just stays
+        # "—" harmlessly if nothing ever arrives (see
+        # _home_hidraw_listener()).
+        self._home_signal_row = Adw.ActionRow()
+        self._home_signal_row.set_title('Connection Quality')
+        self._home_signal_row.set_subtitle('—')
+        self._home_signal_row.add_prefix(
+            Gtk.Image.new_from_icon_name('network-wireless-signal-good-symbolic'))
+        status_group.add(self._home_signal_row)
+
+        return box
+
+    def _build_performance_page(self):
+        caps = self._caps
+
         global_group = Adw.PreferencesGroup()
         global_group.set_title('Global Settings')
         global_group.set_description('Applies to all profiles')
-        page_box.append(global_group)
 
-        # Polling rate
         self._poll_row = Adw.ComboRow()
         self._poll_row.set_title('Polling Rate')
         self._poll_row.set_subtitle('Hz')
@@ -550,7 +752,6 @@ class MainWindow(Adw.ApplicationWindow):
         )
         global_group.add(self._poll_row)
 
-        # Debounce
         self._debounce_row = None
         if caps.has_debounce:
             lo, hi = caps.debounce_range
@@ -559,7 +760,6 @@ class MainWindow(Adw.ApplicationWindow):
                 format_value=lambda v: f'{int(v)} ms')
             global_group.add(row)
 
-        # Angle snap
         self._angle_row = None
         if caps.has_angle_snap:
             self._angle_row = Adw.SwitchRow()
@@ -567,7 +767,6 @@ class MainWindow(Adw.ApplicationWindow):
             self._angle_row.set_subtitle('Straightens cursor movement to horizontal/vertical lines')
             global_group.add(self._angle_row)
 
-        # Ripple control
         self._ripple_row = None
         if caps.has_ripple_control:
             self._ripple_row = Adw.SwitchRow()
@@ -575,7 +774,6 @@ class MainWindow(Adw.ApplicationWindow):
             self._ripple_row.set_subtitle('Smooths out sensor jitter at low speeds')
             global_group.add(self._ripple_row)
 
-        # Motion sync
         self._motion_row = None
         if caps.has_motion_sync:
             self._motion_row = Adw.SwitchRow()
@@ -583,12 +781,12 @@ class MainWindow(Adw.ApplicationWindow):
             self._motion_row.set_subtitle('Synchronises sensor data with USB polling interval')
             global_group.add(self._motion_row)
 
-        # ── Per-profile settings ─────────────────────────────────────────
-        profile_group = Adw.PreferencesGroup()
-        profile_group.set_title('Profile Settings')
-        page_box.append(profile_group)
+        # LOD lives here (not on the Customize tab with the rest of
+        # "Profile Settings") to match Fusion's own Performance tab, which
+        # groups Lift-off Distance with DPI/polling rate rather than LED.
+        tracking_group = Adw.PreferencesGroup()
+        tracking_group.set_title('Tracking')
 
-        # LOD
         self._lod_row = None
         if caps.lod_values:
             self._lod_row = Adw.ComboRow()
@@ -597,49 +795,10 @@ class MainWindow(Adw.ApplicationWindow):
             self._lod_row.set_model(
                 Gtk.StringList.new([f'{v} mm' for v in caps.lod_values])
             )
-            profile_group.add(self._lod_row)
+            tracking_group.add(self._lod_row)
 
-        # LED brightness - shown/edited as 0-100%, converted to the
-        # device's raw brightness_range (usually 0-255) at apply/reload
-        # time (see _apply()/_populate_profile()) so the on-wire value and
-        # the on-screen value don't have to match.
-        self._bright_row = None
-        if caps.has_led:
-            row, self._bright_row = self._make_slider_row(
-                'LED Brightness', '0% – 100%', 0, 100, 5,
-                format_value=lambda v: f'{int(v)}%')
-            profile_group.add(row)
-
-        # LED effect
-        self._led_row = None
-        if caps.has_led and caps.led_effects:
-            self._led_row = Adw.ComboRow()
-            self._led_row.set_title('LED Effect')
-            self._led_row.set_model(
-                Gtk.StringList.new([e.capitalize() for e in caps.led_effects])
-            )
-            self._led_row.connect('notify::selected', self._on_led_changed)
-            profile_group.add(self._led_row)
-
-        # Breath speed - self._breath_row is the Gtk.Scale (get_value/
-        # set_value, as elsewhere), self._breath_row_container is the
-        # wrapping Adw.ActionRow (title + slider together) - the visibility
-        # toggle below needs to hide/show the whole row, not just the
-        # slider inside it.
-        self._breath_row = None
-        self._breath_row_container = None
-        if caps.has_led and caps.has_breath_speed:
-            lo, hi = caps.breath_speed_range
-            self._breath_row_container, self._breath_row = self._make_slider_row(
-                'Breath Speed', '', lo, hi, 1,
-                marks=[(lo, 'Slow'), (hi, 'Fast')])
-            self._breath_row_container.set_visible(False)
-            profile_group.add(self._breath_row_container)
-
-        # ── DPI stages ───────────────────────────────────────────────────
         dpi_group = Adw.PreferencesGroup()
         dpi_group.set_title('DPI Stages')
-        page_box.append(dpi_group)
 
         self._stage_count_row = Adw.SpinRow.new_with_range(1, caps.max_dpi_stages, 1)
         self._stage_count_row.set_title('Number of Stages')
@@ -668,15 +827,98 @@ class MainWindow(Adw.ApplicationWindow):
             dpi_group.add(row)
             self._dpi_rows.append(row)
 
-        # ── Power Management ─────────────────────────────────────────────
+        groups = [global_group]
+        if caps.lod_values:
+            groups.append(tracking_group)
+        groups.append(dpi_group)
+        return self._wrap_page(*groups)
+
+    def _build_customize_page(self):
+        caps = self._caps
+
+        led_group = Adw.PreferencesGroup()
+        led_group.set_title('LED')
+
+        # LED brightness - shown/edited as 0-100%, converted to the
+        # device's raw brightness_range (usually 0-255) at apply/reload
+        # time (see _apply()/_populate_profile()) so the on-wire value and
+        # the on-screen value don't have to match.
+        self._bright_row = None
+        if caps.has_led:
+            row, self._bright_row = self._make_slider_row(
+                'LED Brightness', '0% – 100%', 0, 100, 5,
+                format_value=lambda v: f'{int(v)}%')
+            led_group.add(row)
+
+        self._led_row = None
+        if caps.has_led and caps.led_effects:
+            self._led_row = Adw.ComboRow()
+            self._led_row.set_title('LED Effect')
+            self._led_row.set_model(
+                Gtk.StringList.new([e.capitalize() for e in caps.led_effects])
+            )
+            self._led_row.connect('notify::selected', self._on_led_changed)
+            led_group.add(self._led_row)
+
+        # Breath speed - self._breath_row is the Gtk.Scale (get_value/
+        # set_value, as elsewhere), self._breath_row_container is the
+        # wrapping Adw.ActionRow (title + slider together) - the visibility
+        # toggle below needs to hide/show the whole row, not just the
+        # slider inside it.
+        self._breath_row = None
+        self._breath_row_container = None
+        if caps.has_led and caps.has_breath_speed:
+            lo, hi = caps.breath_speed_range
+            self._breath_row_container, self._breath_row = self._make_slider_row(
+                'Breath Speed', '', lo, hi, 1,
+                marks=[(lo, 'Slow'), (hi, 'Fast')])
+            self._breath_row_container.set_visible(False)
+            led_group.add(self._breath_row_container)
+
+        btn_group = Adw.PreferencesGroup()
+        btn_group.set_title('Button Bindings')
+        btn_group.set_description('Use the CLI (--button) to remap buttons')
+
+        self._btn_rows = {}
+        for btn_name, btn_id in caps.buttons.items():
+            row = Adw.ActionRow()
+            label = caps.button_labels.get(btn_name, btn_name.capitalize())
+            row.set_title(label)
+            row.set_subtitle('–')
+            btn_group.add(row)
+            self._btn_rows[btn_id] = row
+
+        actions_group = Adw.PreferencesGroup()
+
+        test_row = Adw.ButtonRow()
+        test_row.set_title('Test Input — click to test mouse buttons')
+        test_row.connect('activated', self._on_test_clicked)
+        actions_group.add(test_row)
+
+        if caps.has_reset:
+            reset_row = Adw.ButtonRow()
+            reset_row.set_title('Reset to Factory Defaults')
+            reset_row.add_css_class('destructive-action')
+            reset_row.connect('activated', self._on_reset_clicked)
+            actions_group.add(reset_row)
+
+        groups = []
+        if caps.has_led:
+            groups.append(led_group)
+        groups.append(btn_group)
+        groups.append(actions_group)
+        return self._wrap_page(*groups)
+
+    def _build_power_page(self):
+        device = self._device
         self._power_saving_row = None
         self._low_power_row = None
-        device = self._device
+        groups = []
+
         if hasattr(device, 'set_power_saving_timeout') or hasattr(device, 'set_low_power_threshold'):
             power_group = Adw.PreferencesGroup()
             power_group.set_title('Power Management')
             power_group.set_description('Wireless power-saving behaviour')
-            page_box.append(power_group)
 
             if hasattr(device, 'set_power_saving_timeout'):
                 row, self._power_saving_row = self._make_slider_row(
@@ -693,40 +935,85 @@ class MainWindow(Adw.ApplicationWindow):
                     0, 100, 5)
                 power_group.add(row)
 
-        # ── Button bindings (read-only display) ──────────────────────────
-        btn_group = Adw.PreferencesGroup()
-        btn_group.set_title('Button Bindings')
-        btn_group.set_description('Use the CLI (--button) to remap buttons')
-        page_box.append(btn_group)
+            groups.append(power_group)
 
-        self._btn_rows = {}
-        for btn_name, btn_id in caps.buttons.items():
-            row = Adw.ActionRow()
-            label = caps.button_labels.get(btn_name, btn_name.capitalize())
-            row.set_title(label)
-            row.set_subtitle('–')
-            btn_group.add(row)
-            self._btn_rows[btn_id] = row
+        return self._wrap_page(*groups)
 
-        # ── Reset ────────────────────────────────────────────────────────
-        if caps.has_reset:
-            reset_group = Adw.PreferencesGroup()
-            page_box.append(reset_group)
+    # ── Home tab live updates ───────────────────────────────────────────
 
-            reset_row = Adw.ButtonRow()
-            reset_row.set_title('Reset to Factory Defaults')
-            reset_row.add_css_class('destructive-action')
-            reset_row.connect('activated', self._on_reset_clicked)
-            reset_group.add(reset_row)
+    def _start_home_updates(self):
+        """Independent of the tray's own polling in PulsarMouseApp (see
+        _read_initial_state()/_hidraw_listener() there) - deliberately not
+        shared, so this window stays self-contained regardless of whether
+        a tray exists. hidraw supports multiple concurrent readers, so a
+        second listener on the same device is safe, just a bit redundant.
+        """
+        device = self._device
+        if device is None:
+            return
+        self._refresh_home_battery()
+        threading.Thread(target=self._home_hidraw_listener, daemon=True).start()
+        GLib.timeout_add_seconds(600, self._periodic_home_battery_refresh)
 
-        # ── Test Input ───────────────────────────────────────────────────
-        test_group = Adw.PreferencesGroup()
-        page_box.append(test_group)
+    def _periodic_home_battery_refresh(self):
+        self._refresh_home_battery()
+        return True
 
-        test_row = Adw.ButtonRow()
-        test_row.set_title('Test Input — click to test mouse buttons')
-        test_row.connect('activated', self._on_test_clicked)
-        test_group.add(test_row)
+    def _refresh_home_battery(self):
+        device = self._device
+        if device is None or not hasattr(device, 'get_power'):
+            return
+
+        def _read():
+            try:
+                with _USB_LOCK:
+                    device.open()
+                    try:
+                        pwr = device.get_power()
+                    finally:
+                        device.close()
+                GLib.idle_add(self._set_home_battery, pwr)
+            except Exception:
+                pass
+        threading.Thread(target=_read, daemon=True).start()
+
+    def _set_home_battery(self, pwr):
+        if self._home_battery_row is None:
+            return
+        pct = pwr['battery_percent']
+        charging = '  (charging)' if pwr['power_connected'] else ''
+        self._home_battery_row.set_subtitle(f'{pct}%{charging}')
+
+    def _home_hidraw_listener(self):
+        device = self._device
+        if device is None or not hasattr(device, 'find_hidraw'):
+            return
+        path = device.find_hidraw()
+        if not path:
+            return
+        try:
+            fd = os.open(path, os.O_RDONLY)
+        except OSError:
+            return
+        last_update = 0.0
+        try:
+            while True:
+                data = os.read(fd, 256)
+                if not data:
+                    break
+                event = device.parse_hidraw_event(data)
+                if event and 'signal_percent' in event:
+                    now = time.monotonic()
+                    if now - last_update >= _SIGNAL_UPDATE_INTERVAL:
+                        last_update = now
+                        GLib.idle_add(self._set_home_signal, event['signal_percent'])
+        except OSError:
+            pass
+        finally:
+            os.close(fd)
+
+    def _set_home_signal(self, pct):
+        self._home_signal_row.set_subtitle(f'{pct}%  —  {_connection_quality_label(pct)}')
 
     def _make_slider_row(self, title, subtitle, lo, hi, step,
                          format_value=None, marks=None):
@@ -850,6 +1137,8 @@ class MainWindow(Adw.ApplicationWindow):
             'active':     min(self._active_stage_row.get_selected() + 1, num_stages),
             'dpi_values': [int(r.get_value()) for r in self._dpi_rows],
         }
+        if self._home_mode_row is not None:
+            self._home_mode_row.set_subtitle(f"{s['poll_hz']} Hz")
         if self._debounce_row:
             s['debounce'] = int(self._debounce_row.get_value())
         if self._angle_row:
@@ -1058,6 +1347,8 @@ class MainWindow(Adw.ApplicationWindow):
         except ValueError:
             poll_idx = len(caps.polling_rates) - 1
         self._poll_row.set_selected(poll_idx)
+        if self._home_mode_row is not None:
+            self._home_mode_row.set_subtitle(f'{poll_hz} Hz')
         if self._debounce_row and debounce is not None:
             self._debounce_row.set_value(debounce)
         if self._angle_row and angle is not None:
@@ -1276,7 +1567,7 @@ class InputTestDialog(Adw.Window):
                 if not data:
                     break
                 event = device.parse_hidraw_event(data)
-                if event:
+                if event and 'dpi' in event:
                     GLib.idle_add(self._on_dpi_event, event['dpi'], event['stage'])
         except OSError:
             pass
