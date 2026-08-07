@@ -45,9 +45,11 @@ _SNI_XML = """
     <property name="IconThemePath" type="s" access="read"/>
     <property name="Menu"         type="o" access="read"/>
     <property name="ItemIsMenu"   type="b" access="read"/>
+    <property name="ToolTip"      type="(sa(iiay)ss)" access="read"/>
     <signal name="NewTitle"/>
     <signal name="NewIcon"/>
     <signal name="NewStatus"><arg type="s"/></signal>
+    <signal name="NewToolTip"/>
     <signal name="XAyatanaNewLabel"><arg type="s"/><arg type="s"/></signal>
     <method name="Activate"><arg type="i" direction="in"/><arg type="i" direction="in"/></method>
     <method name="ContextMenu"><arg type="i" direction="in"/><arg type="i" direction="in"/></method>
@@ -68,6 +70,7 @@ class _StatusNotifierItem:
         self._icon_name = icon_name
         self._title     = title
         self._label     = ''
+        self._tooltip_text = ''
         self._conn      = None
         self._obj_id    = 0
         self._sni_server = None
@@ -98,6 +101,15 @@ class _StatusNotifierItem:
                 'org.kde.StatusNotifierItem', 'XAyatanaNewLabel',
                 GLib.Variant('(ss)', (label, guide)))
 
+    def set_tooltip(self, text):
+        """Native hover tooltip (StatusNotifierItem ToolTip property), as
+        opposed to set_label()'s always-visible text-next-to-icon label."""
+        self._tooltip_text = text
+        if self._conn and self._obj_id:
+            self._conn.emit_signal(
+                None, '/StatusNotifierItem',
+                'org.kde.StatusNotifierItem', 'NewToolTip', None)
+
     def set_poll_items(self, items):
         self._poll_items = items
 
@@ -122,6 +134,8 @@ class _StatusNotifierItem:
             'IconThemePath':GLib.Variant('s', ''),
             'Menu':         GLib.Variant('o', self._MENU_PATH),
             'ItemIsMenu':   GLib.Variant('b', True),
+            'ToolTip':      GLib.Variant('(sa(iiay)ss)',
+                                (self._icon_name, [], self._title, self._tooltip_text)),
         }.get(prop)
 
 
@@ -172,6 +186,17 @@ class PulsarMouseApp(Adw.Application):
         item_open.property_set(Dbusmenu.MENUITEM_PROP_LABEL, 'Open Settings')
         item_open.connect('item-activated', lambda _i, _t: win.present())
         root.child_append(item_open)
+
+        self._battery_item = None
+        if hasattr(device, 'get_power'):
+            battery_item = Dbusmenu.Menuitem.new()
+            battery_item.property_set(Dbusmenu.MENUITEM_PROP_LABEL, 'Battery: —')
+            try:
+                battery_item.property_set_bool(Dbusmenu.MENUITEM_PROP_ENABLED, False)
+            except Exception:
+                pass  # cosmetic only - fine if this binding doesn't support it
+            root.child_append(battery_item)
+            self._battery_item = battery_item
 
         sep1 = Dbusmenu.Menuitem.new()
         sep1.property_set(Dbusmenu.MENUITEM_PROP_TYPE, Dbusmenu.CLIENT_TYPES_SEPARATOR)
@@ -232,6 +257,9 @@ class PulsarMouseApp(Adw.Application):
     def _start_tray_updates(self):
         self._read_initial_state()
         threading.Thread(target=self._hidraw_listener, daemon=True).start()
+        # Battery drains slowly - a periodic background refresh is enough,
+        # no need for anything event-driven like the hidraw DPI listener.
+        GLib.timeout_add_seconds(600, self._refresh_battery)
         return False
 
     def _read_initial_state(self):
@@ -253,13 +281,52 @@ class PulsarMouseApp(Adw.Application):
                     try:
                         hz = device.get_polling_rate()
                         dpi_info = device.get_dpi_stages(profile=1)
+                        pwr = None
+                        if hasattr(device, 'get_power'):
+                            # Guarded separately from hz/dpi_info above - a
+                            # battery-read failure shouldn't also take out
+                            # the DPI/Hz label.
+                            try:
+                                pwr = device.get_power()
+                            except Exception:
+                                pass
                     finally:
                         device.close()
                 dpi = dpi_info['stages'][dpi_info['active'] - 1][0]
                 GLib.idle_add(self._update_tray_label, dpi, hz, True)
+                if pwr is not None:
+                    GLib.idle_add(self._set_battery_label, pwr)
             except Exception:
                 pass
         threading.Thread(target=_read, daemon=True).start()
+
+    def _refresh_battery(self):
+        device = self._device
+        if device is None or not hasattr(device, 'get_power') or self._battery_item is None:
+            return True  # keep the timer alive in case device/UI state changes
+
+        def _read():
+            try:
+                with _USB_LOCK:
+                    device.open()
+                    try:
+                        pwr = device.get_power()
+                    finally:
+                        device.close()
+                GLib.idle_add(self._set_battery_label, pwr)
+            except Exception:
+                pass
+        threading.Thread(target=_read, daemon=True).start()
+        return True  # repeat
+
+    def _set_battery_label(self, pwr):
+        pct = pwr['battery_percent']
+        charging = ' (charging)' if pwr['power_connected'] else ''
+        text = f'Battery: {pct}%{charging}'
+        if self._battery_item is not None:
+            self._battery_item.property_set(Dbusmenu.MENUITEM_PROP_LABEL, text)
+        if self._sni is not None:
+            self._sni.set_tooltip(text)
 
     def _hidraw_listener(self):
         device = self._device
