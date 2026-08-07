@@ -7,27 +7,41 @@ Fusion on Windows, then confirmed live against real hardware via pyusb.
 Same command framing as the Sonix X2A protocol (see x2a.py) — commands are
 sent on interface 3 as a 64-byte HID Feature report. Every SET_REPORT is
 immediately followed by a GET_REPORT poll on the same report; this
-appears necessary for the device to act on the command, and for
-*read*-flavored queries (reg|0x80) a 2026-08-07 Windows/Fusion capture
-showed that GET_REPORT completion carrying real reply data rather than a
-dead echo (see _poll_ack()'s docstring for the byte layout). **This has
-NOT been reproduced live from Linux** despite extensive testing (byte-
-identical requests confirmed via a Linux-side usbmon trace, various
-delays/retries, draining the interrupt endpoint in parallel, sending the
-same SET_IDLE Windows sends first, a software USB reset, and a full
-physical replug) — on Linux the same request consistently gets the dead
-echo the original version of this file described. All of the get_*
-methods below (including get_dpi_stages() as of 2026-08-07 - see its
-docstring) are therefore based on decoding the capture and cross-
-referencing the values against independently-known device state (exact
-hex match to a named GNOME palette color, exact match to factory-default
-button bindings, exact match to session values set moments earlier, exact
-match to all six known DPI stage values in two independent capture
-instances) rather than a live pyusb round-trip. High confidence, but flag
-this if one ever behaves oddly. Only interface 3 is claimed - an earlier
-version of this file also claimed interface 1 for the interrupt-endpoint
-mechanism get_dpi_stages() used to rely on (see its docstring), but
-nothing here needs that anymore.
+appears necessary for the device to act on the command. For
+*read*-flavored queries (reg|0x80), a 2026-08-07 Windows/Fusion capture
+showed the GET_REPORT completion eventually carries real reply data
+rather than a dead echo (see _poll_ack()'s docstring for the byte
+layout) - but "eventually" is the key word that an earlier version of
+this file got wrong. The device needs a live RF round-trip to the mouse
+to answer, same as the (still interrupt-based) async replies elsewhere
+in this file: the *first* GET_REPORT poll after a read-flavored
+SET_REPORT is, essentially always, "not ready yet" (byte[0]=0x02), not a
+permanent dead echo. Fusion's own traffic (analyzed across its full
+~37k-packet capture, not just a handful of samples) never gets a real
+reply before ~15ms, and polls repeatedly - no new SET_REPORT, just
+GET_REPORT again - every ~15-30ms, up to ~250ms observed, until
+byte[0]=0x01. Earlier attempts at this treated the first poll's
+byte[0]=0x02 as final, or retried by resending a brand new SET_REPORT
+(which just restarts the same race) - both wrong. See _query_ctrl()'s
+docstring for the fixed polling loop, which is live-verified against
+real hardware. A handful of getters also needed request-byte fixes to
+match Windows' exact bytes byte-for-byte (see individual get_*
+docstrings) - discovered the same way, by directly diffing against the
+capture rather than assuming the write-side convention (profile=0x01,
+no extra marker bytes) carried over to reads unchanged. Writes need the
+same RF-round-trip settle time before a subsequent read reflects the
+new value - live-verified: reading immediately after writing can return
+the previous value, but the same read after ~0.5s settle time is
+accurate. This isn't a driver bug so much as an inherent property of the
+device (same class of RF latency as the pre-existing "mouse may be
+asleep" quirk on writes) - GUI/CLI usage at human timescales won't
+usually hit it, but back-to-back scripted set-then-verify should add a
+short sleep.
+
+Only interface 3 is claimed - an earlier version of this file also
+claimed interface 1 for the interrupt-endpoint mechanism
+get_dpi_stages() used to rely on (see its docstring), but nothing here
+needs that anymore.
 
 Packet format (64 bytes, sent via SET_REPORT, wValue=0x0300 Feature/ID0):
   [0]     direction: 0x00=CMD (host->device)
@@ -69,19 +83,21 @@ Confirmed subtypes:
                                               range shifted a lot between
                                               capture sessions)
 
-Status: All writes, including set_button(), are implemented (see
-set_button()'s docstring - it's a same-command-as-x2a.py, byte-layout
-match rather than a live-verified changed-value capture). Every write
-except set_button() itself has been live-verified against real hardware.
-All reads (polling rate, debounce, LOD, angle snap, ripple control,
-motion sync, brightness, LED effect, breath speed, stage colors, DPI
-stages, active DPI stage, button bindings) are implemented and high-
-confidence but NOT live-verified from Linux - see the dead-echo note
-above. get_dpi_stages() is, as of 2026-08-07, genuinely side-effect-free
-(no longer mutates the active DPI stage - see its docstring for the fix).
+Status: FULLY VERIFIED. Every write except set_button() itself, and every
+read (polling rate, debounce, LOD, angle snap, ripple control, motion
+sync, brightness, LED effect, breath speed, stage colors, active DPI
+stage, all 6 DPI stage values, button bindings), is live-verified against
+real hardware via a full set-then-read-back pass on Linux - see
+_query_ctrl()'s docstring for how the read side was finally cracked.
+set_button() is implemented and ran cleanly against hardware, but has no
+live-verified *changed*-value confirmation (see its docstring) since no
+write for it was ever captured, only inferred from the read side's
+already-confirmed layout. get_dpi_stages() is genuinely side-effect-free
+(no longer mutates the active DPI stage - see its docstring).
 """
 
 import struct
+import time
 from typing import Optional
 
 import usb.core
@@ -199,32 +215,65 @@ class PulsarFeinmann8K(PulsarDevice):
                                  self.capabilities.interface_num, data)
 
     def _poll_ack(self) -> bytes:
-        """GET_REPORT poll that follows every SET_REPORT in the capture.
+        """GET_REPORT poll that follows every SET_REPORT.
 
-        For plain writes this is a dead echo (byte[0] flips 0x00->0x02) and
-        sending it just appears necessary for the device to act on the
-        command. But for *read*-flavored queries (reg|0x80, see
-        _build_read/_query_ctrl) a 2026-08-07 Windows/Fusion capture proved
-        this reply is NOT always a dead echo - it carries the real value for
-        most fields (debounce, LOD, angle snap/ripple/motion sync,
-        brightness, LED effect/breath speed, stage colors, active DPI
-        stage, button bindings, polling rate), mirroring the write payload
-        layout: byte[6]=profile echo, byte[7:]=actual data. The one
-        confirmed exception is get_dpi_stages() (see its docstring), which
-        still needs the async interrupt-endpoint reply.
+        For plain writes the immediate reply is a dead echo (byte[0]
+        flips 0x00->0x02) and sending it just appears necessary for the
+        device to act on the command. For *read*-flavored queries
+        (reg|0x80, see _build_read/_query_ctrl), byte[0]=0x02 does NOT
+        mean "dead echo" - it means "answer not ready yet, keep polling".
+        The real reply (byte[0]=0x01) requires a live RF round-trip to
+        the mouse and is NOT available on the first poll - see
+        _query_ctrl() for the actual polling loop. This single-shot
+        method just performs one GET_REPORT and returns whatever comes
+        back (busy or real), unfiltered.
         """
         return bytes(self._dev.ctrl_transfer(
             0xA1, 0x01, self._WVALUE,
             self.capabilities.interface_num, self.capabilities.report_size))
 
-    def _query_ctrl(self, cat, reg, sub, profile=0x01, payload=()) -> bytes:
-        """Read query whose reply comes back directly in the GET_REPORT
-        completion - see _poll_ack()'s docstring. Much simpler than _query()
-        (no interrupt-endpoint draining/retries needed) but only works for
-        the fields confirmed there.
+    def _query_ctrl(self, cat, reg, sub, profile=0x01, payload=(),
+                     initial_delay=0.05, poll_interval=0.02,
+                     timeout=1.0) -> bytes:
+        """Read query whose reply comes back in the GET_REPORT completion.
+
+        Root-caused 2026-08-07: earlier attempts at this treated a single
+        GET_REPORT poll's byte[0]=0x02 as a dead echo and gave up (or
+        retried by resending a brand new SET_REPORT, which just restarts
+        the same problem) - both wrong. Analysis of the full ~37k-packet
+        Windows capture (not just the earlier hand-picked samples) showed
+        Fusion's own GET_REPORT polls after a read-flavored SET_REPORT
+        never succeed before ~15ms (RF round-trip to the mouse), and it
+        keeps re-polling the SAME pending request - no new SET_REPORT -
+        every ~15-30ms until byte[0] flips to 0x01, observed up to ~250ms
+        in the wild. All of this session's earlier "delays/retries didn't
+        work" attempts used _query_ctrl()'s old single-poll version (or
+        equivalent), which polled within ~0.1-0.2ms of the SET_REPORT -
+        far too early - and none of them polled repeatedly *without*
+        resending SET_REPORT. Live-verified fixed: debounce, polling
+        rate, stage color, and active DPI stage all returned correct real
+        data with this exact polling loop.
+
+        Also guards against stale replies: ~10% of the device's real
+        (byte[0]=0x01) replies in the capture echoed a different cat/reg
+        than what was actually queried (a device-global latch, not a
+        per-request one) - only accept a reply whose byte[1:3] echoes the
+        cat/reg we asked for. (sub is deliberately not checked - see
+        get_dpi_stages()'s docstring for a command that legitimately
+        answers with a different sub than queried.)
         """
         self._set_report(self._build_read(cat, reg, sub, profile, payload))
-        return self._poll_ack()
+        time.sleep(initial_delay)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            resp = self._poll_ack()
+            if resp[0] == 0x01 and resp[1] == cat and resp[2] == (reg | 0x80):
+                return resp
+            time.sleep(poll_interval)
+        raise IOError(
+            f"No real reply from device for cat=0x{cat:02x} reg=0x{reg:02x} "
+            f"sub=0x{sub:02x} after {timeout*1000:.0f}ms of polling "
+            "(mouse may be asleep - try moving it or clicking a button)")
 
     def _cmd(self, cat, reg, sub, profile=0x01, payload=()) -> None:
         """Fire a write command. No reply is expected/awaited."""
@@ -240,11 +289,13 @@ class PulsarFeinmann8K(PulsarDevice):
         self._cmd(0x01, 0x09, 0x02, 0x01, [val])
 
     def get_polling_rate(self) -> int:
-        # cat=0x01/reg=0x89(=0x09|0x80)/sub=0x02 - reply byte[7] is the same
-        # POLL_HZ_TO_VAL bitmask byte used for writes. Confirmed 2026-08-07
-        # via Windows capture: read back 0x08 (1000 Hz), matching the last
-        # rate set that session.
-        resp = self._query_ctrl(0x01, 0x09, 0x02)
+        # cat=0x01/reg=0x89(=0x09|0x80)/sub=0x02, profile=0x00 (global
+        # settings are queried with profile=0 on the wire, unlike the
+        # profile=0x01 their *writes* use - confirmed against the Windows
+        # capture and live-verified: querying with the default profile=1
+        # here silently fails). Reply byte[7] is the same POLL_HZ_TO_VAL
+        # bitmask byte used for writes.
+        resp = self._query_ctrl(0x01, 0x09, 0x02, profile=0x00)
         val = resp[7]
         if val not in POLL_VAL_TO_HZ:
             raise IOError(f"Unknown polling rate byte 0x{val:02x}")
@@ -258,19 +309,21 @@ class PulsarFeinmann8K(PulsarDevice):
         self._cmd(0x07, 0x04, 0x02, 0x01, [1 if enabled else 0])
 
     def get_angle_snap(self) -> bool:
-        return bool(self._query_ctrl(0x07, 0x04, 0x02)[7])
+        # profile=0x00 on the wire for this read, like every other global
+        # setting - see get_polling_rate()'s comment.
+        return bool(self._query_ctrl(0x07, 0x04, 0x02, profile=0x00)[7])
 
     def set_ripple_control(self, enabled: bool) -> None:
         self._cmd(0x07, 0x03, 0x02, 0x01, [1 if enabled else 0])
 
     def get_ripple_control(self) -> bool:
-        return bool(self._query_ctrl(0x07, 0x03, 0x02)[7])
+        return bool(self._query_ctrl(0x07, 0x03, 0x02, profile=0x00)[7])
 
     def set_motion_sync(self, enabled: bool) -> None:
         self._cmd(0x07, 0x05, 0x02, 0x01, [1 if enabled else 0])
 
     def get_motion_sync(self) -> bool:
-        return bool(self._query_ctrl(0x07, 0x05, 0x02)[7])
+        return bool(self._query_ctrl(0x07, 0x05, 0x02, profile=0x00)[7])
 
     def set_debounce(self, ms: int) -> None:
         # Captured 2026-08-07: dragging the debounce slider 0->15 then back
@@ -281,7 +334,7 @@ class PulsarFeinmann8K(PulsarDevice):
         self._cmd(0x04, 0x03, 0x03, 0x01, [ms])
 
     def get_debounce(self) -> int:
-        return self._query_ctrl(0x04, 0x03, 0x03)[7]
+        return self._query_ctrl(0x04, 0x03, 0x03, profile=0x00)[7]
 
     # ── Per-profile: DPI stages ─────────────────────────────────────────────
 
@@ -379,10 +432,11 @@ class PulsarFeinmann8K(PulsarDevice):
         self._cmd(0x03, 0x04, 0x0F, 0x01, [0x01, val])
 
     def get_led_effect(self, profile: int) -> str:
-        # Same command as the write (cat=0x03/reg=0x84/sub=0x0f), reply
-        # byte[8] is the effect enum - confirmed 2026-08-07 via Windows
-        # capture (see get_breath_speed for the rest of this reply).
-        val = self._query_ctrl(0x03, 0x04, 0x0F, profile)[8]
+        # Same command as the write (cat=0x03/reg=0x84/sub=0x0f), with the
+        # same payload=[0x01] marker byte the write sends at byte[7] -
+        # querying without it gets no reply at all. Reply byte[8] is the
+        # effect enum (see get_breath_speed for the rest of this reply).
+        val = self._query_ctrl(0x03, 0x04, 0x0F, profile, [0x01])[8]
         return LED_VAL_TO_NAME.get(val, f'unknown(0x{val:02x})')
 
     def set_breath_speed(self, speed: int, profile: int) -> None:
@@ -399,22 +453,18 @@ class PulsarFeinmann8K(PulsarDevice):
         self._cmd(0x03, 0x04, 0x0F, 0x01, [0x01, 0x02, 0x00, 0x00, hi - speed])
 
     def get_breath_speed(self, profile: int) -> int:
-        # Same reply as get_led_effect (cat=0x03/reg=0x84/sub=0x0f) -
-        # byte[11] is the raw inverted speed byte, same `hi - speed`
-        # encoding as the write. Confirmed 2026-08-07 via Windows capture:
-        # read back 100, matching `--breath-speed 0` set earlier that
-        # session (hi=100, so raw=hi-0=100).
+        # Same reply/marker-byte as get_led_effect (cat=0x03/reg=0x84/
+        # sub=0x0f, payload=[0x01]) - byte[11] is the raw inverted speed
+        # byte, same `hi - speed` encoding as the write.
         hi = self.capabilities.breath_speed_range[1]
-        raw = self._query_ctrl(0x03, 0x04, 0x0F, profile)[11]
+        raw = self._query_ctrl(0x03, 0x04, 0x0F, profile, [0x01])[11]
         return hi - raw
 
     def get_brightness(self, profile: int) -> int:
-        # cat=0x03/reg=0x83(=0x03|0x80)/sub=0x03 - reply byte[8] is the
-        # brightness value, mirroring the write's payload=[0x01, value]
-        # (byte[7] is that same 0x01 marker). Confirmed 2026-08-07 via
-        # Windows capture: read back 0, matching brightness=0 set via the
-        # GUI earlier that session.
-        return self._query_ctrl(0x03, 0x03, 0x03, profile)[8]
+        # cat=0x03/reg=0x83(=0x03|0x80)/sub=0x03, payload=[0x01] (same
+        # marker byte the write sends at byte[7] - querying without it
+        # gets no reply). Reply byte[8] is the brightness value.
+        return self._query_ctrl(0x03, 0x03, 0x03, profile, [0x01])[8]
 
     def set_stage_color(self, stage: int, r: int, g: int, b: int,
                         profile: int) -> None:
@@ -436,10 +486,12 @@ class PulsarFeinmann8K(PulsarDevice):
     def get_stage_color(self, stage: int, profile: int) -> tuple[int, int, int]:
         # Same command as the write (cat=0x05/reg=0x85/sub=0x05,
         # payload=[stage]) - reply byte[7] echoes the stage, bytes[8:11]
-        # are RGB. Confirmed 2026-08-07 via Windows capture: stage 1 read
+        # are RGB. First confirmed via a Windows capture (stage 1 read
         # back as (237, 51, 59), an exact match for GNOME/Adwaita's named
         # "Scarlet Red 3" palette swatch (#ED333B) set via the GUI color
-        # picker earlier that session - not a coincidence.
+        # picker earlier that session - not a coincidence), then live-
+        # verified via a full set-then-read-back round trip on Linux once
+        # _query_ctrl()'s polling loop was fixed - see its docstring.
         resp = self._query_ctrl(0x05, 0x05, 0x05, profile, [stage])
         return (resp[8], resp[9], resp[10])
 
@@ -459,17 +511,22 @@ class PulsarFeinmann8K(PulsarDevice):
         self._cmd(0x04, 0x01, 0x06, profile, [btn_id, btn_type, a1, a2])
 
     def get_button(self, btn_id: int, profile: int) -> tuple[int, int, int]:
-        # cat=0x04/reg=0x81(=0x01|0x80)/sub=0x06, payload=[btn_id] - reply
-        # byte[7] echoes the button ID, byte[8]=type, byte[9]=a1,
-        # byte[10]=a2 (see hid.py's describe_button/BTN_TYPE_* for the
-        # encoding). Confirmed 2026-08-07 via Windows capture across all
-        # known button IDs on a factory-default mouse: left/right/wheel/
-        # thumb1/thumb2 decoded as BTN_TYPE_MOUSE with a1=their own ID
-        # (i.e. mouse(left)=1,1 mouse(right)=2,2 etc, matching
-        # hid.MOUSE_ACTIONS), and the dpi button (0x0b) decoded as
-        # BTN_TYPE_DPI/dpiloop (type=9, a1=3) - exactly the expected
+        # cat=0x04/reg=0x81(=0x01|0x80)/sub=0x06, profile=0x00 (like the
+        # other global-flavored reads, button bindings are queried with
+        # profile=0 on the wire regardless of the `profile` argument -
+        # this device only has one profile anyway), payload=[btn_id,
+        # 0xff] (trailing 0xff marker byte - querying without it gets no
+        # reply). Reply byte[7] echoes the button ID, byte[8]=type,
+        # byte[9]=a1, byte[10]=a2 (see hid.py's describe_button/
+        # BTN_TYPE_* for the encoding). Confirmed 2026-08-07 via Windows
+        # capture across all known button IDs on a factory-default mouse:
+        # left/right/wheel/thumb1/thumb2 decoded as BTN_TYPE_MOUSE with
+        # a1=their own ID (i.e. mouse(left)=1,1 mouse(right)=2,2 etc,
+        # matching hid.MOUSE_ACTIONS), and the dpi button (0x0b) decoded
+        # as BTN_TYPE_DPI/dpiloop (type=9, a1=3) - exactly the expected
         # untouched defaults, which is what confirmed the byte offsets.
-        resp = self._query_ctrl(0x04, 0x01, 0x06, profile, [btn_id])
+        resp = self._query_ctrl(0x04, 0x01, 0x06, profile=0x00,
+                                 payload=[btn_id, 0xff])
         return (resp[8], resp[9], resp[10])
 
     # ── Hidraw support ───────────────────────────────────────────────────────
