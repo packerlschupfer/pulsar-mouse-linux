@@ -280,6 +280,34 @@ class PulsarFeinmann8K(PulsarDevice):
         self._set_report(self._build(cat, reg, sub, profile, payload))
         self._poll_ack()
 
+    # ── Battery / power ──────────────────────────────────────────────────────
+
+    def get_power(self) -> dict:
+        # cat=0x08/reg=0x81(=0x01|0x80)/sub=0x01, profile=0x00, no payload -
+        # reply byte[6] is the battery percentage directly (0-100), unlike
+        # most other reads here where the value sits at byte[7]/[8]. Live-
+        # verified twice minutes apart, both times a plausible/stable
+        # value (88, matching the low-90s range this same field showed in
+        # two earlier Windows captures on a presumably similarly-charged
+        # battery). No millivolt reading has been found for this model -
+        # this device may just not expose one. get_power() is optional
+        # per-driver (base.PulsarDevice has no default for it - cli.py
+        # only calls it via hasattr()), and cli.py's print_global()
+        # tolerates a driver that omits 'battery_mv' from the dict.
+        pct = self._query_ctrl(0x08, 0x01, 0x01, profile=0x00)[6]
+        # cat=0x08/reg=0x83(=0x03|0x80)/sub=0x01, profile=0x00, no payload -
+        # reply byte[6] is 0 while unplugged (live-verified with the
+        # dongle's mouse not on a charging cable); never seen the charging
+        # (nonzero) case, but the command shape and byte offset match
+        # get_power's sibling field exactly, and cat=0x08 is otherwise
+        # unused for anything except this power-status pair.
+        charging = bool(self._query_ctrl(0x08, 0x03, 0x01, profile=0x00)[6])
+        return {
+            'battery_percent': pct,
+            'power_connected': charging,
+            'battery_mv': None,
+        }
+
     # ── Global settings ─────────────────────────────────────────────────────
 
     def set_polling_rate(self, hz: int) -> None:

@@ -32,7 +32,8 @@ def print_global(device: PulsarDevice):
         try:
             pwr = device.get_power()
             charging = "  (charging)" if pwr['power_connected'] else ""
-            print(f"  Battery:          {pwr['battery_percent']}%  {pwr['battery_mv']} mV{charging}")
+            mv = f"  {pwr['battery_mv']} mV" if pwr.get('battery_mv') is not None else ""
+            print(f"  Battery:          {pwr['battery_percent']}%{mv}{charging}")
         except Exception as e:
             print(f"  Battery:          error ({e})")
     try:
