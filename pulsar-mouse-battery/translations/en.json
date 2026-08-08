@@ -1,0 +1,16 @@
+{
+  "settings": {
+    "color": {
+      "label": "Color",
+      "description": "Accent color for the percentage text and progress bar"
+    },
+    "show_progress": {
+      "label": "Show Progress Bar"
+    }
+  },
+  "ui": {
+    "charging": "(charging)",
+    "not-installed": "pulsar-mouse not found",
+    "no-mouse": "Mouse not found"
+  }
+}

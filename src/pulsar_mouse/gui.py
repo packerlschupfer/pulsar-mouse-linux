@@ -280,6 +280,11 @@ class _StatusNotifierItem:
 
 
 class PulsarMouseApp(Adw.Application):
+    # Last-known battery reading, written on every poll so other tools
+    # (e.g. a desktop-widget/lock-screen plugin) can show it without doing
+    # their own redundant USB reads - see _set_battery_label().
+    _BATTERY_STATE_PATH = os.path.expanduser('~/.cache/pulsar-mouse/battery.json')
+
     def __init__(self):
         super().__init__(
             application_id=APP_ID,
@@ -493,6 +498,12 @@ class PulsarMouseApp(Adw.Application):
             # level in the tray when nothing's actively happening with it.
             self._sni.set_icon(_battery_icon_name(pct, True) if charging else 'input-mouse')
         self._update_tray_tooltip()
+        try:
+            os.makedirs(os.path.dirname(self._BATTERY_STATE_PATH), exist_ok=True)
+            with open(self._BATTERY_STATE_PATH, 'w') as f:
+                json.dump({**pwr, 'updated_at': time.time()}, f)
+        except OSError:
+            pass  # cosmetic (external readers only) - never worth crashing over
         # Home page has no polling timer of its own - it shares this read
         # rather than doubling up on USB traffic (and possibly waking the
         # mouse from its own power-saving sleep twice as often).

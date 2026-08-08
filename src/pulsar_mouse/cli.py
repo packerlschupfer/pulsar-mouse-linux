@@ -177,6 +177,11 @@ Examples:
     p.add_argument('--profile', type=int, metavar='N',
                    help='Profile to read/write (default: all for read)')
 
+    p.add_argument('--battery-json', action='store_true',
+                   help='Print battery/charging status as one JSON line and exit '
+                        '(for scripts - e.g. {"battery_percent": 85, '
+                        '"power_connected": false, "battery_mv": null})')
+
     # Global settings
     g = p.add_argument_group('global settings (shared across all profiles)')
     g.add_argument('--poll', type=int, metavar='HZ',
@@ -258,6 +263,16 @@ def main():
 
     if args.profile is not None and not 1 <= args.profile <= caps.num_profiles:
         sys.exit(f"Error: --profile must be 1–{caps.num_profiles}")
+
+    if args.battery_json:
+        if not hasattr(device, 'get_power'):
+            sys.exit(json.dumps({'error': 'device has no battery'}))
+        device.open()
+        try:
+            print(json.dumps(device.get_power()))
+        finally:
+            device.close()
+        return
 
     if args.export:
         device.open()

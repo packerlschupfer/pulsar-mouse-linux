@@ -1,0 +1,45 @@
+# Pulsar Mouse battery/charging status - bar widget and desktop widget.
+#
+# Both entries read the battery reading pulsar-mouse-gui already writes on
+# every poll (~/.cache/pulsar-mouse/battery.json) rather than doing their own
+# USB read - avoids duplicate polling of the mouse's wireless link. Each
+# falls back to invoking the `pulsar-mouse` CLI directly if that file is
+# missing or stale (e.g. the GUI/tray isn't running, or was never installed
+# at all - CLI-only setups just always take this path), so both widgets work
+# standalone too.
+#
+# Desktop widgets are shared with the lock screen (LockscreenWidgetsHost
+# reuses the same widget type registry as the desktop), so the desktop_widget
+# entry shows up in both places once added via the widget editor.
+
+id = "harveywuk/pulsar-mouse-battery"
+name = "Pulsar Mouse Battery"
+version = "1.0.0"
+plugin_api = 3
+author = "harveywuk"
+license = "MIT"
+dependencies = []
+tags = ["hardware", "system"]
+icon = "mouse"
+description = "Battery percentage and charging status for a Pulsar gaming mouse, on the bar, desktop, and lock screen."
+
+[[widget]]
+id = "bar"
+entry = "bar.luau"
+
+[[desktop_widget]]
+id = "battery"
+entry = "desktop.luau"
+
+  [[desktop_widget.setting]]
+  key = "color"
+  type = "color"
+  label_key = "settings.color.label"
+  description_key = "settings.color.description"
+  default = "primary"
+
+  [[desktop_widget.setting]]
+  key = "show_progress"
+  type = "bool"
+  label_key = "settings.show_progress.label"
+  default = true
