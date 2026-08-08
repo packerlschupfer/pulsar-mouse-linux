@@ -18,7 +18,7 @@
 
 id = "harveywuk/pulsar-mouse-battery"
 name = "Pulsar Mouse Battery"
-version = "1.3.1"
+version = "1.4.0"
 plugin_api = 9
 author = "harveywuk"
 license = "MIT"
@@ -51,7 +51,7 @@ entry = "bar.luau"
 id = "controls"
 entry = "panel.luau"
 width = 300
-height = 420
+height = 320
 placement = "attached"
 position = "auto"
 open_near_click = true

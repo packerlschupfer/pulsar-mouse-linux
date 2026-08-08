@@ -27,6 +27,8 @@
     "write-failed": "Failed to apply - is the mouse connected?",
     "loading": "Loading...",
     "wired": "Wired",
-    "signal-label": "Signal"
+    "signal-label": "Signal",
+    "tab-sensor": "Sensor",
+    "tab-lighting": "Lighting"
   }
 }

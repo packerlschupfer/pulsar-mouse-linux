@@ -34,10 +34,13 @@ Add the `bar` bar widget to your bar. Shows a battery glyph (and percentage, on 
 
 ### Controls Panel
 
-Click the bar widget to open the `controls` panel:
+Click the bar widget to open the `controls` panel, split into two tabs (Noctalia has no native tabs control - these are just two segmented buttons swapping which section renders):
 
+**Sensor**
 - **DPI** - a slider stepping through profile 1's configured DPI stages (not a raw DPI range - every position lands on an actual configured value, like a notch per stage)
 - **Polling Rate** - a slider the same way, stepping through the device's supported rates
+
+**Lighting**
 - **LED Effect** - a dropdown (off/steady/pulse, or whatever the device supports)
 - **Brightness** - a 0-100% slider
 - **Speed** - a 0-100 slider for the LED effect's speed, shown only when the current effect actually has one (e.g. pulse/breath, not steady)

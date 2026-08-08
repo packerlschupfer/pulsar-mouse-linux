@@ -19,6 +19,12 @@
 -- every combination of rows (the speed slider alone changes content height
 -- depending on which LED effect is selected).
 --
+-- No native tabs control exists (checked noctalia.d.luau) - "Sensor" and
+-- "Lighting" are two ui.button()s whose variant swaps between primary/
+-- outline based on activeTab, same segmented-button pattern the DPI/polling
+-- stage buttons used before they became sliders. Each section is just
+-- conditionally included in the rendered tree rather than actually hidden.
+--
 --   panel.render(tree)          declarative UI tree
 --   panel.close()                close the panel surface
 --   noctalia.runAsync(cmd, cb)  CLI read/write
@@ -39,6 +45,7 @@ local breathSpeed = nil
 local breathSpeedPreview = nil
 local errorText = nil
 local busy = false
+local activeTab = "sensor" -- "sensor" | "lighting"
 
 -- Matches the GUI's own convention (see gui.py) for when breath/pulse speed
 -- is relevant: the device's last LED effect in its list, whatever it's
@@ -72,7 +79,31 @@ local function render()
     return
   end
 
-  if #dpiStages > 0 then
+  -- No native tabs control - a row of two segmented buttons standing in for
+  -- one, same variant-swap pattern as the DPI/polling stage buttons used to
+  -- use before they became sliders.
+  table.insert(rows, ui.row({ gap = 6 }, {
+    ui.button({
+      text = noctalia.tr("ui.tab-sensor"),
+      variant = (activeTab == "sensor") and "primary" or "outline",
+      flexGrow = 1,
+      onClick = function()
+        activeTab = "sensor"
+        render()
+      end,
+    }),
+    ui.button({
+      text = noctalia.tr("ui.tab-lighting"),
+      variant = (activeTab == "lighting") and "primary" or "outline",
+      flexGrow = 1,
+      onClick = function()
+        activeTab = "lighting"
+        render()
+      end,
+    }),
+  }))
+
+  if activeTab == "sensor" and #dpiStages > 0 then
     local shownIndex = dpiPreviewIndex or dpiActive
     local shownDpi = dpiStages[shownIndex]
     table.insert(rows, ui.label({
@@ -117,7 +148,7 @@ local function render()
     }))
   end
 
-  if #pollingRates > 0 then
+  if activeTab == "sensor" and #pollingRates > 0 then
     local shownPollIndex = pollPreviewIndex or pollingRateIndex()
     local shownHz = pollingRates[shownPollIndex]
     table.insert(rows, ui.label({
@@ -159,7 +190,7 @@ local function render()
     }))
   end
 
-  if #ledEffects > 0 then
+  if activeTab == "lighting" and #ledEffects > 0 then
     table.insert(rows, ui.label({ text = noctalia.tr("ui.led-label"), fontSize = 13, color = "on_surface_variant" }))
 
     local effectOptions = {}
