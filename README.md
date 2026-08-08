@@ -259,17 +259,31 @@ External driver packages can also register via entry points without modifying th
 
 ## OS Tweaks for Gaming
 
-The GUI has a "Desktop Mouse Settings" section for GNOME, but you can also
-apply these from the command line or set them at the OS level.
+The GUI has a "Desktop Mouse Settings" section on the Performance page that
+auto-detects which of GNOME, Hyprland, or KDE Plasma is running and shows
+the matching controls (only one shows up, whichever matches your session) -
+but you can also apply these from the command line or set them at the OS
+level directly.
 
 ### Disable mouse acceleration (recommended for FPS gaming)
 
 ```bash
-# GNOME / Wayland / X11
+# GNOME (Wayland or X11)
 gsettings set org.gnome.desktop.peripherals.mouse accel-profile 'flat'
+gsettings set org.gnome.desktop.peripherals.mouse speed 0   # 0 = neutral
 
-# Reset pointer speed to neutral (0 = no modification)
-gsettings set org.gnome.desktop.peripherals.mouse speed 0
+# Hyprland - live immediately, but runtime-only; add the input {} block
+# below to your hyprland.conf (or a sourced file) to persist it
+hyprctl keyword input:accel_profile flat
+hyprctl keyword input:sensitivity 0.0
+# input {
+#     sensitivity = 0.0
+#     accel_profile = flat
+# }
+
+# KDE Plasma - written to kcminputrc, requires kwriteconfig5/6
+kwriteconfig6 --file kcminputrc --group Mouse --key XLbInptAccelProfileFlat true
+kwriteconfig6 --file kcminputrc --group Mouse --key XLbInptPointerAcceleration 0.0
 ```
 
 ### Kernel boot options (advanced)
