@@ -232,6 +232,15 @@ class _StatusNotifierItem:
                 'org.kde.StatusNotifierItem', 'XAyatanaNewLabel',
                 GLib.Variant('(ss)', (label, guide)))
 
+    def set_icon(self, icon_name):
+        if icon_name == self._icon_name:
+            return
+        self._icon_name = icon_name
+        if self._conn and self._obj_id:
+            self._conn.emit_signal(
+                None, '/StatusNotifierItem',
+                'org.kde.StatusNotifierItem', 'NewIcon', None)
+
     def set_tooltip(self, text):
         """Native hover tooltip (StatusNotifierItem ToolTip property), as
         opposed to set_label()'s always-visible text-next-to-icon label."""
@@ -402,9 +411,11 @@ class PulsarMouseApp(Adw.Application):
     def _start_tray_updates(self):
         self._read_initial_state()
         threading.Thread(target=self._hidraw_listener, daemon=True).start()
-        # Battery drains slowly - a periodic background refresh is enough,
-        # no need for anything event-driven like the hidraw DPI listener.
-        GLib.timeout_add_seconds(600, self._refresh_battery)
+        # Battery percent drains slowly, but power_connected (charging)
+        # can flip the moment a cable is plugged/unplugged - 30s keeps
+        # that (and the tray icon it drives) feeling responsive without
+        # polling as often as the event-driven hidraw DPI listener.
+        GLib.timeout_add_seconds(30, self._refresh_battery)
         return False
 
     def _read_initial_state(self):
@@ -466,10 +477,17 @@ class PulsarMouseApp(Adw.Application):
 
     def _set_battery_label(self, pwr):
         pct = pwr['battery_percent']
-        charging = ' (charging)' if pwr['power_connected'] else ''
-        self._battery_text = f'Battery: {pct}%{charging}'
+        charging = pwr['power_connected']
+        label = ' (charging)' if charging else ''
+        self._battery_text = f'Battery: {pct}%{label}'
         if self._battery_item is not None:
             self._battery_item.property_set(Dbusmenu.MENUITEM_PROP_LABEL, self._battery_text)
+        if self._sni is not None:
+            # Swap to a charging-battery icon while plugged in (also
+            # reflects actual level, e.g. battery-low-charging), otherwise
+            # keep the generic mouse icon - no need to always show battery
+            # level in the tray when nothing's actively happening with it.
+            self._sni.set_icon(_battery_icon_name(pct, True) if charging else 'input-mouse')
         self._update_tray_tooltip()
 
     def _set_conn_quality_label(self, pct):
@@ -1369,7 +1387,9 @@ X-GNOME-Autostart-enabled=true
             return
         self._refresh_home_battery()
         threading.Thread(target=self._home_hidraw_listener, daemon=True).start()
-        GLib.timeout_add_seconds(600, self._periodic_home_battery_refresh)
+        # See _start_tray_updates()'s matching comment - 30s so charging
+        # state (icon + "(charging)" label) doesn't lag a plug/unplug.
+        GLib.timeout_add_seconds(30, self._periodic_home_battery_refresh)
 
     def _periodic_home_battery_refresh(self):
         self._refresh_home_battery()
