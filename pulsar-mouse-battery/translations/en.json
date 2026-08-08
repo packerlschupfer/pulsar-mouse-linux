@@ -21,6 +21,7 @@
     "no-mouse": "Mouse not found",
     "dpi-label": "DPI",
     "polling-label": "Polling Rate",
-    "write-failed": "Failed to apply - is the mouse connected?"
+    "write-failed": "Failed to apply - is the mouse connected?",
+    "loading": "Loading..."
   }
 }

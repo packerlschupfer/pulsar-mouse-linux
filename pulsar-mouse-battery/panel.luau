@@ -19,6 +19,10 @@ local dpiStages = {}
 local errorText = nil
 local busy = false
 
+-- onOpen renders once immediately (a loading placeholder) before the async
+-- CLI read below has a result - dpiStages/pollingRates are still {} at that
+-- point, so ui.select/button rows are skipped entirely rather than built
+-- from an empty options list, which risks failing to render at all.
 local function render()
   local rows = {}
 
@@ -26,54 +30,66 @@ local function render()
     table.insert(rows, ui.label({ text = errorText, color = "error" }))
   end
 
-  table.insert(rows, ui.label({ text = noctalia.tr("ui.dpi-label"), fontSize = 13, color = "on_surface_variant" }))
+  local loaded = #dpiStages > 0 or #pollingRates > 0
 
-  local dpiButtons = {}
-  for i, dpi in ipairs(dpiStages) do
-    table.insert(dpiButtons, ui.button({
-      text = tostring(dpi),
-      variant = (i == dpiActive) and "primary" or "outline",
+  if not loaded and errorText == nil then
+    table.insert(rows, ui.label({ text = noctalia.tr("ui.loading"), color = "outline" }))
+    panel.render(ui.column({ gap = 10, padding = 16 }, rows))
+    return
+  end
+
+  if #dpiStages > 0 then
+    table.insert(rows, ui.label({ text = noctalia.tr("ui.dpi-label"), fontSize = 13, color = "on_surface_variant" }))
+
+    local dpiButtons = {}
+    for i, dpi in ipairs(dpiStages) do
+      table.insert(dpiButtons, ui.button({
+        text = tostring(dpi),
+        variant = (i == dpiActive) and "primary" or "outline",
+        enabled = not busy,
+        onClick = function()
+          local target = i
+          busy = true
+          render()
+          noctalia.runAsync(
+            `pulsar-mouse --profile {profile} --active-stage {target}`,
+            function(result)
+              busy = false
+              if type(result) == "table" and result.exitCode == 0 then
+                dpiActive = target
+                errorText = nil
+              else
+                errorText = noctalia.tr("ui.write-failed")
+              end
+              render()
+            end,
+            10000
+          )
+        end,
+      }))
+    end
+    table.insert(rows, ui.row({ gap = 6, wrap = true }, dpiButtons))
+  end
+
+  if #pollingRates > 0 then
+    table.insert(rows, ui.label({ text = noctalia.tr("ui.polling-label"), fontSize = 13, color = "on_surface_variant" }))
+
+    local pollOptions = {}
+    local pollSelectedIndex = 0
+    for i, hz in ipairs(pollingRates) do
+      table.insert(pollOptions, `{hz} Hz`)
+      if hz == pollingRate then
+        pollSelectedIndex = i - 1 -- ui.select is 0-indexed
+      end
+    end
+    table.insert(rows, ui.select({
+      key = "polling-rate",
+      options = pollOptions,
+      selectedIndex = pollSelectedIndex,
       enabled = not busy,
-      onClick = function()
-        local target = i
-        busy = true
-        render()
-        noctalia.runAsync(
-          `pulsar-mouse --profile {profile} --active-stage {target}`,
-          function(result)
-            busy = false
-            if type(result) == "table" and result.exitCode == 0 then
-              dpiActive = target
-              errorText = nil
-            else
-              errorText = noctalia.tr("ui.write-failed")
-            end
-            render()
-          end,
-          10000
-        )
-      end,
+      onChange = "onPollChange",
     }))
   end
-  table.insert(rows, ui.row({ gap = 6, wrap = true }, dpiButtons))
-
-  table.insert(rows, ui.label({ text = noctalia.tr("ui.polling-label"), fontSize = 13, color = "on_surface_variant" }))
-
-  local pollOptions = {}
-  local pollSelectedIndex = 0
-  for i, hz in ipairs(pollingRates) do
-    table.insert(pollOptions, `{hz} Hz`)
-    if hz == pollingRate then
-      pollSelectedIndex = i - 1 -- ui.select is 0-indexed
-    end
-  end
-  table.insert(rows, ui.select({
-    key = "polling-rate",
-    options = pollOptions,
-    selectedIndex = pollSelectedIndex,
-    enabled = not busy,
-    onChange = "onPollChange",
-  }))
 
   panel.render(ui.column({ gap = 10, padding = 16 }, rows))
 end
