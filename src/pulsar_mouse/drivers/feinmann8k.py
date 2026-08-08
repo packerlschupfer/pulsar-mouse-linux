@@ -654,10 +654,7 @@ class PulsarFeinmann8K(PulsarDevice):
         self._cmd(0x04, 0x01, 0x06, profile, [btn_id, btn_type, a1, a2])
 
     def get_button(self, btn_id: int, profile: int) -> tuple[int, int, int]:
-        # cat=0x04/reg=0x81(=0x01|0x80)/sub=0x06, profile=0x00 (like the
-        # other global-flavored reads, button bindings are queried with
-        # profile=0 on the wire regardless of the `profile` argument -
-        # this device only has one profile anyway), payload=[btn_id,
+        # cat=0x04/reg=0x81(=0x01|0x80)/sub=0x06, payload=[btn_id,
         # 0xff] (trailing 0xff marker byte - querying without it gets no
         # reply). Reply byte[7] echoes the button ID, byte[8]=type,
         # byte[9]=a1, byte[10]=a2 (see hid.py's describe_button/
@@ -668,7 +665,7 @@ class PulsarFeinmann8K(PulsarDevice):
         # matching hid.MOUSE_ACTIONS), and the dpi button (0x0b) decoded
         # as BTN_TYPE_DPI/dpiloop (type=9, a1=3) - exactly the expected
         # untouched defaults, which is what confirmed the byte offsets.
-        resp = self._query_ctrl(0x04, 0x01, 0x06, profile=0x00,
+        resp = self._query_ctrl(0x04, 0x01, 0x06, profile=profile,
                                  payload=[btn_id, 0xff])
         return (resp[8], resp[9], resp[10])
 
