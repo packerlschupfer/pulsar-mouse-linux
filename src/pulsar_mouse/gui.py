@@ -289,7 +289,7 @@ class PulsarMouseApp(Adw.Application):
 
     def _build_tray(self, win: 'MainWindow', device: PulsarDevice):
         caps = device.capabilities
-        sni = _StatusNotifierItem('pulsar-mouse', 'pulsar-mouse', caps.name)
+        sni = _StatusNotifierItem('pulsar-mouse', 'input-mouse', caps.name)
         sni.set_on_activate(win.present)
         self._sni = sni
 
