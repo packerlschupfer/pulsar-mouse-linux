@@ -16,13 +16,21 @@ Wireless (Nordic) protocol based on [python-pulsar-mouse-tool](https://github.co
 
 ## Screenshots
 
-| Global & Profile Settings | DPI Stages & Button Bindings |
+| Home | Performance |
 |:---:|:---:|
-| ![Global Settings](screenshots/01-global-settings.png) | ![DPI & Buttons](screenshots/02-dpi-buttons.png) |
+| ![Home](screenshots/01-home.png) | ![Performance](screenshots/02-performance.png) |
 
-| Desktop Settings & Test | Input Test Dialog | System Tray |
-|:---:|:---:|:---:|
-| ![Desktop Settings](screenshots/03-desktop-settings.png) | ![Input Test](screenshots/04-input-test.png) | ![Tray](screenshots/05-tray.png) |
+| Colour Picker | Customize |
+|:---:|:---:|
+| ![Colour Picker](screenshots/03-color-picker.png) | ![Customize](screenshots/04-customize.png) |
+
+| Button Remap | Power |
+|:---:|:---:|
+| ![Remap Button](screenshots/05-remap-button.png) | ![Power](screenshots/06-power.png) |
+
+| Tools | Input Test |
+|:---:|:---:|
+| ![Tools](screenshots/07-tools.png) | ![Input Test](screenshots/08-input-test.png) |
 
 ## Supported Mice
 
