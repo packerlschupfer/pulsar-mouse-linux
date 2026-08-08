@@ -32,6 +32,10 @@ Wireless (Nordic) protocol based on [python-pulsar-mouse-tool](https://github.co
 |:---:|:---:|
 | ![Tools](screenshots/07-tools.png) | ![Input Test](screenshots/08-input-test.png) |
 
+| System Tray |
+|:---:|
+| ![Tray](screenshots/09-tray.png) |
+
 ## Supported Mice
 
 | Model | Driver | VID:PID | Status |
