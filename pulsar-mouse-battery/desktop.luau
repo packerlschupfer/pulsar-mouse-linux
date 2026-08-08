@@ -40,11 +40,6 @@ local signalPercent = nil
 local errorText = nil
 local checkingCli = false
 
-local function statusGlyph()
-  local name = (errorText ~= nil or percent == nil) and "mouse-off" or "mouse-filled"
-  return ui.glyph({ name = name, size = glyphSize, color = statusColor() })
-end
-
 local function statusColor()
   if errorText ~= nil then
     return "error"
@@ -53,6 +48,11 @@ local function statusColor()
     return "error"
   end
   return color
+end
+
+local function statusGlyph()
+  local name = (errorText ~= nil or percent == nil) and "mouse-off" or "mouse-filled"
+  return ui.glyph({ name = name, size = glyphSize, color = statusColor() })
 end
 
 local function render()

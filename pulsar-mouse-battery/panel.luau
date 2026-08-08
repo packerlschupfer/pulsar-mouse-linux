@@ -90,15 +90,24 @@ end
 -- working) rather than being retrofitted for the sake of it. get/setPreview
 -- hold the live-drag value separately from the committed one, same
 -- preview-then-commit-on-drag-end split as everywhere else in this file.
-local function sliderRow(labelText, formatValue, min, max, step, get, getPreview, setPreview, buildCmd, onSuccess)
+-- `key` gives this row's label/slider a stable identity across renders -
+-- without it, Noctalia's UI reconciler matches purely by (type, position),
+-- and this panel's row list shifts constantly (the error label appearing/
+-- disappearing, tabs swapping which rows are present, the breath-speed row
+-- coming and going) - two different sliderRow() calls landing on the same
+-- structural slot across renders can end up with one's onDragEnd bound to
+-- the wrong control, so a drag on one setting silently writes another.
+local function sliderRow(key, labelText, formatValue, min, max, step, get, getPreview, setPreview, buildCmd, onSuccess)
   local shown = getPreview() or get()
   return {
     ui.label({
+      key = key .. "-label",
       text = `{labelText} — {formatValue(shown)}`,
       fontSize = 13,
       color = "on_surface_variant",
     }),
     ui.slider({
+      key = key,
       min = min,
       max = max,
       step = step,
@@ -109,7 +118,14 @@ local function sliderRow(labelText, formatValue, min, max, step, get, getPreview
         render()
       end,
       onDragEnd = function(value)
-        local target = tonumber(value) or get()
+        -- onDragEnd's own `value` arg unreliably reports the pre-drag value,
+        -- not where the drag actually ended (confirmed empirically - onChange
+        -- during the drag gets the correct live value every time, onDragEnd's
+        -- own argument does not) - getPreview() holds the last-known-good
+        -- value onChange already captured, so prefer that and only fall back
+        -- to onDragEnd's argument for the rare case there was no onChange
+        -- (e.g. a tap without any drag).
+        local target = getPreview() or tonumber(value) or get()
         setPreview(nil)
         if target == get() then
           render()
@@ -132,9 +148,10 @@ local function sliderRow(labelText, formatValue, min, max, step, get, getPreview
   }
 end
 
-local function toggleRow(labelText, checked, buildCmd, onSuccess)
-  return ui.row({ gap = 8, align = "center" }, {
+local function toggleRow(key, labelText, checked, buildCmd, onSuccess)
+  return ui.row({ key = key, gap = 8, align = "center" }, {
     ui.toggle({
+      key = key .. "-toggle",
       checked = checked,
       enabled = not busy,
       onChange = function(value)
@@ -164,13 +181,13 @@ function render()
   local rows = {}
 
   if errorText ~= nil then
-    table.insert(rows, ui.label({ text = errorText, color = "error" }))
+    table.insert(rows, ui.label({ key = "error", text = errorText, color = "error" }))
   end
 
   local loaded = #dpiStages > 0 or #pollingRates > 0 or #ledEffects > 0
 
   if not loaded and errorText == nil then
-    table.insert(rows, ui.label({ text = noctalia.tr("ui.loading"), color = "outline" }))
+    table.insert(rows, ui.label({ key = "loading", text = noctalia.tr("ui.loading"), color = "outline" }))
     panel.render(ui.scroll({ flexGrow = 1, gap = 10 }, rows))
     return
   end
@@ -181,6 +198,7 @@ function render()
   -- saving timeout, low-battery threshold) - hidden entirely on a wired one.
   local function tabButton(tab, labelKey)
     return ui.button({
+      key = `tab-{tab}`,
       text = noctalia.tr(labelKey),
       variant = (activeTab == tab) and "primary" or "outline",
       flexGrow = 1,
@@ -194,17 +212,19 @@ function render()
   if wireless then
     table.insert(tabButtons, tabButton("power", "ui.tab-power"))
   end
-  table.insert(rows, ui.row({ gap = 6 }, tabButtons))
+  table.insert(rows, ui.row({ key = "tabs", gap = 6 }, tabButtons))
 
   if activeTab == "sensor" and #dpiStages > 0 then
     local shownIndex = dpiPreviewIndex or dpiActive
     local shownDpi = dpiStages[shownIndex]
     table.insert(rows, ui.label({
+      key = "dpi-label",
       text = `{noctalia.tr("ui.dpi-label")} — {shownDpi}`,
       fontSize = 13,
       color = "on_surface_variant",
     }))
     table.insert(rows, ui.slider({
+      key = "dpi",
       min = 1,
       max = #dpiStages,
       step = 1,
@@ -215,7 +235,10 @@ function render()
         render()
       end,
       onDragEnd = function(value)
-        local target = math.floor(tonumber(value) or dpiActive)
+        -- Prefer the live-drag preview over onDragEnd's own `value` arg - see
+        -- sliderRow()'s onDragEnd for why (empirically unreliable, always
+        -- reports the pre-drag value here too).
+        local target = dpiPreviewIndex or math.floor(tonumber(value) or dpiActive)
         dpiPreviewIndex = nil
         if target == dpiActive then
           render()
@@ -245,11 +268,13 @@ function render()
     local shownPollIndex = pollPreviewIndex or pollingRateIndex()
     local shownHz = pollingRates[shownPollIndex]
     table.insert(rows, ui.label({
+      key = "polling-label",
       text = `{noctalia.tr("ui.polling-label")} — {shownHz} Hz`,
       fontSize = 13,
       color = "on_surface_variant",
     }))
     table.insert(rows, ui.slider({
+      key = "polling",
       min = 1,
       max = #pollingRates,
       step = 1,
@@ -260,7 +285,9 @@ function render()
         render()
       end,
       onDragEnd = function(value)
-        local targetIndex = math.floor(tonumber(value) or pollingRateIndex())
+        -- Prefer the live-drag preview over onDragEnd's own `value` arg - see
+        -- sliderRow()'s onDragEnd for why.
+        local targetIndex = pollPreviewIndex or math.floor(tonumber(value) or pollingRateIndex())
         pollPreviewIndex = nil
         local hz = pollingRates[targetIndex]
         if hz == nil or hz == pollingRate then
@@ -285,6 +312,7 @@ function render()
 
   if activeTab == "sensor" and debounce ~= nil then
     for _, node in ipairs(sliderRow(
+      "debounce",
       noctalia.tr("ui.debounce-label"),
       function(v) return `{math.floor(v)}ms` end,
       debounce.min, debounce.max, 1,
@@ -300,6 +328,7 @@ function render()
 
   if activeTab == "sensor" and angleSnap ~= nil then
     table.insert(rows, toggleRow(
+      "angle-snap",
       noctalia.tr("ui.angle-snap-label"),
       angleSnap,
       function(v) return `pulsar-mouse --angle-snap {v and "on" or "off"}` end,
@@ -309,6 +338,7 @@ function render()
 
   if activeTab == "sensor" and rippleControl ~= nil then
     table.insert(rows, toggleRow(
+      "ripple",
       noctalia.tr("ui.ripple-label"),
       rippleControl,
       function(v) return `pulsar-mouse --ripple {v and "on" or "off"}` end,
@@ -318,6 +348,7 @@ function render()
 
   if activeTab == "sensor" and motionSync ~= nil then
     table.insert(rows, toggleRow(
+      "motion-sync",
       noctalia.tr("ui.motion-sync-label"),
       motionSync,
       function(v) return `pulsar-mouse --motion-sync {v and "on" or "off"}` end,
@@ -327,6 +358,7 @@ function render()
 
   if activeTab == "sensor" and lod ~= nil then
     for _, node in ipairs(sliderRow(
+      "lod",
       noctalia.tr("ui.lod-label"),
       function(v) return `{string.format("%.1f", v)}mm` end,
       lod.min, lod.max, lod.step,
@@ -342,6 +374,7 @@ function render()
 
   if activeTab == "power" and powerSaving ~= nil then
     for _, node in ipairs(sliderRow(
+      "power-saving",
       noctalia.tr("ui.power-saving-label"),
       function(v) return string.format("%d:%02d", math.floor(v / 60), math.floor(v) % 60) end,
       powerSaving.min, powerSaving.max, 30,
@@ -357,6 +390,7 @@ function render()
 
   if activeTab == "power" and lowPower ~= nil then
     for _, node in ipairs(sliderRow(
+      "low-power",
       noctalia.tr("ui.low-power-label"),
       function(v) return `{math.floor(v)}%` end,
       lowPower.min, lowPower.max, 5,
@@ -371,7 +405,7 @@ function render()
   end
 
   if activeTab == "lighting" and #ledEffects > 0 then
-    table.insert(rows, ui.label({ text = noctalia.tr("ui.led-label"), fontSize = 13, color = "on_surface_variant" }))
+    table.insert(rows, ui.label({ key = "led-label", text = noctalia.tr("ui.led-label"), fontSize = 13, color = "on_surface_variant" }))
 
     local effectOptions = {}
     local effectSelectedIndex = 0
@@ -391,11 +425,13 @@ function render()
 
     local shownBrightness = brightnessPreview or brightnessPct
     table.insert(rows, ui.label({
+      key = "brightness-label",
       text = `{noctalia.tr("ui.brightness-label")} — {shownBrightness}%`,
       fontSize = 13,
       color = "on_surface_variant",
     }))
     table.insert(rows, ui.slider({
+      key = "brightness",
       min = 0,
       max = 100,
       step = 1,
@@ -406,7 +442,9 @@ function render()
         render()
       end,
       onDragEnd = function(value)
-        local target = math.floor(tonumber(value) or brightnessPct)
+        -- Prefer the live-drag preview over onDragEnd's own `value` arg - see
+        -- sliderRow()'s onDragEnd for why.
+        local target = brightnessPreview or math.floor(tonumber(value) or brightnessPct)
         brightnessPreview = nil
         if target == brightnessPct then
           render()
@@ -434,11 +472,13 @@ function render()
     if breathSpeedRelevant() then
       local shownSpeed = breathSpeedPreview or breathSpeed
       table.insert(rows, ui.label({
+        key = "speed-label",
         text = `{noctalia.tr("ui.speed-label")} — {shownSpeed}`,
         fontSize = 13,
         color = "on_surface_variant",
       }))
       table.insert(rows, ui.slider({
+        key = "speed",
         min = 0,
         max = 100,
         step = 1,
@@ -449,7 +489,9 @@ function render()
           render()
         end,
         onDragEnd = function(value)
-          local target = math.floor(tonumber(value) or breathSpeed)
+          -- Prefer the live-drag preview over onDragEnd's own `value` arg -
+          -- see sliderRow()'s onDragEnd for why.
+          local target = breathSpeedPreview or math.floor(tonumber(value) or breathSpeed)
           breathSpeedPreview = nil
           if target == breathSpeed then
             render()
