@@ -287,6 +287,7 @@ class PulsarMouseApp(Adw.Application):
         )
         self.connect('activate', self._on_activate)
         self._sni = None
+        self._win = None
         self._poll_items = {}
         self._tray_refresh_busy = False
         self._device = None  # PulsarDevice instance
@@ -308,6 +309,7 @@ class PulsarMouseApp(Adw.Application):
         device = self._find_or_create_device()
         win = MainWindow(application=app, device=device)
         win.present()
+        self._win = win
         if device:
             self._build_tray(win, device)
         self.hold()
@@ -412,10 +414,12 @@ class PulsarMouseApp(Adw.Application):
         self._read_initial_state()
         threading.Thread(target=self._hidraw_listener, daemon=True).start()
         # Battery percent drains slowly, but power_connected (charging)
-        # can flip the moment a cable is plugged/unplugged - 30s keeps
-        # that (and the tray icon it drives) feeling responsive without
-        # polling as often as the event-driven hidraw DPI listener.
-        GLib.timeout_add_seconds(30, self._refresh_battery)
+        # can flip the moment a cable is plugged/unplugged - 60s keeps
+        # that (and the tray icon + Home page it drives, see
+        # _set_battery_label()) reasonably responsive without polling so
+        # often it risks waking the mouse from its own power-saving sleep
+        # more than necessary.
+        GLib.timeout_add_seconds(60, self._refresh_battery)
         return False
 
     def _read_initial_state(self):
@@ -489,6 +493,11 @@ class PulsarMouseApp(Adw.Application):
             # level in the tray when nothing's actively happening with it.
             self._sni.set_icon(_battery_icon_name(pct, True) if charging else 'input-mouse')
         self._update_tray_tooltip()
+        # Home page has no polling timer of its own - it shares this read
+        # rather than doubling up on USB traffic (and possibly waking the
+        # mouse from its own power-saving sleep twice as often).
+        if self._win is not None:
+            self._win._set_home_battery(pwr)
 
     def _set_conn_quality_label(self, pct):
         self._conn_text = f'Signal: {pct}% ({_connection_quality_label(pct)})'
@@ -1376,24 +1385,23 @@ X-GNOME-Autostart-enabled=true
     # ── Home tab live updates ───────────────────────────────────────────
 
     def _start_home_updates(self):
-        """Independent of the tray's own polling in PulsarMouseApp (see
-        _read_initial_state()/_hidraw_listener() there) - deliberately not
-        shared, so this window stays self-contained regardless of whether
-        a tray exists. hidraw supports multiple concurrent readers, so a
-        second listener on the same device is safe, just a bit redundant.
+        """The hidraw listener below is independent of the tray's own
+        (PulsarMouseApp._hidraw_listener) - deliberately not shared, so
+        this window stays self-contained regardless of whether a tray
+        exists. hidraw supports multiple concurrent readers, so a second
+        listener on the same device is safe, just a bit redundant.
+
+        The periodic *battery* poll is NOT duplicated the same way - it's
+        driven entirely by PulsarMouseApp._set_battery_label() (see its
+        call into _set_home_battery()), since the tray is always built
+        alongside this window (see _on_activate()) and there's no reason
+        to read the same USB endpoint twice on the same timer.
         """
         device = self._device
         if device is None:
             return
         self._refresh_home_battery()
         threading.Thread(target=self._home_hidraw_listener, daemon=True).start()
-        # See _start_tray_updates()'s matching comment - 30s so charging
-        # state (icon + "(charging)" label) doesn't lag a plug/unplug.
-        GLib.timeout_add_seconds(30, self._periodic_home_battery_refresh)
-
-    def _periodic_home_battery_refresh(self):
-        self._refresh_home_battery()
-        return True
 
     def _refresh_home_battery(self):
         device = self._device
