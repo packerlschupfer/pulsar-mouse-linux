@@ -89,7 +89,7 @@ gnome-extensions enable appindicatorsupport@rgcjonas.gmail.com
 ```
 Then restart GNOME Shell (log out/in, or Alt+F2 → r → Enter on X11).
 
-KDE Plasma supports the system tray natively — no extra extensions needed.
+KDE Plasma & Hyprland support the system tray natively — no extra extensions needed.
 
 ## Installation
 
@@ -260,10 +260,8 @@ External driver packages can also register via entry points without modifying th
 ## OS Tweaks for Gaming
 
 The GUI has a "Desktop Mouse Settings" section on the Performance page that
-auto-detects which of GNOME, Hyprland, or KDE Plasma is running and shows
-the matching controls (only one shows up, whichever matches your session) -
-but you can also apply these from the command line or set them at the OS
-level directly.
+auto-detects whether  GNOME, Hyprland, or KDE Plasma is running and shows
+the matching controls.
 
 ### Disable mouse acceleration (recommended for FPS gaming)
 
