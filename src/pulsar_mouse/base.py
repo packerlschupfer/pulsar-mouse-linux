@@ -69,6 +69,23 @@ class PulsarDevice(ABC):
     def close(self) -> None:
         """Release the USB interface and re-attach the kernel driver."""
 
+    # ── Device information ──────────────────────────────────────────────────
+
+    def get_firmware_version(self) -> str:
+        """Return firmware version string from USB bcdDevice descriptor."""
+        return 'unknown'
+
+    # ── Active profile ───────────────────────────────────────────────────────
+    # Which profile the mouse actually uses during normal operation - distinct
+    # from get/set_dpi_stages() etc. above, which read/write a given profile's
+    # *stored* settings regardless of which one is currently active.
+
+    def get_active_profile(self) -> int:
+        raise NotImplementedError
+
+    def set_active_profile(self, profile: int) -> None:
+        raise NotImplementedError
+
     # ── Global settings ───────────────────────────────────────────────────
 
     @abstractmethod
@@ -168,3 +185,112 @@ class PulsarDevice(ABC):
     def parse_hidraw_event(self, data: bytes) -> Optional[dict]:
         """Parse a hidraw event. Return {'dpi': int, 'stage': int} or None."""
         return None
+
+    # ── Profile import / export ─────────────────────────────────────────────
+
+    def export_profile(self, profile: int) -> dict:
+        """Read all per-profile settings and return as a serialisable dict."""
+        from pulsar_mouse.hid import describe_button
+        caps = self.capabilities
+        data = {
+            'format': 'pulsar-mouse-profile',
+            'version': 1,
+            'device': caps.name,
+            'profile': profile,
+        }
+        try:
+            info = self.get_dpi_stages(profile)
+            data['dpi'] = {
+                'active': info['active'],
+                'stages': [dx for dx, _dy in info['stages'][:info['count']]],
+            }
+        except Exception:
+            pass
+        if caps.has_stage_colors:
+            try:
+                colors = []
+                stages = data.get('dpi', {}).get('stages')
+                n = len(stages) if stages else caps.max_dpi_stages
+                for i in range(1, n + 1):
+                    colors.append(list(self.get_stage_color(i, profile)))
+                data['stage_colors'] = colors
+            except Exception:
+                pass
+        if caps.lod_values:
+            try:
+                data['lod_mm'] = self.get_lod(profile)
+            except Exception:
+                pass
+        if caps.has_led:
+            try:
+                data['brightness'] = self.get_brightness(profile)
+            except Exception:
+                pass
+            try:
+                data['led_effect'] = self.get_led_effect(profile)
+            except Exception:
+                pass
+            if caps.has_breath_speed:
+                try:
+                    data['breath_speed'] = self.get_breath_speed(profile)
+                except Exception:
+                    pass
+        try:
+            buttons = {}
+            for name, bid in caps.buttons.items():
+                t, a1, a2 = self.get_button(bid, profile)
+                buttons[name] = describe_button(t, a1, a2)
+            data['buttons'] = buttons
+        except Exception:
+            pass
+        return data
+
+    def import_profile(self, profile: int, data: dict) -> list[str]:
+        """Apply profile settings from a dict. Returns list of warnings."""
+        from pulsar_mouse.hid import parse_button_function
+        caps = self.capabilities
+        warnings = []
+        if 'dpi' in data:
+            try:
+                dpi = data['dpi']
+                self.set_dpi_stages(dpi['stages'], dpi.get('active', 1), profile)
+            except Exception as e:
+                warnings.append(f'DPI: {e}')
+        if 'stage_colors' in data and caps.has_stage_colors:
+            for i, rgb in enumerate(data['stage_colors'], 1):
+                try:
+                    self.set_stage_color(i, rgb[0], rgb[1], rgb[2], profile)
+                except Exception as e:
+                    warnings.append(f'Stage {i} color: {e}')
+        if 'lod_mm' in data and caps.lod_values:
+            try:
+                self.set_lod(data['lod_mm'], profile)
+            except Exception as e:
+                warnings.append(f'LOD: {e}')
+        if 'brightness' in data and caps.has_led:
+            try:
+                self.set_brightness(data['brightness'], profile)
+            except Exception as e:
+                warnings.append(f'Brightness: {e}')
+        if 'led_effect' in data and caps.has_led:
+            try:
+                self.set_led_effect(data['led_effect'], profile)
+            except Exception as e:
+                warnings.append(f'LED effect: {e}')
+        if 'breath_speed' in data and caps.has_led and caps.has_breath_speed:
+            try:
+                self.set_breath_speed(data['breath_speed'], profile)
+            except Exception as e:
+                warnings.append(f'Breath speed: {e}')
+        if 'buttons' in data:
+            for name, func_str in data['buttons'].items():
+                bid = caps.buttons.get(name)
+                if bid is None:
+                    warnings.append(f'Button "{name}" not found on this device')
+                    continue
+                try:
+                    t, a1, a2 = parse_button_function(func_str)
+                    self.set_button(bid, t, a1, a2, profile)
+                except Exception as e:
+                    warnings.append(f'Button {name}: {e}')
+        return warnings

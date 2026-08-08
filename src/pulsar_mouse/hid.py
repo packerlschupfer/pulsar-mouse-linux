@@ -8,6 +8,7 @@ and shared across all drivers.
 
 # ── Button function types ────────────────────────────────────────────────────
 
+BTN_TYPE_DISABLED  = 0x00   # button disabled (no action)
 BTN_TYPE_MOUSE     = 0x01   # standard mouse click
 BTN_TYPE_KEYBOARD  = 0x02   # keyboard shortcut
 BTN_TYPE_SCROLL    = 0x03   # scroll wheel
@@ -86,6 +87,8 @@ HID_KEYS = {**_alpha, **_digits, **_special}
 
 def describe_button(btn_type: int, a1: int, a2: int) -> str:
     """Human-readable description of a button binding."""
+    if btn_type == BTN_TYPE_DISABLED:
+        return 'disabled'
     if btn_type == BTN_TYPE_MOUSE:
         return MOUSE_ACTION_NAMES.get(a1, f'mouse(0x{a1:02x})')
     if btn_type == BTN_TYPE_KEYBOARD:
@@ -122,9 +125,12 @@ def parse_button_function(spec: str) -> tuple[int, int, int]:
       xclick
       play / next / prev / stop / mute / vol+ / vol- / mediaplayer
       ctrl+c / shift+f5 / alt+tab / ...  (keyboard shortcut)
+      disabled
     """
     s = spec.strip().lower()
 
+    if s == 'disabled':
+        return (BTN_TYPE_DISABLED, 0x00, 0x00)
     if s in MOUSE_ACTIONS:
         return (BTN_TYPE_MOUSE, MOUSE_ACTIONS[s], 0x00)
     if s in SCROLL_ACTIONS:

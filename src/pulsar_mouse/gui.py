@@ -14,6 +14,7 @@ The system-tray icon requires the GNOME AppIndicator extension:
 
 import sys
 import os
+import json
 import struct
 import threading
 import time
@@ -437,32 +438,6 @@ class PulsarMouseApp(Adw.Application):
             self._sni.set_label('', '')
         return False
 
-    _AUTOSTART_PATH = os.path.expanduser('~/.config/autostart/pulsar-mouse.desktop')
-    _AUTOSTART_CONTENT = """\
-[Desktop Entry]
-Name=Pulsar Mouse
-Comment=Pulsar Mouse system-tray applet
-Exec=pulsar-mouse-gui
-Icon=input-mouse
-Type=Application
-X-GNOME-Autostart-enabled=true
-"""
-
-    def _autostart_enabled(self):
-        return os.path.exists(self._AUTOSTART_PATH)
-
-    def _set_autostart(self, enabled):
-        if enabled:
-            os.makedirs(os.path.dirname(self._AUTOSTART_PATH), exist_ok=True)
-            with open(self._AUTOSTART_PATH, 'w') as f:
-                f.write(self._AUTOSTART_CONTENT)
-        else:
-            os.remove(self._AUTOSTART_PATH)
-
-    def _on_autostart_row_toggled(self, row, _pspec):
-        if row.get_active() != self._autostart_enabled():
-            self._set_autostart(row.get_active())
-
     def _set_dpi(self, dpi_val: int):
         device = self._device
 
@@ -569,7 +544,7 @@ class MainWindow(Adw.ApplicationWindow):
             nav_list.append(row)
         nav_list.connect('row-selected', self._on_nav_row_selected)
         sidebar_toolbar.set_content(nav_list)
-        sidebar_page = Adw.NavigationPage.new(sidebar_toolbar, caps.name)
+        sidebar_page = Adw.NavigationPage.new(sidebar_toolbar, 'Pulsar Mouse')
         split_view.set_sidebar(sidebar_page)
 
         # ── Content: header bar (Apply/Reload/profile - shared across all
@@ -579,18 +554,6 @@ class MainWindow(Adw.ApplicationWindow):
         content_toolbar = Adw.ToolbarView()
         content_header = Adw.HeaderBar()
 
-        if caps.num_profiles > 1:
-            profile_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-            profile_box.append(Gtk.Label(label='Profile:'))
-            self._profile_combo = Gtk.DropDown.new_from_strings(
-                [f'Profile {i}' for i in range(1, caps.num_profiles + 1)]
-            )
-            self._profile_combo.connect('notify::selected', self._on_profile_changed)
-            profile_box.append(self._profile_combo)
-            content_header.set_title_widget(profile_box)
-        else:
-            self._profile_combo = None
-
         reload_btn = Gtk.Button(icon_name='view-refresh-symbolic')
         reload_btn.set_tooltip_text('Reload from mouse')
         reload_btn.connect('clicked', lambda _: self._reload())
@@ -599,7 +562,22 @@ class MainWindow(Adw.ApplicationWindow):
         apply_btn = Gtk.Button(label='Apply')
         apply_btn.add_css_class('suggested-action')
         apply_btn.connect('clicked', lambda _: self._apply())
+        # Packed before profile_box below: pack_end's call order runs
+        # outward from the edge, so whichever widget is packed *first*
+        # ends up rightmost - this has to go first for Apply to stay the
+        # outermost element with the profile dropdown to its left.
         content_header.pack_end(apply_btn)
+
+        if caps.num_profiles > 1:
+            profile_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            self._profile_combo = Gtk.DropDown.new_from_strings(
+                [f'Profile {i}' for i in range(1, caps.num_profiles + 1)]
+            )
+            self._profile_combo.connect('notify::selected', self._on_profile_changed)
+            profile_box.append(self._profile_combo)
+            content_header.pack_end(profile_box)
+        else:
+            self._profile_combo = None
 
         content_toolbar.add_top_bar(content_header)
 
@@ -885,29 +863,73 @@ class MainWindow(Adw.ApplicationWindow):
         groups.append(btn_group)
         return self._wrap_page(*groups)
 
+    _AUTOSTART_PATH = os.path.expanduser('~/.config/autostart/pulsar-mouse.desktop')
+    _AUTOSTART_CONTENT = """\
+[Desktop Entry]
+Name=Pulsar Mouse
+Comment=Pulsar Mouse system-tray applet
+Exec=pulsar-mouse-gui
+Icon=input-mouse
+Type=Application
+X-GNOME-Autostart-enabled=true
+"""
+
+    def _autostart_enabled(self):
+        return os.path.exists(self._AUTOSTART_PATH)
+
+    def _set_autostart(self, enabled):
+        if enabled:
+            os.makedirs(os.path.dirname(self._AUTOSTART_PATH), exist_ok=True)
+            with open(self._AUTOSTART_PATH, 'w') as f:
+                f.write(self._AUTOSTART_CONTENT)
+        else:
+            os.remove(self._AUTOSTART_PATH)
+
+    def _on_autostart_row_toggled(self, row, _pspec):
+        if row.get_active() != self._autostart_enabled():
+            self._set_autostart(row.get_active())
+
     def _build_tools_page(self):
         caps = self._caps
-        actions_group = Adw.PreferencesGroup()
 
+        startup_group = Adw.PreferencesGroup()
         autostart_row = Adw.SwitchRow()
         autostart_row.set_title('Start on Login')
         autostart_row.set_active(self._autostart_enabled())
         autostart_row.connect('notify::active', self._on_autostart_row_toggled)
-        actions_group.add(autostart_row)
+        startup_group.add(autostart_row)
+
+        diagnostics_group = Adw.PreferencesGroup()
+        diagnostics_group.set_title('Diagnostics')
 
         test_row = Adw.ButtonRow()
         test_row.set_title('Test Input')
         test_row.connect('activated', self._on_test_clicked)
-        actions_group.add(test_row)
+        diagnostics_group.add(test_row)
 
         if caps.has_reset:
             reset_row = Adw.ButtonRow()
             reset_row.set_title('Reset to Factory Defaults')
             reset_row.add_css_class('destructive-action')
             reset_row.connect('activated', self._on_reset_clicked)
-            actions_group.add(reset_row)
+            diagnostics_group.add(reset_row)
 
-        return self._wrap_page(actions_group)
+        io_group = Adw.PreferencesGroup()
+        io_group.set_title('Profile Import / Export')
+        io_group.set_description(
+            'Save the current profile\'s settings to a JSON file, or load them from one')
+
+        export_row = Adw.ButtonRow()
+        export_row.set_title('Export Profile to JSON')
+        export_row.connect('activated', self._on_export_clicked)
+        io_group.add(export_row)
+
+        import_row = Adw.ButtonRow()
+        import_row.set_title('Import Profile from JSON')
+        import_row.connect('activated', self._on_import_clicked)
+        io_group.add(import_row)
+
+        return self._wrap_page(startup_group, diagnostics_group, io_group)
 
     def _build_power_page(self):
         device = self._device
@@ -1113,6 +1135,81 @@ class MainWindow(Adw.ApplicationWindow):
         if response == 'reset':
             self._run_bg(self._do_reset)
 
+    def _on_export_clicked(self, _row):
+        dialog = Gtk.FileDialog()
+        dialog.set_title('Export Profile')
+        dialog.set_initial_name(f'profile-{self._profile}.json')
+        json_filter = Gtk.FileFilter()
+        json_filter.set_name('JSON files')
+        json_filter.add_pattern('*.json')
+        filters = Gio.ListStore.new(Gtk.FileFilter)
+        filters.append(json_filter)
+        dialog.set_filters(filters)
+        dialog.save(self, None, self._on_export_finish)
+
+    def _on_export_finish(self, dialog, result):
+        try:
+            gfile = dialog.save_finish(result)
+        except GLib.Error:
+            return
+        path = gfile.get_path()
+        profile = self._profile
+
+        def _do():
+            if not self._open_dev():
+                return
+            try:
+                data = self._device.export_profile(profile)
+            finally:
+                self._close_dev()
+            with open(path, 'w') as f:
+                json.dump(data, f, indent=2)
+            GLib.idle_add(self._show_toast, f'Profile {profile} exported')
+        self._run_bg(_do)
+
+    def _on_import_clicked(self, _row):
+        dialog = Gtk.FileDialog()
+        dialog.set_title('Import Profile')
+        json_filter = Gtk.FileFilter()
+        json_filter.set_name('JSON files')
+        json_filter.add_pattern('*.json')
+        filters = Gio.ListStore.new(Gtk.FileFilter)
+        filters.append(json_filter)
+        dialog.set_filters(filters)
+        dialog.open(self, None, self._on_import_finish)
+
+    def _on_import_finish(self, dialog, result):
+        try:
+            gfile = dialog.open_finish(result)
+        except GLib.Error:
+            return
+        path = gfile.get_path()
+        profile = self._profile
+
+        def _do():
+            try:
+                with open(path) as f:
+                    data = json.load(f)
+            except Exception as e:
+                GLib.idle_add(self._show_error, f'Cannot read file: {e}')
+                return
+            if data.get('format') != 'pulsar-mouse-profile':
+                GLib.idle_add(self._show_error, 'Not a valid profile file')
+                return
+            if not self._open_dev():
+                return
+            try:
+                warnings = self._device.import_profile(profile, data)
+            finally:
+                self._close_dev()
+            if warnings:
+                msg = '\n'.join(warnings)
+                GLib.idle_add(self._show_error, f'Imported with warnings:\n{msg}')
+            else:
+                GLib.idle_add(self._show_toast, f'Profile {profile} imported')
+            GLib.idle_add(self._reload_profile)
+        self._run_bg(_do)
+
     # ── Thread management ────────────────────────────────────────────────
 
     def _run_bg(self, fn):
@@ -1225,6 +1322,20 @@ class MainWindow(Adw.ApplicationWindow):
     def _do_reload_profile(self):
         if not self._open_dev():
             return
+        device = self._device
+        # Selecting a profile in the dropdown switches the mouse's live
+        # active profile, not just which profile's settings this window is
+        # showing - matches the behaviour of a physical profile button.
+        # set_active_profile() is a concrete base-class method (defaults to
+        # NotImplementedError) rather than one only some drivers define, so
+        # hasattr() can't tell support apart here - same reasoning as
+        # _read_field()'s NotImplementedError handling below.
+        try:
+            device.set_active_profile(self._profile)
+        except NotImplementedError:
+            pass
+        except Exception as e:
+            GLib.idle_add(self._show_error, f'Could not switch active profile: {e}')
         self._do_reload_profile_inner()
         self._close_dev()
 

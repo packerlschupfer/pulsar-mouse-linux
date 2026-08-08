@@ -6,6 +6,7 @@ Adapts dynamically to the connected device's capabilities.
 """
 
 import sys
+import json
 import argparse
 
 from pulsar_mouse import find_device, __version__
@@ -28,6 +29,16 @@ def _parse_bool(s, name):
 
 def print_global(device: PulsarDevice):
     caps = device.capabilities
+    try:
+        fw = device.get_firmware_version()
+        if fw != 'unknown':
+            print(f"  Firmware:         {fw}")
+    except Exception:
+        pass
+    try:
+        print(f"  Active profile:   {device.get_active_profile()}")
+    except Exception:
+        pass
     if hasattr(device, 'get_power'):
         try:
             pwr = device.get_power()
@@ -149,6 +160,8 @@ Examples:
 
   %(prog)s --profile 1 --button thumb1 dpi+
   %(prog)s --profile 1 --button thumb1 ctrl+c
+  %(prog)s --profile 1 --export profile1.json
+  %(prog)s --profile 1 --import profile1.json
   %(prog)s --profile 1 --reset
 """)
 
@@ -194,6 +207,10 @@ Examples:
                     type=int, help='Set DPI stage LED color (RGB 0-255)')
     pp.add_argument('--button', nargs=2, metavar=('BTN', 'FUNC'),
                     help='Remap a button')
+    pp.add_argument('--export', metavar='FILE',
+                    help='Export profile settings to JSON file')
+    pp.add_argument('--import', metavar='FILE', dest='import_file',
+                    help='Import profile settings from JSON file')
     pp.add_argument('--reset', action='store_true',
                     help='Reset profile to factory defaults')
 
@@ -219,12 +236,14 @@ def main():
         args.lod, args.dpi, args.active_stage,
         args.brightness, args.led, args.breath_speed,
         args.stage_color, args.button,
+        args.import_file,
     ])
 
     profile_required = args.reset or any(x is not None for x in [
         args.lod, args.dpi, args.active_stage,
         args.brightness, args.led, args.breath_speed,
         args.stage_color, args.button,
+        args.export, args.import_file,
     ])
 
     if profile_required and args.profile is None:
@@ -240,8 +259,29 @@ def main():
     if args.profile is not None and not 1 <= args.profile <= caps.num_profiles:
         sys.exit(f"Error: --profile must be 1–{caps.num_profiles}")
 
+    if args.export:
+        device.open()
+        try:
+            data = device.export_profile(args.profile)
+            with open(args.export, 'w') as f:
+                json.dump(data, f, indent=2)
+            print(f"Profile {args.profile} exported to {args.export}")
+        finally:
+            device.close()
+        return
+
     device.open()
     try:
+        if args.import_file:
+            with open(args.import_file) as f:
+                data = json.load(f)
+            if data.get('format') != 'pulsar-mouse-profile':
+                sys.exit("Error: not a valid pulsar-mouse profile file")
+            warnings = device.import_profile(args.profile, data)
+            print(f"Profile {args.profile} imported from {args.import_file}")
+            for w in warnings:
+                print(f"  Warning: {w}")
+
         if write_ops:
             # ── Global writes ─────────────────────────────────────────
             if args.poll is not None:

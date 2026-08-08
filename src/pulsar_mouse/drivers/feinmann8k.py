@@ -49,8 +49,9 @@ Packet format (64 bytes, sent via SET_REPORT, wValue=0x0300 Feature/ID0):
   [2]     register (bit7=0: write, bit7=1: read)
   [3]     sub-register
   [4-5]   always 0x00
-  [6]     profile (only ever observed as 0x01 in captures - device may
-          only expose a single onboard profile)
+  [6]     profile (1-6 - only 0x01 was seen in the original capture, but
+          live probing confirmed 6 independently addressable onboard
+          slots; 7+ time out with no reply)
   [7-61]  payload
   [62-63] checksum: little-endian uint16 of sum(bytes[0:62])
 
@@ -125,11 +126,16 @@ class PulsarFeinmann8K(PulsarDevice):
     """Driver for the Pulsar Feinmann 8K wireless dongle."""
 
     capabilities = DeviceCapabilities(
-        name='Pulsar Feinmann 8K Dongle',
+        name='Feinmann FO1',
         vid_pid_pairs=[(0x3710, 0x5404)],
         interface_num=3,          # commands (control transfers)
         report_size=64,
-        num_profiles=1,           # only ever saw profile byte == 0x01
+        # Live-verified 2026-08-08: profiles 1-6 all ack with a correctly
+        # echoed profile byte and stable, distinct per-slot data; 7+ time
+        # out with no reply. The earlier num_profiles=1 was wrong - it was
+        # inferred from the capture only ever showing writes to profile 1,
+        # not from an actual test of other profile bytes against hardware.
+        num_profiles=6,
         max_dpi_stages=6,
         dpi_min=100,
         dpi_max=26000,
@@ -199,6 +205,45 @@ class PulsarFeinmann8K(PulsarDevice):
         usb.util.dispose_resources(self._dev)
         self._dev = None
 
+    # ── Device information ────────────────────────────────────────────────
+
+    def get_firmware_version(self) -> str:
+        if self._dev is None:
+            return 'unknown'
+        try:
+            bcd = int(self._dev.bcdDevice)
+        except (TypeError, ValueError, AttributeError):
+            return 'unknown'
+        major = (bcd >> 12) & 0xF
+        minor = (bcd >> 8) & 0xF
+        patch = (bcd >> 4) & 0xF
+        build = bcd & 0xF
+        if patch or build:
+            return f'V{major}.{minor}.{patch}{build}'
+        return f'V{major}.{minor}'
+
+    # ── Active profile ───────────────────────────────────────────────────────
+    # cat=0x02/reg=0x06/sub=0x01 - identical command to x2a.py's active-
+    # profile register (this driver's docstring already notes several other
+    # commands, e.g. LED and button remap, are byte-identical to x2a.py's).
+    # Live-verified 2026-08-08: read with profile=0x00 or 0x01 (both give
+    # the same reply) returns the true active profile at byte[6] (byte[7]
+    # is 0 on this device, unlike some X2A units where the value can land
+    # there instead - x2a.py's `rsp[7] if rsp[7] else rsp[6]` fallback
+    # covers both). Write sends the target profile number directly as the
+    # profile byte, no separate payload - confirmed via a live switch-then-
+    # restore round trip (1 -> 2 -> back to 1).
+
+    def get_active_profile(self) -> int:
+        rsp = self._query_ctrl(0x02, 0x06, 0x01, profile=0x00)
+        return rsp[7] if rsp[7] else rsp[6]
+
+    def set_active_profile(self, profile: int) -> None:
+        if not 1 <= profile <= self.capabilities.num_profiles:
+            raise ValueError(
+                f"Profile must be 1-{self.capabilities.num_profiles}")
+        self._cmd(0x02, 0x06, 0x01, profile)
+
     # ── Low-level protocol helpers ──────────────────────────────────────────
 
     @staticmethod
@@ -221,7 +266,8 @@ class PulsarFeinmann8K(PulsarDevice):
 
     def _set_report(self, data: bytes) -> None:
         self._dev.ctrl_transfer(0x21, 0x09, self._WVALUE,
-                                 self.capabilities.interface_num, data)
+                                 self.capabilities.interface_num, data,
+                                 timeout=1000)
 
     def _poll_ack(self) -> bytes:
         """GET_REPORT poll that follows every SET_REPORT.
@@ -239,7 +285,8 @@ class PulsarFeinmann8K(PulsarDevice):
         """
         return bytes(self._dev.ctrl_transfer(
             0xA1, 0x01, self._WVALUE,
-            self.capabilities.interface_num, self.capabilities.report_size))
+            self.capabilities.interface_num, self.capabilities.report_size,
+            timeout=1000))
 
     def _query_ctrl(self, cat, reg, sub, profile=0x01, payload=(),
                      initial_delay=0.05, poll_interval=0.02,
@@ -461,7 +508,14 @@ class PulsarFeinmann8K(PulsarDevice):
         # get_dpi_stages() calls per-stage above. The earlier cat=0x04/
         # reg=0x01/sub=0x06 payload=[stage,0x01,stage] guess (inferred from
         # only 5 ambiguous samples) was wrong; live-verified fixed.
-        self._cmd(0x05, 0x01, 0x02, 0x01, [stage])
+        #
+        # `profile` was hardcoded to 0x01 here until 2026-08-08 (from when
+        # num_profiles=1 was assumed) - every write silently landed on
+        # profile 1 regardless of which profile the caller asked for. Now
+        # that profiles 1-6 are confirmed live and independently
+        # addressable (see capabilities.num_profiles above), it has to be
+        # threaded through like every other per-profile setter here.
+        self._cmd(0x05, 0x01, 0x02, profile, [stage])
 
     def get_active_dpi_stage(self, profile: int) -> int:
         # cat=0x05/reg=0x81(=0x01|0x80)/sub=0x02, no stage in the payload -
@@ -495,7 +549,7 @@ class PulsarFeinmann8K(PulsarDevice):
         # through this method for now.
         if mm not in self.capabilities.lod_values:
             raise ValueError(f"LOD must be one of {self.capabilities.lod_values}")
-        self._cmd(0x07, 0x02, 0x03, 0x01, [0x02, mm * 10])
+        self._cmd(0x07, 0x02, 0x03, profile, [0x02, mm * 10])
 
     # ── Per-profile: LED ─────────────────────────────────────────────────────
 
@@ -507,7 +561,7 @@ class PulsarFeinmann8K(PulsarDevice):
         # produced cat=0x03/reg=0x03/sub=0x03, payload=[0x01, value] every
         # time - the old cat=0x07/reg=0x02/sub=0x03 payload=[0x02, value]
         # guess was wrong in every field. Live-verified fixed.
-        self._cmd(0x03, 0x03, 0x03, 0x01, [0x01, value])
+        self._cmd(0x03, 0x03, 0x03, profile, [0x01, value])
 
     def set_led_effect(self, effect: str, profile: int) -> None:
         # Captured 2026-08-07: cat=0x03/reg=0x04/sub=0x0f, payload=[0x01,
@@ -516,7 +570,7 @@ class PulsarFeinmann8K(PulsarDevice):
         val = LED_NAME_TO_VAL.get(effect)
         if val is None:
             raise ValueError(f"Effect must be one of {list(LED_NAME_TO_VAL)}")
-        self._cmd(0x03, 0x04, 0x0F, 0x01, [0x01, val])
+        self._cmd(0x03, 0x04, 0x0F, profile, [0x01, val])
 
     def get_led_effect(self, profile: int) -> str:
         # Same command as the write (cat=0x03/reg=0x84/sub=0x0f), with the
@@ -537,7 +591,7 @@ class PulsarFeinmann8K(PulsarDevice):
         lo, hi = self.capabilities.breath_speed_range
         if not lo <= speed <= hi:
             raise ValueError(f"Breath speed must be {lo}-{hi}")
-        self._cmd(0x03, 0x04, 0x0F, 0x01, [0x01, 0x02, 0x00, 0x00, hi - speed])
+        self._cmd(0x03, 0x04, 0x0F, profile, [0x01, 0x02, 0x00, 0x00, hi - speed])
 
     def get_breath_speed(self, profile: int) -> int:
         # Same reply/marker-byte as get_led_effect (cat=0x03/reg=0x84/
@@ -568,7 +622,7 @@ class PulsarFeinmann8K(PulsarDevice):
                 raise ValueError(f"{name} must be 0-255")
         if not 1 <= stage <= self.capabilities.max_dpi_stages:
             raise ValueError(f"Stage must be 1-{self.capabilities.max_dpi_stages}")
-        self._cmd(0x05, 0x05, 0x05, 0x01, [stage, r, g, b])
+        self._cmd(0x05, 0x05, 0x05, profile, [stage, r, g, b])
 
     def get_stage_color(self, stage: int, profile: int) -> tuple[int, int, int]:
         # Same command as the write (cat=0x05/reg=0x85/sub=0x05,
