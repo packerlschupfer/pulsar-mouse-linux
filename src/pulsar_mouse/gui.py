@@ -289,7 +289,7 @@ class PulsarMouseApp(Adw.Application):
 
     def _build_tray(self, win: 'MainWindow', device: PulsarDevice):
         caps = device.capabilities
-        sni = _StatusNotifierItem('pulsar-mouse', 'input-mouse', caps.name)
+        sni = _StatusNotifierItem('pulsar-mouse', 'pulsar-mouse', caps.name)
         sni.set_on_activate(win.present)
         self._sni = sni
 
@@ -751,7 +751,12 @@ class MainWindow(Adw.ApplicationWindow):
         box.set_margin_start(24)
         box.set_margin_end(24)
 
-        icon = Gtk.Image.new_from_icon_name('input-mouse-symbolic')
+        # 'pulsar-mouse' is the project's own logo (data/pulsar-mouse.svg,
+        # by @Scout339), not a generic GTK theme icon - resolved via the
+        # hicolor icon theme entry the package installs it under (see
+        # flake.nix's postInstall), so this only renders correctly once
+        # actually installed, not when just running from the source tree.
+        icon = Gtk.Image.new_from_icon_name('pulsar-mouse')
         icon.set_pixel_size(96)
         icon.set_halign(Gtk.Align.CENTER)
         box.append(icon)
