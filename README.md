@@ -191,6 +191,7 @@ GTK4 + libadwaita settings window with integrated system tray:
 - **X** hides the window (tray stays alive), **Quit** from tray menu exits
 - "Start on Login" toggle in the tray menu for autostart
 - Input test dialog with mouse diagram and event log
+- Battery level and charging state (on supported wireless mice) shown on the Home page and as a tray icon overlay - polled every 60s, so plugging/unplugging the charging cable can take up to a minute to be reflected. This is deliberate, not a bug: polling more often would mean more frequent USB interface claims and a higher chance of interfering with the mouse's own wireless power-saving sleep.
 - Desktop mouse settings (GNOME acceleration profile, pointer speed)
 
 ## CLI usage
