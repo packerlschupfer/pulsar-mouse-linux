@@ -140,7 +140,18 @@ inputs.pulsar-mouse-linux = {
 
 then either reference `inputs.pulsar-mouse-linux.packages.${system}.default` directly, or pull in `inputs.pulsar-mouse-linux.overlays.default` and use `pkgs.pulsar-mouse-linux` as normal. The package ships the udev rules under `lib/udev/rules.d/` — on NixOS, add it to `services.udev.packages = [ pkgs.pulsar-mouse-linux ];` and they'll be picked up automatically, no manual `udevadm` steps needed.
 
-Also published as a rolling release on [FlakeHub](https://flakehub.com/flake/harveywuk/pulsar-mouse-linux) if you'd rather pin a version than track the branch directly.
+Also published as a rolling release on [FlakeHub](https://flakehub.com/flake/harveywuk/Pulsar-Mouse-Nix) — use this instead of the `github:` reference if you'd rather resolve through FlakeHub's CDN/registry than GitHub directly:
+
+```bash
+nix run "https://flakehub.com/f/harveywuk/Pulsar-Mouse-Nix/*.tar.gz"
+```
+
+```nix
+inputs.pulsar-mouse-linux = {
+  url = "https://flakehub.com/f/harveywuk/Pulsar-Mouse-Nix/*.tar.gz";
+  inputs.nixpkgs.follows = "nixpkgs";
+};
+```
 
 ### udev rules (run without sudo)
 
