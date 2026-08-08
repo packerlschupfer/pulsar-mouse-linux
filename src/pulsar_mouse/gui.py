@@ -269,17 +269,6 @@ class PulsarMouseApp(Adw.Application):
         sep2.property_set(Dbusmenu.MENUITEM_PROP_TYPE, Dbusmenu.CLIENT_TYPES_SEPARATOR)
         root.child_append(sep2)
 
-        item_auto = Dbusmenu.Menuitem.new()
-        item_auto.property_set(Dbusmenu.MENUITEM_PROP_LABEL, 'Start on Login')
-        item_auto.property_set(Dbusmenu.MENUITEM_PROP_TOGGLE_TYPE,
-                               Dbusmenu.MENUITEM_TOGGLE_CHECK)
-        item_auto.property_set_int(Dbusmenu.MENUITEM_PROP_TOGGLE_STATE,
-                                   Dbusmenu.MENUITEM_TOGGLE_STATE_CHECKED
-                                   if self._autostart_enabled() else
-                                   Dbusmenu.MENUITEM_TOGGLE_STATE_UNCHECKED)
-        item_auto.connect('item-activated', lambda _i, _t: self._toggle_autostart(_i))
-        root.child_append(item_auto)
-
         item_quit = Dbusmenu.Menuitem.new()
         item_quit.property_set(Dbusmenu.MENUITEM_PROP_LABEL, 'Quit')
         item_quit.connect('item-activated', lambda _i, _t: self.quit())
@@ -462,17 +451,17 @@ X-GNOME-Autostart-enabled=true
     def _autostart_enabled(self):
         return os.path.exists(self._AUTOSTART_PATH)
 
-    def _toggle_autostart(self, menu_item):
-        if self._autostart_enabled():
-            os.remove(self._AUTOSTART_PATH)
-            menu_item.property_set_int(Dbusmenu.MENUITEM_PROP_TOGGLE_STATE,
-                                       Dbusmenu.MENUITEM_TOGGLE_STATE_UNCHECKED)
-        else:
+    def _set_autostart(self, enabled):
+        if enabled:
             os.makedirs(os.path.dirname(self._AUTOSTART_PATH), exist_ok=True)
             with open(self._AUTOSTART_PATH, 'w') as f:
                 f.write(self._AUTOSTART_CONTENT)
-            menu_item.property_set_int(Dbusmenu.MENUITEM_PROP_TOGGLE_STATE,
-                                       Dbusmenu.MENUITEM_TOGGLE_STATE_CHECKED)
+        else:
+            os.remove(self._AUTOSTART_PATH)
+
+    def _on_autostart_row_toggled(self, row, _pspec):
+        if row.get_active() != self._autostart_enabled():
+            self._set_autostart(row.get_active())
 
     def _set_dpi(self, dpi_val: int):
         device = self._device
@@ -568,7 +557,7 @@ class MainWindow(Adw.ApplicationWindow):
         # nav_list's row index in _on_nav_row_selected() below.
         self._nav_pages = [
             ('home', 'Home', 'go-home-symbolic'),
-            ('performance', 'Performance', 'preferences-system-symbolic'),
+            ('performance', 'Performance', 'input-mouse-symbolic'),
             ('customize', 'Customize', 'preferences-desktop-symbolic'),
             ('power', 'Power', 'battery-good-symbolic'),
             ('tools', 'Tools', 'applications-utilities-symbolic'),
@@ -872,7 +861,7 @@ class MainWindow(Adw.ApplicationWindow):
         if caps.has_led and caps.has_breath_speed:
             lo, hi = caps.breath_speed_range
             self._breath_row_container, self._breath_row = self._make_slider_row(
-                'Breath Speed', '', lo, hi, 1,
+                'Pulse Speed', '', lo, hi, 1,
                 marks=[(lo, 'Slow'), (hi, 'Fast')])
             self._breath_row_container.set_visible(False)
             led_group.add(self._breath_row_container)
@@ -900,8 +889,14 @@ class MainWindow(Adw.ApplicationWindow):
         caps = self._caps
         actions_group = Adw.PreferencesGroup()
 
+        autostart_row = Adw.SwitchRow()
+        autostart_row.set_title('Start on Login')
+        autostart_row.set_active(self._autostart_enabled())
+        autostart_row.connect('notify::active', self._on_autostart_row_toggled)
+        actions_group.add(autostart_row)
+
         test_row = Adw.ButtonRow()
-        test_row.set_title('Test Input — click to test mouse buttons')
+        test_row.set_title('Test Input')
         test_row.connect('activated', self._on_test_clicked)
         actions_group.add(test_row)
 
