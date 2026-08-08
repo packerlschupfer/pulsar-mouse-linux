@@ -43,9 +43,21 @@ local brightnessPct = nil
 local brightnessPreview = nil
 local breathSpeed = nil
 local breathSpeedPreview = nil
+local wireless = false
+local debounce = nil -- {value, min, max}
+local debouncePreview = nil
+local angleSnap = nil
+local rippleControl = nil
+local motionSync = nil
+local lod = nil -- {value, min, max, step}
+local lodPreview = nil
+local powerSaving = nil -- {value, min, max}
+local powerSavingPreview = nil
+local lowPower = nil -- {value, min, max}
+local lowPowerPreview = nil
 local errorText = nil
 local busy = false
-local activeTab = "sensor" -- "sensor" | "lighting"
+local activeTab = "sensor" -- "sensor" | "lighting" | "power"
 
 -- Matches the GUI's own convention (see gui.py) for when breath/pulse speed
 -- is relevant: the device's last LED effect in its list, whatever it's
@@ -64,6 +76,82 @@ local function pollingRateIndex()
   return 1
 end
 
+-- Generic value slider (label + slider) for the four new global/per-profile
+-- settings below - DPI/polling/brightness/breath speed above predate this
+-- and stay as they are (index-based lookups for the first two, already
+-- working) rather than being retrofitted for the sake of it. get/setPreview
+-- hold the live-drag value separately from the committed one, same
+-- preview-then-commit-on-drag-end split as everywhere else in this file.
+local function sliderRow(labelText, formatValue, min, max, step, get, getPreview, setPreview, buildCmd, onSuccess)
+  local shown = getPreview() or get()
+  return {
+    ui.label({
+      text = `{labelText} — {formatValue(shown)}`,
+      fontSize = 13,
+      color = "on_surface_variant",
+    }),
+    ui.slider({
+      min = min,
+      max = max,
+      step = step,
+      value = shown,
+      enabled = not busy,
+      onChange = function(value)
+        setPreview(tonumber(value) or get())
+        render()
+      end,
+      onDragEnd = function(value)
+        local target = tonumber(value) or get()
+        setPreview(nil)
+        if target == get() then
+          render()
+          return
+        end
+        busy = true
+        render()
+        noctalia.runAsync(buildCmd(target), function(result)
+          busy = false
+          if type(result) == "table" and result.exitCode == 0 then
+            onSuccess(target)
+            errorText = nil
+          else
+            errorText = noctalia.tr("ui.write-failed")
+          end
+          render()
+        end, 10000)
+      end,
+    }),
+  }
+end
+
+local function toggleRow(labelText, checked, buildCmd, onSuccess)
+  return ui.row({ gap = 8, align = "center" }, {
+    ui.toggle({
+      checked = checked,
+      enabled = not busy,
+      onChange = function(value)
+        local target = value == "true"
+        if target == checked then
+          return
+        end
+        busy = true
+        render()
+        noctalia.runAsync(buildCmd(target), function(result)
+          busy = false
+          if type(result) == "table" and result.exitCode == 0 then
+            onSuccess(target)
+            errorText = nil
+          else
+            errorText = noctalia.tr("ui.write-failed")
+          end
+          render()
+        end, 10000)
+      end,
+    }),
+    ui.label({ text = labelText, flexGrow = 1 }),
+  })
+end
+
 local function render()
   local rows = {}
 
@@ -79,29 +167,26 @@ local function render()
     return
   end
 
-  -- No native tabs control - a row of two segmented buttons standing in for
-  -- one, same variant-swap pattern as the DPI/polling stage buttons used to
-  -- use before they became sliders.
-  table.insert(rows, ui.row({ gap = 6 }, {
-    ui.button({
-      text = noctalia.tr("ui.tab-sensor"),
-      variant = (activeTab == "sensor") and "primary" or "outline",
+  -- No native tabs control - a row of segmented buttons standing in for one,
+  -- same variant-swap pattern as the DPI/polling stage buttons used to use
+  -- before they became sliders. Power only applies to wireless mice (power
+  -- saving timeout, low-battery threshold) - hidden entirely on a wired one.
+  local function tabButton(tab, labelKey)
+    return ui.button({
+      text = noctalia.tr(labelKey),
+      variant = (activeTab == tab) and "primary" or "outline",
       flexGrow = 1,
       onClick = function()
-        activeTab = "sensor"
+        activeTab = tab
         render()
       end,
-    }),
-    ui.button({
-      text = noctalia.tr("ui.tab-lighting"),
-      variant = (activeTab == "lighting") and "primary" or "outline",
-      flexGrow = 1,
-      onClick = function()
-        activeTab = "lighting"
-        render()
-      end,
-    }),
-  }))
+    })
+  end
+  local tabButtons = { tabButton("sensor", "ui.tab-sensor"), tabButton("lighting", "ui.tab-lighting") }
+  if wireless then
+    table.insert(tabButtons, tabButton("power", "ui.tab-power"))
+  end
+  table.insert(rows, ui.row({ gap = 6 }, tabButtons))
 
   if activeTab == "sensor" and #dpiStages > 0 then
     local shownIndex = dpiPreviewIndex or dpiActive
@@ -188,6 +273,93 @@ local function render()
         end, 10000)
       end,
     }))
+  end
+
+  if activeTab == "sensor" and debounce ~= nil then
+    for _, node in ipairs(sliderRow(
+      noctalia.tr("ui.debounce-label"),
+      function(v) return `{math.floor(v)}ms` end,
+      debounce.min, debounce.max, 1,
+      function() return debounce.value end,
+      function() return debouncePreview end,
+      function(v) debouncePreview = v end,
+      function(v) return `pulsar-mouse --debounce {math.floor(v)}` end,
+      function(v) debounce.value = math.floor(v) end
+    )) do
+      table.insert(rows, node)
+    end
+  end
+
+  if activeTab == "sensor" and angleSnap ~= nil then
+    table.insert(rows, toggleRow(
+      noctalia.tr("ui.angle-snap-label"),
+      angleSnap,
+      function(v) return `pulsar-mouse --angle-snap {v and "on" or "off"}` end,
+      function(v) angleSnap = v end
+    ))
+  end
+
+  if activeTab == "sensor" and rippleControl ~= nil then
+    table.insert(rows, toggleRow(
+      noctalia.tr("ui.ripple-label"),
+      rippleControl,
+      function(v) return `pulsar-mouse --ripple {v and "on" or "off"}` end,
+      function(v) rippleControl = v end
+    ))
+  end
+
+  if activeTab == "sensor" and motionSync ~= nil then
+    table.insert(rows, toggleRow(
+      noctalia.tr("ui.motion-sync-label"),
+      motionSync,
+      function(v) return `pulsar-mouse --motion-sync {v and "on" or "off"}` end,
+      function(v) motionSync = v end
+    ))
+  end
+
+  if activeTab == "sensor" and lod ~= nil then
+    for _, node in ipairs(sliderRow(
+      noctalia.tr("ui.lod-label"),
+      function(v) return `{string.format("%.1f", v)}mm` end,
+      lod.min, lod.max, lod.step,
+      function() return lod.value end,
+      function() return lodPreview end,
+      function(v) lodPreview = v end,
+      function(v) return `pulsar-mouse --profile {profile} --lod {string.format("%.1f", v)}` end,
+      function(v) lod.value = v end
+    )) do
+      table.insert(rows, node)
+    end
+  end
+
+  if activeTab == "power" and powerSaving ~= nil then
+    for _, node in ipairs(sliderRow(
+      noctalia.tr("ui.power-saving-label"),
+      function(v) return string.format("%d:%02d", math.floor(v / 60), math.floor(v) % 60) end,
+      powerSaving.min, powerSaving.max, 30,
+      function() return powerSaving.value end,
+      function() return powerSavingPreview end,
+      function(v) powerSavingPreview = v end,
+      function(v) return `pulsar-mouse --power-saving {math.floor(v)}` end,
+      function(v) powerSaving.value = math.floor(v) end
+    )) do
+      table.insert(rows, node)
+    end
+  end
+
+  if activeTab == "power" and lowPower ~= nil then
+    for _, node in ipairs(sliderRow(
+      noctalia.tr("ui.low-power-label"),
+      function(v) return `{math.floor(v)}%` end,
+      lowPower.min, lowPower.max, 5,
+      function() return lowPower.value end,
+      function() return lowPowerPreview end,
+      function(v) lowPowerPreview = v end,
+      function(v) return `pulsar-mouse --low-power {math.floor(v)}` end,
+      function(v) lowPower.value = math.floor(v) end
+    )) do
+      table.insert(rows, node)
+    end
   end
 
   if activeTab == "lighting" and #ledEffects > 0 then
@@ -320,10 +492,36 @@ local function readStatus()
         return
       end
       errorText = nil
+      wireless = decoded.wireless == true
       pollingRate = decoded.polling_rate
       pollingRates = decoded.polling_rates or {}
       dpiActive = decoded.dpi.active
       dpiStages = decoded.dpi.stages or {}
+      if type(decoded.debounce) == "table" then
+        debounce = decoded.debounce
+      end
+      if type(decoded.angle_snap) == "boolean" then
+        angleSnap = decoded.angle_snap
+      end
+      if type(decoded.ripple_control) == "boolean" then
+        rippleControl = decoded.ripple_control
+      end
+      if type(decoded.motion_sync) == "boolean" then
+        motionSync = decoded.motion_sync
+      end
+      if type(decoded.lod) == "table" and decoded.lod.step ~= nil then
+        -- Only the continuous-slider shape (lod_step set) is handled here -
+        -- a driver with a discrete lod_values list instead (no "step") isn't
+        -- supported by this panel, same as the DPI/polling stage sliders
+        -- assume their own value lists are always present and non-empty.
+        lod = decoded.lod
+      end
+      if type(decoded.power_saving) == "table" then
+        powerSaving = decoded.power_saving
+      end
+      if type(decoded.low_power) == "table" then
+        lowPower = decoded.low_power
+      end
       if type(decoded.led) == "table" then
         ledEffects = decoded.led.effects or {}
         ledEffect = decoded.led.effect

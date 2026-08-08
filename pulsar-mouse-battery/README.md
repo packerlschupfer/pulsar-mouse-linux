@@ -1,8 +1,8 @@
 # Pulsar Mouse Battery
 
-Bar and desktop widgets showing battery percentage, charging status, and signal strength for a Pulsar gaming mouse (via [pulsar-mouse-linux](https://github.com/harveywuk/pulsar-mouse-linux)), plus a quick-controls panel for DPI stage, polling rate, and LED (effect/brightness/speed). Since desktop widgets are shared with Noctalia's lock screen, the desktop widget shows up in both places once added. Works with just the `pulsar-mouse` CLI installed - the GUI/tray isn't required, it's just more efficient if it's running (see Data source).
+Bar and desktop widgets showing battery percentage, charging status, and signal strength for a Pulsar gaming mouse (via [pulsar-mouse-linux](https://github.com/harveywuk/pulsar-mouse-linux)), plus a quick-controls panel covering DPI stage, polling rate, debounce, angle snap, ripple control, motion sync, lift-off distance, LED (effect/brightness/speed), and - on wireless mice - power saving/low-battery threshold. Since desktop widgets are shared with Noctalia's lock screen, the desktop widget shows up in both places once added. Works with just the `pulsar-mouse` CLI installed - the GUI/tray isn't required, it's just more efficient if it's running (see Data source).
 
-Battery/signal only apply to wireless mice - on a wired one, the bar widget hides itself entirely and the desktop widget shows a plain "Wired" placeholder instead. The controls panel (DPI/polling/LED) works for any mouse.
+Battery/signal only apply to wireless mice - on a wired one, the bar widget hides itself entirely and the desktop widget shows a plain "Wired" placeholder instead. The controls panel's Sensor and Lighting tabs work for any mouse; the Power tab (wireless power saving, low-battery threshold) only appears for a wireless one.
 
 ## Plugin
 
@@ -34,16 +34,23 @@ Add the `bar` bar widget to your bar. Shows a battery glyph (and percentage, on 
 
 ### Controls Panel
 
-Click the bar widget to open the `controls` panel, split into two tabs (Noctalia has no native tabs control - these are just two segmented buttons swapping which section renders):
+Click the bar widget to open the `controls` panel, split into tabs (Noctalia has no native tabs control - these are just segmented buttons swapping which section renders):
 
 **Sensor**
 - **DPI** - a slider stepping through profile 1's configured DPI stages (not a raw DPI range - every position lands on an actual configured value, like a notch per stage)
 - **Polling Rate** - a slider the same way, stepping through the device's supported rates
+- **Debounce** - a slider, in ms
+- **Angle Snap**, **Ripple Control**, **Motion Sync** - toggles
+- **Lift-off Distance** - a slider, in mm (only shown for a driver with a continuous LOD range, like the Feinmann 8K's 0.7-2.0mm in 0.1mm steps - a driver with a fixed discrete LOD list instead isn't currently supported by this panel)
 
 **Lighting**
 - **LED Effect** - a dropdown (off/steady/pulse, or whatever the device supports)
 - **Brightness** - a 0-100% slider
 - **Speed** - a 0-100 slider for the LED effect's speed, shown only when the current effect actually has one (e.g. pulse/breath, not steady)
+
+**Power** (wireless mice only)
+- **Wireless Power Saving** - a slider, 30s-15min, shown as M:SS
+- **Low Power Mode** - a slider, 0-100% battery threshold
 
 All of these write straight through the `pulsar-mouse` CLI immediately on release (sliders commit on drag-end, not live per pixel) - unlike the battery reading, none of this lives in the cached state file, so the panel always talks to the mouse directly.
 

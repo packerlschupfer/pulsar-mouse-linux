@@ -29,6 +29,14 @@
     "wired": "Wired",
     "signal-label": "Signal",
     "tab-sensor": "Sensor",
-    "tab-lighting": "Lighting"
+    "tab-lighting": "Lighting",
+    "tab-power": "Power",
+    "debounce-label": "Debounce",
+    "angle-snap-label": "Angle Snap",
+    "ripple-label": "Ripple Control",
+    "motion-sync-label": "Motion Sync",
+    "lod-label": "Lift-off Distance",
+    "power-saving-label": "Wireless Power Saving",
+    "low-power-label": "Low Power Mode"
   }
 }

@@ -293,6 +293,7 @@ def main():
         try:
             dpi_info = device.get_dpi_stages(profile=profile)
             status = {
+                'wireless': hasattr(device, 'get_power'),
                 'profile': profile,
                 'num_profiles': caps.num_profiles,
                 'polling_rate': device.get_polling_rate(),
@@ -302,6 +303,39 @@ def main():
                     'stages': [dx for dx, _dy in dpi_info['stages'][:dpi_info['count']]],
                 },
             }
+            if caps.has_debounce:
+                lo, hi = caps.debounce_range
+                status['debounce'] = {'value': device.get_debounce(), 'min': lo, 'max': hi}
+            if caps.has_angle_snap:
+                status['angle_snap'] = device.get_angle_snap()
+            if caps.has_ripple_control:
+                status['ripple_control'] = device.get_ripple_control()
+            if caps.has_motion_sync:
+                status['motion_sync'] = device.get_motion_sync()
+            if caps.lod_values:
+                lod_val = device.get_lod(profile)
+                if caps.lod_step is not None:
+                    status['lod'] = {
+                        'value': lod_val,
+                        'min': caps.lod_values[0],
+                        'max': caps.lod_values[-1],
+                        'step': caps.lod_step,
+                    }
+                else:
+                    status['lod'] = {'value': lod_val, 'options': caps.lod_values}
+            # Not DeviceCapabilities fields - purely hasattr-gated, same as
+            # the GUI's own Power Management page (see gui.py). Bounds
+            # (30-900s, 0-100%) match that page's sliders and feinmann8k.py's
+            # own set_power_saving_timeout() validation - there's no
+            # discoverable capability constant for them to read instead.
+            if hasattr(device, 'get_power_saving_timeout'):
+                status['power_saving'] = {
+                    'value': device.get_power_saving_timeout(), 'min': 30, 'max': 900,
+                }
+            if hasattr(device, 'get_low_power_threshold'):
+                status['low_power'] = {
+                    'value': device.get_low_power_threshold(), 'min': 0, 'max': 100,
+                }
             if caps.has_led:
                 lo, hi = caps.brightness_range
                 brightness = device.get_brightness(profile)

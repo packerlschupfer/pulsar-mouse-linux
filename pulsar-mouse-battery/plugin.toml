@@ -18,14 +18,14 @@
 
 id = "harveywuk/pulsar-mouse-battery"
 name = "Pulsar Mouse Battery"
-version = "1.4.0"
+version = "1.5.0"
 plugin_api = 9
 author = "harveywuk"
 license = "MIT"
 dependencies = []
 tags = ["hardware", "system"]
 icon = "mouse"
-description = "Battery, charging status, quick DPI/polling controls for a Pulsar gaming mouse, on the bar, desktop, and lock screen."
+description = "Battery status and quick sensor/lighting/power controls for a Pulsar gaming mouse - bar, desktop, and lock screen."
 
 [[widget]]
 id = "bar"
@@ -50,8 +50,8 @@ entry = "bar.luau"
 [[panel]]
 id = "controls"
 entry = "panel.luau"
-width = 300
-height = 320
+width = 320
+height = 460
 placement = "attached"
 position = "auto"
 open_near_click = true
