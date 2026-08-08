@@ -32,13 +32,6 @@ id = "bar"
 entry = "bar.luau"
 
   [[widget.setting]]
-  key = "show_percent"
-  type = "bool"
-  label_key = "settings.show_percent.label"
-  description_key = "settings.show_percent.description"
-  default = true
-
-  [[widget.setting]]
   key = "glyph_size"
   type = "int"
   label_key = "settings.glyph_size.label"

@@ -13,10 +13,18 @@
 -- no battery to report - --battery-json returns {"wireless": false} for
 -- those rather than an error, so this is a normal, not a failure, state.
 --
+-- Icon-only (no percentage label): battery level and charging state are
+-- already in the hover tooltip, so a bar-row number would just be the same
+-- fact twice. Just the Tabler "mouse-filled" glyph, tinted red by
+-- statusColor() same as before, swapping to "mouse-off" for a genuine
+-- error/no-mouse state.
+--
 -- Signal quality has no synchronous getter (see gui.py's own comment on
 -- this) - it only arrives via an async hidraw event the GUI listens for, so
 -- it's only ever available via the cached state file (when the GUI wrote
--- one after seeing an event), never from the CLI fallback read.
+-- one after seeing an event, i.e. pulsar-mouse-gui/tray is running), never
+-- from the CLI fallback read - the tooltip's signal line just doesn't
+-- appear when only that path is available.
 --
 -- Click opens the "controls" panel (panel.luau) for quick DPI/polling rate
 -- changes - that one always talks to the CLI directly, since neither of
@@ -42,24 +50,11 @@ local signalPercent = nil
 local errorText = nil
 local checkingCli = false
 local isVertical = false
-local showPercent = noctalia.getConfig("show_percent")
 local glyphSize = noctalia.getConfig("glyph_size")
 
-local function batteryGlyph()
-  if charging then
-    return "battery-charging"
-  end
-  if percent == nil then
-    return "battery-off"
-  end
-  if percent >= 75 then
-    return "battery-4"
-  elseif percent >= 50 then
-    return "battery-3"
-  elseif percent >= 25 then
-    return "battery-2"
-  end
-  return "battery-1"
+local function statusGlyph(color)
+  local name = (errorText ~= nil or percent == nil) and "mouse-off" or "mouse-filled"
+  return ui.glyph({ name = name, size = glyphSize, color = color })
 end
 
 local function statusColor()
@@ -95,22 +90,11 @@ local function render()
     return
   end
 
-  local color = statusColor()
-  local glyph = ui.glyph({ name = batteryGlyph(), size = glyphSize, color = color })
-
+  local glyph = statusGlyph(statusColor())
   barWidget.setTooltip(tooltipText())
 
-  if isVertical or percent == nil or not showPercent then
-    local container = isVertical and ui.column or ui.row
-    barWidget.render(container({ align = "center" }, { glyph }))
-    return
-  end
-
-  local text = tostring(percent) .. "%"
-  barWidget.render(ui.row({ gap = 6, align = "center" }, {
-    glyph,
-    ui.label({ text = text, fontWeight = "bold", color = color }),
-  }))
+  local container = isVertical and ui.column or ui.row
+  barWidget.render(container({ align = "center" }, { glyph }))
 end
 
 local function readViaCli()

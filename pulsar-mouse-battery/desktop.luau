@@ -40,21 +40,9 @@ local signalPercent = nil
 local errorText = nil
 local checkingCli = false
 
-local function batteryGlyph()
-  if charging then
-    return "battery-charging"
-  end
-  if percent == nil then
-    return "battery-off"
-  end
-  if percent >= 75 then
-    return "battery-4"
-  elseif percent >= 50 then
-    return "battery-3"
-  elseif percent >= 25 then
-    return "battery-2"
-  end
-  return "battery-1"
+local function statusGlyph()
+  local name = (errorText ~= nil or percent == nil) and "mouse-off" or "mouse-filled"
+  return ui.glyph({ name = name, size = glyphSize, color = statusColor() })
 end
 
 local function statusColor()
@@ -77,7 +65,7 @@ local function render()
   end
 
   local rows = {
-    ui.glyph({ name = batteryGlyph(), size = glyphSize, color = statusColor() }),
+    statusGlyph(),
   }
 
   if errorText ~= nil then

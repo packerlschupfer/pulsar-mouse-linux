@@ -59,6 +59,14 @@ local errorText = nil
 local busy = false
 local activeTab = "sensor" -- "sensor" | "lighting" | "power"
 
+-- Forward-declared: sliderRow/toggleRow below build closures (onChange/
+-- onDragEnd) that call render() before its definition is reached in the
+-- file. A `local function render()` at that later point would create a
+-- new local invisible to those already-defined closures, which would
+-- instead close over the (nil) global - this forward declaration is what
+-- lets them share the one local.
+local render
+
 -- Matches the GUI's own convention (see gui.py) for when breath/pulse speed
 -- is relevant: the device's last LED effect in its list, whatever it's
 -- actually named ("pulse" here, "breath" on other drivers) - not a literal
@@ -152,7 +160,7 @@ local function toggleRow(labelText, checked, buildCmd, onSuccess)
   })
 end
 
-local function render()
+function render()
   local rows = {}
 
   if errorText ~= nil then
