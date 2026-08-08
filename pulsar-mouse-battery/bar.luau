@@ -9,12 +9,17 @@
 -- needed - the file will never exist, so every tick reads live from the
 -- mouse instead.
 --
+-- Click opens the "controls" panel (panel.luau) for quick DPI/polling rate
+-- changes - that one always talks to the CLI directly, since neither of
+-- those live in battery.json and writes can't be cached anyway.
+--
 --   barWidget.render(tree)      declarative UI tree
 --   barWidget.isVertical()      branch on bar orientation
 --   barWidget.setTooltip(text)  hover detail
 --   noctalia.readFile(path)     cheap path - reads the GUI's last reading
 --   noctalia.runAsync(cmd, cb)  fallback path - direct CLI read
 --   noctalia.json.decode(str)   both paths return JSON on stdout/in the file
+--   noctalia.togglePanel(id)    open/close the controls panel on click
 
 local STATE_PATH = "~/.cache/pulsar-mouse/battery.json"
 local STALE_AFTER = 180 -- seconds - 3x the GUI's own 60s poll interval
@@ -24,6 +29,8 @@ local charging = false
 local errorText = nil
 local checkingCli = false
 local isVertical = false
+local showPercent = noctalia.getConfig("show_percent")
+local glyphSize = noctalia.getConfig("glyph_size")
 
 local function batteryGlyph()
   if charging then
@@ -67,12 +74,13 @@ end
 
 local function render()
   local color = statusColor()
-  local glyph = ui.glyph({ name = batteryGlyph(), color = color })
+  local glyph = ui.glyph({ name = batteryGlyph(), size = glyphSize, color = color })
 
   barWidget.setTooltip(tooltipText())
 
-  if isVertical or percent == nil then
-    barWidget.render(ui.column({ align = "center" }, { glyph }))
+  if isVertical or percent == nil or not showPercent then
+    local container = isVertical and ui.column or ui.row
+    barWidget.render(container({ align = "center" }, { glyph }))
     return
   end
 
@@ -142,4 +150,8 @@ function update()
   isVertical = barWidget.isVertical()
   noctalia.setUpdateInterval(30000)
   readState()
+end
+
+function onClick()
+  noctalia.togglePanel("harveywuk/pulsar-mouse-battery:controls")
 end

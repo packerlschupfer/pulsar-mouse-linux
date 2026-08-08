@@ -182,6 +182,11 @@ Examples:
                         '(for scripts - e.g. {"battery_percent": 85, '
                         '"power_connected": false, "battery_mv": null})')
 
+    p.add_argument('--status-json', action='store_true',
+                   help='Print polling rate/DPI stages as one JSON line and exit '
+                        '(for scripts - polling_rate, polling_rates, and dpi for '
+                        '--profile, or profile 1 if omitted)')
+
     # Global settings
     g = p.add_argument_group('global settings (shared across all profiles)')
     g.add_argument('--poll', type=int, metavar='HZ',
@@ -270,6 +275,25 @@ def main():
         device.open()
         try:
             print(json.dumps(device.get_power()))
+        finally:
+            device.close()
+        return
+
+    if args.status_json:
+        profile = args.profile if args.profile is not None else 1
+        device.open()
+        try:
+            dpi_info = device.get_dpi_stages(profile=profile)
+            print(json.dumps({
+                'profile': profile,
+                'num_profiles': caps.num_profiles,
+                'polling_rate': device.get_polling_rate(),
+                'polling_rates': caps.polling_rates,
+                'dpi': {
+                    'active': dpi_info['active'],
+                    'stages': [dx for dx, _dy in dpi_info['stages'][:dpi_info['count']]],
+                },
+            }))
         finally:
             device.close()
         return

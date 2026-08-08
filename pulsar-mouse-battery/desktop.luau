@@ -18,6 +18,8 @@ local STALE_AFTER = 180 -- seconds - 3x the GUI's own 60s poll interval
 
 local color = noctalia.getConfig("color")
 local showProgress = noctalia.getConfig("show_progress")
+local showPercent = noctalia.getConfig("show_percent")
+local glyphSize = noctalia.getConfig("glyph_size")
 
 local percent = nil
 local charging = false
@@ -53,14 +55,16 @@ end
 
 local function render()
   local rows = {
-    ui.glyph({ name = batteryGlyph(), size = 22, color = statusColor() }),
+    ui.glyph({ name = batteryGlyph(), size = glyphSize, color = statusColor() }),
   }
 
   if errorText ~= nil then
+    -- Diagnostic, not decorative - stays visible even with show_percent off,
+    -- since otherwise a broken setup would just silently show a bare glyph.
     table.insert(rows, ui.label({ text = errorText, fontSize = 12, color = "error" }))
-  elseif percent == nil then
+  elseif showPercent and percent == nil then
     table.insert(rows, ui.label({ text = "--", fontSize = 20, color = "outline" }))
-  else
+  elseif showPercent then
     local text = tostring(percent) .. "%"
     if charging then
       text = text .. " " .. noctalia.tr("ui.charging")
