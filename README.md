@@ -7,10 +7,12 @@
 Linux configuration tool for **Pulsar gaming mice**.
 
 Plugin architecture — each mouse model has its own protocol driver.
-Currently supports the **Pulsar X2A Medium Wired**, **Pulsar X2H Wired Medium**, and **Pulsar X2A Wireless**.
+Currently supports the **Pulsar X2A Medium Wired**, **Pulsar X2H Wired Medium**, **Pulsar X2A Wireless**, and **Pulsar Feinmann 8K / FO1**.
 
 Reverse-engineered from USB HID captures of Pulsar Fusion on Windows 11.
 Wireless (Nordic) protocol based on [python-pulsar-mouse-tool](https://github.com/andrewrabert/python-pulsar-mouse-tool) by andrewrabert.
+
+> **This fork** ([harveywuk/pulsar-mouse-linux](https://github.com/harveywuk/pulsar-mouse-linux), branch `feinmann8k-driver`) adds the Feinmann 8K/FO1 driver, full multi-profile support, button remapping, GNOME/Hyprland/KDE pointer-settings integration, and a Nix flake. See [What this fork adds](#what-this-fork-adds-beyond-upstream) below. Most of the GUI redesign has been adopted upstream — check there first if you don't need the extras.
 
 ## Screenshots
 
@@ -30,8 +32,23 @@ Wireless (Nordic) protocol based on [python-pulsar-mouse-tool](https://github.co
 | Pulsar X2H Wired Medium | `x2h` | `3710:1403` | Fully supported |
 | Pulsar Xlite v4 | `xlite_v4` | `3710:3401` | Untested (same Sonix protocol as X2A) |
 | Pulsar X2A Wireless / X2 V2 Mini | `nordic` | `3554:f507` `3554:f508` | Supported (Nordic chipset, battery status) |
+| Pulsar Feinmann 8K / FO1 | `feinmann8k` | `3710:5404` | Fully supported (6 onboard profiles, wireless) |
 
 Want to add support for your mouse? See [Adding a new driver](#adding-a-new-driver) below.
+
+## What this fork adds (beyond upstream)
+
+On top of the Feinmann 8K/FO1 driver itself, this branch carries a few things not (yet, or by choice) in upstream:
+
+- **Full button remapping** — a GUI dialog for every physical button, not just CLI (`--button`)
+- **Desktop pointer-settings integration** for GNOME, Hyprland, and KDE Plasma (auto-detected, not just GNOME)
+- **Profile import/export** (`--export`/`--import`), so a profile can be backed up or copied across profile slots
+- **Active-profile switching** and **firmware version** display, where the driver supports it
+- **Fine-grained lift-off distance** on the Feinmann (0.7–2.0mm in 0.1mm steps, reverse-engineered from real captures) instead of a coarse 1mm/2mm choice
+- **A traced-to-scale mouse diagram** in the Input Test dialog instead of hand-drawn placeholder shapes
+- **A Nix flake** (`flake.nix`) — see [Nix / NixOS](#option-5-nix--nixos) below
+
+Most of the GUI redesign (sidebar navigation, Home page, connection quality, power management, slider styling) has already been adopted into upstream's `main` — if you don't need the extras above, upstream is the better default.
 
 ## Requirements
 
@@ -103,6 +120,28 @@ cd pulsar-mouse-linux
 pip install --user -e .
 ```
 
+### Option 5: Nix / NixOS
+
+This fork ships a flake. Run it directly without installing:
+
+```bash
+nix run github:harveywuk/pulsar-mouse-linux/feinmann8k-driver          # GUI
+nix run github:harveywuk/pulsar-mouse-linux/feinmann8k-driver#cli      # CLI
+```
+
+Or add it as a flake input:
+
+```nix
+inputs.pulsar-mouse-linux = {
+  url = "github:harveywuk/pulsar-mouse-linux/feinmann8k-driver";
+  inputs.nixpkgs.follows = "nixpkgs";
+};
+```
+
+then either reference `inputs.pulsar-mouse-linux.packages.${system}.default` directly, or pull in `inputs.pulsar-mouse-linux.overlays.default` and use `pkgs.pulsar-mouse-linux` as normal. The package ships the udev rules under `lib/udev/rules.d/` — on NixOS, add it to `services.udev.packages = [ pkgs.pulsar-mouse-linux ];` and they'll be picked up automatically, no manual `udevadm` steps needed.
+
+Also published as a rolling release on [FlakeHub](https://flakehub.com/flake/harveywuk/pulsar-mouse-linux) if you'd rather pin a version than track the branch directly.
+
 ### udev rules (run without sudo)
 
 Packages install udev rules automatically. For git installs:
@@ -110,8 +149,9 @@ Packages install udev rules automatically. For git installs:
 ```bash
 sudo cp udev/50-pulsar-mouse.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules && sudo udevadm trigger
-sudo groupadd -f plugdev && sudo usermod -aG plugdev $USER   # re-login after this
 ```
+
+Access is granted via `TAG+="uaccess"` (systemd-logind ACL) — no group membership or re-login needed; just re-plug the mouse.
 
 ## GUI + System Tray
 
@@ -168,6 +208,10 @@ sudo pulsar-mouse --profile 1 --stage-color 1 255 0 0    # stage 1 = red
 # Button remapping (per-profile)
 sudo pulsar-mouse --profile 1 --button thumb1 dpi+
 sudo pulsar-mouse --profile 1 --button thumb1 ctrl+c
+
+# Profile backup/restore (per-profile)
+sudo pulsar-mouse --profile 1 --export profile1.json
+sudo pulsar-mouse --profile 2 --import profile1.json
 ```
 
 ## Adding a new driver
