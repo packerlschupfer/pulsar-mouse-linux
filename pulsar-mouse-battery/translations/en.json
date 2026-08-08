@@ -21,7 +21,12 @@
     "no-mouse": "Mouse not found",
     "dpi-label": "DPI",
     "polling-label": "Polling Rate",
+    "led-label": "LED Effect",
+    "brightness-label": "Brightness",
+    "speed-label": "Speed",
     "write-failed": "Failed to apply - is the mouse connected?",
-    "loading": "Loading..."
+    "loading": "Loading...",
+    "wired": "Wired",
+    "signal-label": "Signal"
   }
 }

@@ -210,6 +210,10 @@ Examples:
     pp.add_argument('--active-stage', type=int, metavar='N',
                     help='Active DPI stage index')
     pp.add_argument('--brightness', type=int, metavar='0-255')
+    pp.add_argument('--brightness-percent', type=int, metavar='0-100',
+                    help='Same as --brightness, but 0-100%% scaled to the '
+                         'device\'s actual raw range (matches the GUI/'
+                         '--status-json\'s brightness_percent)')
     pp.add_argument('--led', metavar='steady|breath',
                     help='LED effect')
     pp.add_argument('--breath-speed', type=int, metavar='0-100')
@@ -244,14 +248,14 @@ def main():
         args.angle_snap, args.ripple, args.motion_sync,
         args.power_saving, args.low_power,
         args.lod, args.dpi, args.active_stage,
-        args.brightness, args.led, args.breath_speed,
+        args.brightness, args.brightness_percent, args.led, args.breath_speed,
         args.stage_color, args.button,
         args.import_file,
     ])
 
     profile_required = args.reset or any(x is not None for x in [
         args.lod, args.dpi, args.active_stage,
-        args.brightness, args.led, args.breath_speed,
+        args.brightness, args.brightness_percent, args.led, args.breath_speed,
         args.stage_color, args.button,
         args.export, args.import_file,
     ])
@@ -271,10 +275,14 @@ def main():
 
     if args.battery_json:
         if not hasattr(device, 'get_power'):
-            sys.exit(json.dumps({'error': 'device has no battery'}))
+            # Not an error - a wired mouse just has no battery to report.
+            # Exit 0 so scripts can tell "no battery" apart from "device
+            # not found"/a failed read (both of those exit non-zero).
+            print(json.dumps({'wireless': False}))
+            return
         device.open()
         try:
-            print(json.dumps(device.get_power()))
+            print(json.dumps({'wireless': True, **device.get_power()}))
         finally:
             device.close()
         return
@@ -284,7 +292,7 @@ def main():
         device.open()
         try:
             dpi_info = device.get_dpi_stages(profile=profile)
-            print(json.dumps({
+            status = {
                 'profile': profile,
                 'num_profiles': caps.num_profiles,
                 'polling_rate': device.get_polling_rate(),
@@ -293,7 +301,22 @@ def main():
                     'active': dpi_info['active'],
                     'stages': [dx for dx, _dy in dpi_info['stages'][:dpi_info['count']]],
                 },
-            }))
+            }
+            if caps.has_led:
+                lo, hi = caps.brightness_range
+                brightness = device.get_brightness(profile)
+                led = {
+                    'effects': caps.led_effects,
+                    'effect': device.get_led_effect(profile),
+                    # Same 0-100% convention as the GUI (raw range varies
+                    # by driver, usually 0-255) - round-trips through
+                    # --brightness-percent below, not raw --brightness.
+                    'brightness_percent': round((brightness - lo) / (hi - lo) * 100) if hi > lo else 0,
+                }
+                if caps.has_breath_speed:
+                    led['breath_speed'] = device.get_breath_speed(profile)
+                status['led'] = led
+            print(json.dumps(status))
         finally:
             device.close()
         return
@@ -372,6 +395,12 @@ def main():
             if args.brightness is not None:
                 device.set_brightness(args.brightness, prof)
                 print(f"Profile {prof} brightness: {args.brightness}/{caps.brightness_range[1]}")
+
+            if args.brightness_percent is not None:
+                lo, hi = caps.brightness_range
+                raw = round(lo + args.brightness_percent / 100 * (hi - lo))
+                device.set_brightness(raw, prof)
+                print(f"Profile {prof} brightness: {args.brightness_percent}% ({raw}/{hi})")
 
             if args.led is not None:
                 device.set_led_effect(args.led, prof)

@@ -8,6 +8,18 @@
 -- falls back to a direct `pulsar-mouse --battery-json` read instead, so the
 -- widget still works standalone, just with its own USB round-trip.
 --
+-- For a wired mouse (no battery to report), --battery-json returns
+-- {"wireless": false} rather than an error - renders a minimal "Wired"
+-- placeholder instead of battery info. Unlike bar.luau, there's no
+-- desktopWidget.setVisible() to hide entirely, so this is the closest
+-- available equivalent.
+--
+-- Signal quality has no synchronous getter (see gui.py's own comment on
+-- this) - it only arrives via an async hidraw event the GUI listens for, so
+-- it's only ever available via the cached state file, never the CLI
+-- fallback - the signal row just doesn't appear when only that path is
+-- available (e.g. GUI not running).
+--
 --   noctalia.readFile(path)     cheap path - reads the GUI's last reading
 --   noctalia.runAsync(cmd, cb)  fallback path - direct CLI read
 --   noctalia.json.decode(str)   both paths return JSON on stdout/in the file
@@ -21,8 +33,10 @@ local showProgress = noctalia.getConfig("show_progress")
 local showPercent = noctalia.getConfig("show_percent")
 local glyphSize = noctalia.getConfig("glyph_size")
 
+local wireless = true -- assume true until a read says otherwise
 local percent = nil
 local charging = false
+local signalPercent = nil
 local errorText = nil
 local checkingCli = false
 
@@ -54,6 +68,14 @@ local function statusColor()
 end
 
 local function render()
+  if not wireless then
+    desktopWidget.render(ui.column({ gap = 6, align = "center" }, {
+      ui.glyph({ name = "plug", size = glyphSize, color = "outline" }),
+      ui.label({ text = noctalia.tr("ui.wired"), fontSize = 12, color = "outline" }),
+    }))
+    return
+  end
+
   local rows = {
     ui.glyph({ name = batteryGlyph(), size = glyphSize, color = statusColor() }),
   }
@@ -82,6 +104,14 @@ local function render()
     }))
   end
 
+  if signalPercent ~= nil then
+    table.insert(rows, ui.label({
+      text = `{noctalia.tr("ui.signal-label")} {signalPercent}%`,
+      fontSize = 11,
+      color = "on_surface_variant",
+    }))
+  end
+
   desktopWidget.render(ui.column({ gap = 6, align = "center" }, rows))
 end
 
@@ -105,15 +135,28 @@ local function readViaCli()
       render()
       return
     end
-    local decoded, err = noctalia.json.decode(result.stdout or "")
-    if type(decoded) ~= "table" or decoded.battery_percent == nil then
+    local decoded = noctalia.json.decode(result.stdout or "")
+    if type(decoded) ~= "table" then
       errorText = noctalia.tr("ui.no-mouse")
       render()
       return
     end
+    if decoded.wireless == false then
+      wireless = false
+      errorText = nil
+      render()
+      return
+    end
+    if decoded.battery_percent == nil then
+      errorText = noctalia.tr("ui.no-mouse")
+      render()
+      return
+    end
+    wireless = true
     errorText = nil
     percent = decoded.battery_percent
     charging = decoded.power_connected == true
+    signalPercent = nil -- not available via this path - see header comment
     render()
   end, 10000)
 end
@@ -137,9 +180,11 @@ local function readState()
     return
   end
 
+  wireless = true
   errorText = nil
   percent = decoded.battery_percent
   charging = decoded.power_connected == true
+  signalPercent = decoded.signal_percent
   render()
 end
 

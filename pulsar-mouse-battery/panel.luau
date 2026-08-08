@@ -2,9 +2,15 @@
 -- Pulsar Mouse quick controls - [[panel]]. Opened from the bar widget.
 --
 -- Unlike the battery read path (bar.luau/desktop.luau), this always talks
--- to the mouse directly via the CLI - DPI/polling rate need a live,
--- authoritative read when the panel opens (the cached battery.json file
--- doesn't carry them), and writes obviously can't be cached at all.
+-- to the mouse directly via the CLI - none of DPI/polling/LED state lives
+-- in the cached battery.json, and writes obviously can't be cached at all.
+--
+-- Sliders (DPI stage, polling rate, brightness, breath speed) commit on
+-- onDragEnd, not onChange - onChange only updates the live label as you
+-- drag, so a drag gesture doesn't fire a USB write per pixel/step crossed.
+-- DPI and polling rate are index-based sliders over their configured/
+-- supported values (not a raw DPI/Hz range), so every position lands on
+-- an actual valid value - equivalent to a slider with a notch per option.
 --
 --   panel.render(tree)          declarative UI tree
 --   panel.close()                close the panel surface
@@ -16,13 +22,34 @@ local pollingRate = nil
 local pollingRates = {}
 local dpiActive = nil
 local dpiStages = {}
+local dpiPreviewIndex = nil -- live drag preview, separate from the committed dpiActive
+local pollPreviewIndex = nil
+local ledEffects = {}
+local ledEffect = nil
+local brightnessPct = nil
+local brightnessPreview = nil
+local breathSpeed = nil
+local breathSpeedPreview = nil
 local errorText = nil
 local busy = false
 
--- onOpen renders once immediately (a loading placeholder) before the async
--- CLI read below has a result - dpiStages/pollingRates are still {} at that
--- point, so ui.select/button rows are skipped entirely rather than built
--- from an empty options list, which risks failing to render at all.
+-- Matches the GUI's own convention (see gui.py) for when breath/pulse speed
+-- is relevant: the device's last LED effect in its list, whatever it's
+-- actually named ("pulse" here, "breath" on other drivers) - not a literal
+-- string match.
+local function breathSpeedRelevant()
+  return breathSpeed ~= nil and ledEffect == ledEffects[#ledEffects]
+end
+
+local function pollingRateIndex()
+  for i, hz in ipairs(pollingRates) do
+    if hz == pollingRate then
+      return i
+    end
+  end
+  return 1
+end
+
 local function render()
   local rows = {}
 
@@ -30,7 +57,7 @@ local function render()
     table.insert(rows, ui.label({ text = errorText, color = "error" }))
   end
 
-  local loaded = #dpiStages > 0 or #pollingRates > 0
+  local loaded = #dpiStages > 0 or #pollingRates > 0 or #ledEffects > 0
 
   if not loaded and errorText == nil then
     table.insert(rows, ui.label({ text = noctalia.tr("ui.loading"), color = "outline" }))
@@ -39,24 +66,185 @@ local function render()
   end
 
   if #dpiStages > 0 then
-    table.insert(rows, ui.label({ text = noctalia.tr("ui.dpi-label"), fontSize = 13, color = "on_surface_variant" }))
+    local shownIndex = dpiPreviewIndex or dpiActive
+    local shownDpi = dpiStages[shownIndex]
+    table.insert(rows, ui.label({
+      text = `{noctalia.tr("ui.dpi-label")} — {shownDpi}`,
+      fontSize = 13,
+      color = "on_surface_variant",
+    }))
+    table.insert(rows, ui.slider({
+      min = 1,
+      max = #dpiStages,
+      step = 1,
+      value = shownIndex,
+      enabled = not busy,
+      onChange = function(value)
+        dpiPreviewIndex = math.floor(tonumber(value) or dpiActive)
+        render()
+      end,
+      onDragEnd = function(value)
+        local target = math.floor(tonumber(value) or dpiActive)
+        dpiPreviewIndex = nil
+        if target == dpiActive then
+          render()
+          return
+        end
+        busy = true
+        render()
+        noctalia.runAsync(
+          `pulsar-mouse --profile {profile} --active-stage {target}`,
+          function(result)
+            busy = false
+            if type(result) == "table" and result.exitCode == 0 then
+              dpiActive = target
+              errorText = nil
+            else
+              errorText = noctalia.tr("ui.write-failed")
+            end
+            render()
+          end,
+          10000
+        )
+      end,
+    }))
+  end
 
-    local dpiButtons = {}
-    for i, dpi in ipairs(dpiStages) do
-      table.insert(dpiButtons, ui.button({
-        text = tostring(dpi),
-        variant = (i == dpiActive) and "primary" or "outline",
+  if #pollingRates > 0 then
+    local shownPollIndex = pollPreviewIndex or pollingRateIndex()
+    local shownHz = pollingRates[shownPollIndex]
+    table.insert(rows, ui.label({
+      text = `{noctalia.tr("ui.polling-label")} — {shownHz} Hz`,
+      fontSize = 13,
+      color = "on_surface_variant",
+    }))
+    table.insert(rows, ui.slider({
+      min = 1,
+      max = #pollingRates,
+      step = 1,
+      value = shownPollIndex,
+      enabled = not busy,
+      onChange = function(value)
+        pollPreviewIndex = math.floor(tonumber(value) or pollingRateIndex())
+        render()
+      end,
+      onDragEnd = function(value)
+        local targetIndex = math.floor(tonumber(value) or pollingRateIndex())
+        pollPreviewIndex = nil
+        local hz = pollingRates[targetIndex]
+        if hz == nil or hz == pollingRate then
+          render()
+          return
+        end
+        busy = true
+        render()
+        noctalia.runAsync(`pulsar-mouse --poll {hz}`, function(result)
+          busy = false
+          if type(result) == "table" and result.exitCode == 0 then
+            pollingRate = hz
+            errorText = nil
+          else
+            errorText = noctalia.tr("ui.write-failed")
+          end
+          render()
+        end, 10000)
+      end,
+    }))
+  end
+
+  if #ledEffects > 0 then
+    table.insert(rows, ui.label({ text = noctalia.tr("ui.led-label"), fontSize = 13, color = "on_surface_variant" }))
+
+    local effectOptions = {}
+    local effectSelectedIndex = 0
+    for i, effect in ipairs(ledEffects) do
+      table.insert(effectOptions, effect)
+      if effect == ledEffect then
+        effectSelectedIndex = i - 1
+      end
+    end
+    table.insert(rows, ui.select({
+      key = "led-effect",
+      options = effectOptions,
+      selectedIndex = effectSelectedIndex,
+      enabled = not busy,
+      onChange = "onEffectChange",
+    }))
+
+    local shownBrightness = brightnessPreview or brightnessPct
+    table.insert(rows, ui.label({
+      text = `{noctalia.tr("ui.brightness-label")} — {shownBrightness}%`,
+      fontSize = 13,
+      color = "on_surface_variant",
+    }))
+    table.insert(rows, ui.slider({
+      min = 0,
+      max = 100,
+      step = 1,
+      value = shownBrightness,
+      enabled = not busy,
+      onChange = function(value)
+        brightnessPreview = math.floor(tonumber(value) or brightnessPct)
+        render()
+      end,
+      onDragEnd = function(value)
+        local target = math.floor(tonumber(value) or brightnessPct)
+        brightnessPreview = nil
+        if target == brightnessPct then
+          render()
+          return
+        end
+        busy = true
+        render()
+        noctalia.runAsync(
+          `pulsar-mouse --profile {profile} --brightness-percent {target}`,
+          function(result)
+            busy = false
+            if type(result) == "table" and result.exitCode == 0 then
+              brightnessPct = target
+              errorText = nil
+            else
+              errorText = noctalia.tr("ui.write-failed")
+            end
+            render()
+          end,
+          10000
+        )
+      end,
+    }))
+
+    if breathSpeedRelevant() then
+      local shownSpeed = breathSpeedPreview or breathSpeed
+      table.insert(rows, ui.label({
+        text = `{noctalia.tr("ui.speed-label")} — {shownSpeed}`,
+        fontSize = 13,
+        color = "on_surface_variant",
+      }))
+      table.insert(rows, ui.slider({
+        min = 0,
+        max = 100,
+        step = 1,
+        value = shownSpeed,
         enabled = not busy,
-        onClick = function()
-          local target = i
+        onChange = function(value)
+          breathSpeedPreview = math.floor(tonumber(value) or breathSpeed)
+          render()
+        end,
+        onDragEnd = function(value)
+          local target = math.floor(tonumber(value) or breathSpeed)
+          breathSpeedPreview = nil
+          if target == breathSpeed then
+            render()
+            return
+          end
           busy = true
           render()
           noctalia.runAsync(
-            `pulsar-mouse --profile {profile} --active-stage {target}`,
+            `pulsar-mouse --profile {profile} --breath-speed {target}`,
             function(result)
               busy = false
               if type(result) == "table" and result.exitCode == 0 then
-                dpiActive = target
+                breathSpeed = target
                 errorText = nil
               else
                 errorText = noctalia.tr("ui.write-failed")
@@ -68,27 +256,6 @@ local function render()
         end,
       }))
     end
-    table.insert(rows, ui.row({ gap = 6, wrap = true }, dpiButtons))
-  end
-
-  if #pollingRates > 0 then
-    table.insert(rows, ui.label({ text = noctalia.tr("ui.polling-label"), fontSize = 13, color = "on_surface_variant" }))
-
-    local pollOptions = {}
-    local pollSelectedIndex = 0
-    for i, hz in ipairs(pollingRates) do
-      table.insert(pollOptions, `{hz} Hz`)
-      if hz == pollingRate then
-        pollSelectedIndex = i - 1 -- ui.select is 0-indexed
-      end
-    end
-    table.insert(rows, ui.select({
-      key = "polling-rate",
-      options = pollOptions,
-      selectedIndex = pollSelectedIndex,
-      enabled = not busy,
-      onChange = "onPollChange",
-    }))
   end
 
   panel.render(ui.column({ gap = 10, padding = 16 }, rows))
@@ -119,6 +286,12 @@ local function readStatus()
       pollingRates = decoded.polling_rates or {}
       dpiActive = decoded.dpi.active
       dpiStages = decoded.dpi.stages or {}
+      if type(decoded.led) == "table" then
+        ledEffects = decoded.led.effects or {}
+        ledEffect = decoded.led.effect
+        brightnessPct = decoded.led.brightness_percent
+        breathSpeed = decoded.led.breath_speed
+      end
       render()
     end,
     10000
@@ -130,18 +303,18 @@ function onOpen(_context)
   readStatus()
 end
 
-function onPollChange(index, label)
+function onEffectChange(index, label)
   local optionIndex = tonumber(index)
-  if optionIndex == nil or pollingRates[optionIndex + 1] == nil then
+  if optionIndex == nil or ledEffects[optionIndex + 1] == nil then
     return
   end
-  local hz = pollingRates[optionIndex + 1]
+  local effect = ledEffects[optionIndex + 1]
   busy = true
   render()
-  noctalia.runAsync(`pulsar-mouse --poll {hz}`, function(result)
+  noctalia.runAsync(`pulsar-mouse --profile {profile} --led {effect}`, function(result)
     busy = false
     if type(result) == "table" and result.exitCode == 0 then
-      pollingRate = hz
+      ledEffect = effect
       errorText = nil
     else
       errorText = noctalia.tr("ui.write-failed")

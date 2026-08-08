@@ -295,6 +295,12 @@ class PulsarMouseApp(Adw.Application):
         self._win = None
         self._poll_items = {}
         self._tray_refresh_busy = False
+        # Last-known signal quality - see _set_conn_quality_label(). Unlike
+        # battery, there's no synchronous getter for this (it only ever
+        # arrives via async hidraw events), so it's carried into the state
+        # file write from whatever's most recently seen, possibly None if
+        # no event has arrived yet this session.
+        self._last_signal_percent = None
         self._device = None  # PulsarDevice instance
 
     def _find_or_create_device(self) -> PulsarDevice | None:
@@ -501,7 +507,12 @@ class PulsarMouseApp(Adw.Application):
         try:
             os.makedirs(os.path.dirname(self._BATTERY_STATE_PATH), exist_ok=True)
             with open(self._BATTERY_STATE_PATH, 'w') as f:
-                json.dump({**pwr, 'updated_at': time.time()}, f)
+                json.dump({
+                    'wireless': True,
+                    **pwr,
+                    'signal_percent': self._last_signal_percent,
+                    'updated_at': time.time(),
+                }, f)
         except OSError:
             pass  # cosmetic (external readers only) - never worth crashing over
         # Home page has no polling timer of its own - it shares this read
@@ -511,6 +522,7 @@ class PulsarMouseApp(Adw.Application):
             self._win._set_home_battery(pwr)
 
     def _set_conn_quality_label(self, pct):
+        self._last_signal_percent = pct
         self._conn_text = f'Signal: {pct}% ({_connection_quality_label(pct)})'
         if self._conn_item is not None:
             self._conn_item.property_set(Dbusmenu.MENUITEM_PROP_LABEL, self._conn_text)

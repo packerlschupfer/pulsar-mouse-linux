@@ -9,6 +9,15 @@
 -- needed - the file will never exist, so every tick reads live from the
 -- mouse instead.
 --
+-- Hides entirely (barWidget.setVisible(false)) for a wired mouse, which has
+-- no battery to report - --battery-json returns {"wireless": false} for
+-- those rather than an error, so this is a normal, not a failure, state.
+--
+-- Signal quality has no synchronous getter (see gui.py's own comment on
+-- this) - it only arrives via an async hidraw event the GUI listens for, so
+-- it's only ever available via the cached state file (when the GUI wrote
+-- one after seeing an event), never from the CLI fallback read.
+--
 -- Click opens the "controls" panel (panel.luau) for quick DPI/polling rate
 -- changes - that one always talks to the CLI directly, since neither of
 -- those live in battery.json and writes can't be cached anyway.
@@ -16,6 +25,7 @@
 --   barWidget.render(tree)      declarative UI tree
 --   barWidget.isVertical()      branch on bar orientation
 --   barWidget.setTooltip(text)  hover detail
+--   barWidget.setVisible(bool)  hide entirely for a wired mouse
 --   noctalia.readFile(path)     cheap path - reads the GUI's last reading
 --   noctalia.runAsync(cmd, cb)  fallback path - direct CLI read
 --   noctalia.json.decode(str)   both paths return JSON on stdout/in the file
@@ -24,8 +34,11 @@
 local STATE_PATH = "~/.cache/pulsar-mouse/battery.json"
 local STALE_AFTER = 180 -- seconds - 3x the GUI's own 60s poll interval
 
+local wireless = true -- assume true until a read says otherwise, so the
+                       -- widget doesn't flash hidden then visible on load
 local percent = nil
 local charging = false
+local signalPercent = nil
 local errorText = nil
 local checkingCli = false
 local isVertical = false
@@ -66,13 +79,22 @@ local function tooltipText()
   if percent == nil then
     return noctalia.tr("ui.no-mouse")
   end
+  local text = tostring(percent) .. "%"
   if charging then
-    return tostring(percent) .. "% " .. noctalia.tr("ui.charging")
+    text = text .. " " .. noctalia.tr("ui.charging")
   end
-  return tostring(percent) .. "%"
+  if signalPercent ~= nil then
+    text = text .. "  ·  " .. noctalia.tr("ui.signal-label") .. " " .. tostring(signalPercent) .. "%"
+  end
+  return text
 end
 
 local function render()
+  barWidget.setVisible(wireless)
+  if not wireless then
+    return
+  end
+
   local color = statusColor()
   local glyph = ui.glyph({ name = batteryGlyph(), size = glyphSize, color = color })
 
@@ -109,14 +131,28 @@ local function readViaCli()
       return
     end
     local decoded = noctalia.json.decode(result.stdout or "")
-    if type(decoded) ~= "table" or decoded.battery_percent == nil then
+    if type(decoded) ~= "table" then
       errorText = noctalia.tr("ui.no-mouse")
       render()
       return
     end
+    if decoded.wireless == false then
+      wireless = false
+      errorText = nil
+      render()
+      return
+    end
+    if decoded.battery_percent == nil then
+      errorText = noctalia.tr("ui.no-mouse")
+      render()
+      return
+    end
+    wireless = true
     errorText = nil
     percent = decoded.battery_percent
     charging = decoded.power_connected == true
+    -- Not available via this path - see header comment.
+    signalPercent = nil
     render()
   end, 10000)
 end
@@ -140,9 +176,11 @@ local function readState()
     return
   end
 
+  wireless = true
   errorText = nil
   percent = decoded.battery_percent
   charging = decoded.power_connected == true
+  signalPercent = decoded.signal_percent
   render()
 end
 
