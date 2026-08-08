@@ -193,8 +193,8 @@ Examples:
 
     # Per-profile settings
     pp = p.add_argument_group('per-profile settings (require --profile N)')
-    pp.add_argument('--lod', type=int, metavar='MM',
-                    help='Lift-off distance in mm')
+    pp.add_argument('--lod', type=float, metavar='MM',
+                    help='Lift-off distance in mm (some devices support 0.1mm steps)')
     pp.add_argument('--dpi', metavar='D1[,D2,...]',
                     help='Comma-separated DPI stage values')
     pp.add_argument('--active-stage', type=int, metavar='N',

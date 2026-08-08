@@ -15,6 +15,7 @@ The system-tray icon requires the GNOME AppIndicator extension:
 import sys
 import os
 import json
+import re
 import struct
 import threading
 import time
@@ -28,7 +29,11 @@ from gi.repository import Gtk, Adw, GLib, Gio, Gdk, Dbusmenu
 from pulsar_mouse import find_device, scan_devices, __version__
 from pulsar_mouse.base import PulsarDevice, DeviceCapabilities
 from pulsar_mouse.drivers import discover_all
-from pulsar_mouse.hid import describe_button
+from pulsar_mouse.hid import (
+    describe_button, parse_button_function,
+    MOUSE_ACTIONS, SCROLL_ACTIONS, DPI_ACTIONS, PROFILE_ACTIONS,
+    MEDIA_CODES, HID_MODS, HID_KEYS,
+)
 
 APP_ID = 'io.github.packerlschupfer.PulsarMouse'
 
@@ -56,6 +61,91 @@ def _connection_quality_label(pct):
     if pct >= 20:
         return 'Weak'
     return 'Poor'
+
+
+def _is_gnome_detected() -> bool:
+    """Whether GNOME is the running desktop - the org.gnome.desktop.
+    peripherals.mouse gsettings schema this app's OS-settings group reads/
+    writes only meaningfully affects cursor behaviour under GNOME (Mutter/
+    GNOME Shell), not other compositors like Hyprland/Sway, even though the
+    schema itself may still be technically settable elsewhere."""
+    desktop = (os.environ.get('XDG_CURRENT_DESKTOP', '') + ':' +
+              os.environ.get('DESKTOP_SESSION', '')).lower()
+    return 'gnome' in desktop
+
+
+def _is_hyprland_detected() -> bool:
+    """HYPRLAND_INSTANCE_SIGNATURE is set by Hyprland itself specifically
+    (unlike XDG_CURRENT_DESKTOP, which some other compositors also set to
+    misleading values) - it's the same variable hyprctl itself relies on
+    to find the right instance, so it's the most direct signal available."""
+    return bool(os.environ.get('HYPRLAND_INSTANCE_SIGNATURE'))
+
+
+def _is_kde_detected() -> bool:
+    """KDE_FULL_SESSION is set specifically by Plasma sessions; falls back
+    to XDG_CURRENT_DESKTOP for setups that only set that."""
+    if os.environ.get('KDE_FULL_SESSION'):
+        return True
+    desktop = os.environ.get('XDG_CURRENT_DESKTOP', '').lower()
+    return 'kde' in desktop or 'plasma' in desktop
+
+
+def _parse_svg_path(d: str) -> list[tuple]:
+    """Parse an SVG path 'd' string into Cairo-ready segments.
+
+    Only supports absolute M/L/C/Z commands with exactly one coordinate
+    set per command token (no implicit repeats, no relative m/l/c) -
+    that's the subset actual vector-editor exports (Illustrator/Figma/
+    Inkscape "Export As SVG") produce, and all InputTestDialog's traced
+    icon uses. Returns a list of ('move', x, y) / ('line', x, y) /
+    ('curve', x1,y1,x2,y2,x3,y3) / ('close',) tuples.
+    """
+    segments = []
+    for cmd, arg in re.findall(r'([MLCZ])([^MLCZ]*)', d):
+        nums = [float(n) for n in re.findall(r'-?\d+\.?\d*', arg)]
+        if cmd == 'M':
+            segments.append(('move', nums[0], nums[1]))
+        elif cmd == 'L':
+            segments.append(('line', nums[0], nums[1]))
+        elif cmd == 'C':
+            segments.append(('curve', *nums[:6]))
+        elif cmd == 'Z':
+            segments.append(('close',))
+    return segments
+
+
+def _svg_path_bbox(segments: list[tuple]) -> tuple[float, float, float, float]:
+    """(min_x, min_y, max_x, max_y) across every point in the segments,
+    including curve control points (not just endpoints) so a bulging
+    curve doesn't get clipped - slightly looser than the curve's true
+    tight bbox, which is fine for fitting a diagram into a widget."""
+    xs, ys = [], []
+    for seg in segments:
+        if seg[0] in ('move', 'line'):
+            xs.append(seg[1]); ys.append(seg[2])
+        elif seg[0] == 'curve':
+            xs += [seg[1], seg[3], seg[5]]
+            ys += [seg[2], seg[4], seg[6]]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _draw_svg_path(cr, segments: list[tuple], tx: float, ty: float,
+                    sx: float, sy: float):
+    """Replay parsed segments as Cairo calls, mapping each SVG-space
+    point (x,y) to widget-space via (x*sx+tx, y*sy+ty)."""
+    for seg in segments:
+        if seg[0] == 'move':
+            cr.move_to(seg[1] * sx + tx, seg[2] * sy + ty)
+        elif seg[0] == 'line':
+            cr.line_to(seg[1] * sx + tx, seg[2] * sy + ty)
+        elif seg[0] == 'curve':
+            cr.curve_to(seg[1] * sx + tx, seg[2] * sy + ty,
+                        seg[3] * sx + tx, seg[4] * sy + ty,
+                        seg[5] * sx + tx, seg[6] * sy + ty)
+        elif seg[0] == 'close':
+            cr.close_path()
+
 
 _SNI_XML = """
 <node>
@@ -228,10 +318,17 @@ class PulsarMouseApp(Adw.Application):
         # own comment on this) - it only ever arrives via async hidraw
         # events, so unlike Battery this item stays "—" until the first one
         # shows up rather than being read up front.
+        #
+        # Gated on get_power (not find_hidraw): find_hidraw has a base-class
+        # default (returns None) so hasattr() on it is true for every
+        # driver, wired or wireless - it doesn't actually indicate this
+        # device can report signal strength. get_power only exists on
+        # wireless drivers, and RF signal quality is meaningless for a
+        # wired connection anyway.
         self._conn_item = None
-        if hasattr(device, 'find_hidraw'):
+        if hasattr(device, 'get_power'):
             conn_item = Dbusmenu.Menuitem.new()
-            conn_item.property_set(Dbusmenu.MENUITEM_PROP_LABEL, 'Connection Quality: —')
+            conn_item.property_set(Dbusmenu.MENUITEM_PROP_LABEL, 'Signal: —')
             try:
                 conn_item.property_set_bool(Dbusmenu.MENUITEM_PROP_ENABLED, False)
             except Exception:
@@ -358,7 +455,7 @@ class PulsarMouseApp(Adw.Application):
         self._update_tray_tooltip()
 
     def _set_conn_quality_label(self, pct):
-        self._conn_text = f'Connection Quality: {pct}%  —  {_connection_quality_label(pct)}'
+        self._conn_text = f'Signal: {pct}% ({_connection_quality_label(pct)})'
         if self._conn_item is not None:
             self._conn_item.property_set(Dbusmenu.MENUITEM_PROP_LABEL, self._conn_text)
         self._update_tray_tooltip()
@@ -494,6 +591,7 @@ class MainWindow(Adw.ApplicationWindow):
         self._build_ui()
         GLib.idle_add(self._reload)
         GLib.idle_add(self._start_home_updates)
+        GLib.idle_add(self._refresh_firmware_version)
 
     def _build_ui(self):
         caps = self._caps
@@ -641,6 +739,12 @@ class MainWindow(Adw.ApplicationWindow):
         called once from __init__ after the window itself exists.
         """
         caps = self._caps
+        device = self._device
+        # get_power only exists on wireless drivers - unlike find_hidraw,
+        # which has a base-class default (returns None) that makes
+        # hasattr() on it true for every driver, wired or wireless.
+        is_wireless = hasattr(device, 'get_power')
+
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         box.set_valign(Gtk.Align.START)
         box.set_margin_top(48)
@@ -662,10 +766,23 @@ class MainWindow(Adw.ApplicationWindow):
         status_group.set_margin_top(24)
         box.append(status_group)
 
+        model_row = Adw.ActionRow()
+        model_row.set_title('Model')
+        model_row.set_subtitle(caps.name)
+        model_row.add_prefix(Gtk.Image.new_from_icon_name('input-mouse-symbolic'))
+        status_group.add(model_row)
+
+        self._firmware_row = Adw.ActionRow()
+        self._firmware_row.set_title('Firmware Version')
+        self._firmware_row.set_subtitle('—')
+        self._firmware_row.add_prefix(Gtk.Image.new_from_icon_name('application-x-firmware-symbolic'))
+        status_group.add(self._firmware_row)
+
         conn_row = Adw.ActionRow()
         conn_row.set_title('Connection')
-        conn_row.set_subtitle('Wireless')
-        conn_row.add_prefix(Gtk.Image.new_from_icon_name('network-wireless-symbolic'))
+        conn_row.set_subtitle('Wireless' if is_wireless else 'Wired')
+        conn_row.add_prefix(Gtk.Image.new_from_icon_name(
+            'network-wireless-symbolic' if is_wireless else 'network-wired-symbolic'))
         connected_label = Gtk.Label(label='Connected')
         connected_label.add_css_class('success')
         conn_row.add_suffix(connected_label)
@@ -676,33 +793,43 @@ class MainWindow(Adw.ApplicationWindow):
         # finishes) - not event-driven, since polling rate only ever
         # changes via this app, not something the device pushes on its own.
         self._home_mode_row = Adw.ActionRow()
-        self._home_mode_row.set_title('Wireless Mode')
+        self._home_mode_row.set_title('Polling Rate')
         self._home_mode_row.set_subtitle('—')
         self._home_mode_row.add_prefix(
             Gtk.Image.new_from_icon_name('network-wireless-symbolic'))
         status_group.add(self._home_mode_row)
 
-        # Always shown even though we can't know in advance whether this
-        # model actually pushes signal-quality events - it just stays
-        # "—" harmlessly if nothing ever arrives (see
-        # _home_hidraw_listener()).
-        self._home_signal_row = Adw.ActionRow()
-        self._home_signal_row.set_title('Connection Quality')
-        self._home_signal_row.set_subtitle('—')
-        self._home_signal_row.add_prefix(
-            Gtk.Image.new_from_icon_name('network-wireless-signal-good-symbolic'))
-        status_group.add(self._home_signal_row)
+        # DPI, kept in sync the same way as Polling Rate above:
+        # _populate_profile() (on reload) and _apply() (immediately on
+        # Apply, before the write even finishes).
+        self._home_dpi_row = Adw.ActionRow()
+        self._home_dpi_row.set_title('DPI')
+        self._home_dpi_row.set_subtitle('—')
+        self._home_dpi_row.add_prefix(
+            Gtk.Image.new_from_icon_name('zoom-in-symbolic'))
+        status_group.add(self._home_dpi_row)
 
-        device = self._device
-        if hasattr(device, 'get_power'):
+        # Battery and RF signal quality are both meaningless for a wired
+        # mouse, so both rows are gated on is_wireless (mirrored in the
+        # tray's _build_tray() for its own Battery/Connection Quality menu
+        # items).
+        self._home_signal_row = None
+        if is_wireless:
+            self._home_signal_row = Adw.ActionRow()
+            self._home_signal_row.set_title('Connection Quality')
+            self._home_signal_row.set_subtitle('—')
+            self._home_signal_row.add_prefix(
+                Gtk.Image.new_from_icon_name('network-wireless-signal-good-symbolic'))
+            status_group.add(self._home_signal_row)
+
+        self._home_battery_row = None
+        if is_wireless:
             self._home_battery_row = Adw.ActionRow()
             self._home_battery_row.set_title('Battery')
             self._home_battery_row.set_subtitle('—')
             self._home_battery_row.add_prefix(
                 Gtk.Image.new_from_icon_name('battery-good-symbolic'))
             status_group.add(self._home_battery_row)
-        else:
-            self._home_battery_row = None
 
         return box
 
@@ -715,10 +842,16 @@ class MainWindow(Adw.ApplicationWindow):
 
         self._poll_row = Adw.ComboRow()
         self._poll_row.set_title('Polling Rate')
-        self._poll_row.set_subtitle('Hz')
         self._poll_row.set_model(
             Gtk.StringList.new([f'{hz} Hz' for hz in caps.polling_rates])
         )
+        self._poll_row.set_tooltip_text(
+            '1000Hz: Balanced latency and battery life; stable on all PCs.\n'
+            '4000Hz / 8000Hz: Smooth tracking and lowest latency; drains '
+            'battery fast.\n\n'
+            'A high polling rate requires a high-end CPU to prevent '
+            'stutters. On Linux, 8000Hz may cause severe lag in non-native '
+            '(Proton/Wine) games.')
         global_group.add(self._poll_row)
 
         self._debounce_row = None
@@ -727,6 +860,12 @@ class MainWindow(Adw.ApplicationWindow):
             row, self._debounce_row = self._make_slider_row(
                 'Debounce', f'milliseconds ({lo} – {hi})', lo, hi, 1,
                 format_value=lambda v: f'{int(v)} ms')
+            row.set_tooltip_text(
+                'Adjusts the delay buffer (in ms) to prevent accidental '
+                'double-clicks or slam-clicks.\n\n'
+                'Lower (0-2ms): Fastest response time; best for Optical switches.\n'
+                'Higher (3-5ms+): Eliminates chatter or accidental clicks; '
+                'required for older Mechanical switches.')
             global_group.add(row)
 
         self._angle_row = None
@@ -734,6 +873,7 @@ class MainWindow(Adw.ApplicationWindow):
             self._angle_row = Adw.SwitchRow()
             self._angle_row.set_title('Angle Snap')
             self._angle_row.set_subtitle('Straightens cursor movement to horizontal/vertical lines')
+            self._angle_row.set_tooltip_text('May add latency, not recommended for gaming')
             global_group.add(self._angle_row)
 
         self._ripple_row = None
@@ -741,13 +881,18 @@ class MainWindow(Adw.ApplicationWindow):
             self._ripple_row = Adw.SwitchRow()
             self._ripple_row.set_title('Ripple Control')
             self._ripple_row.set_subtitle('Smooths out sensor jitter at low speeds')
+            self._ripple_row.set_tooltip_text('May add latency, not recommended for gaming')
             global_group.add(self._ripple_row)
 
         self._motion_row = None
         if caps.has_motion_sync:
             self._motion_row = Adw.SwitchRow()
             self._motion_row.set_title('Motion Sync')
-            self._motion_row.set_subtitle('Synchronises sensor data with USB polling interval')
+            self._motion_row.set_subtitle('Synchronises sensor reads with USB polling (Recommended)')
+            self._motion_row.set_tooltip_text(
+                'Great for tracking smoothness at 1000Hz, but should be '
+                'disabled if you run at 8K polling rate to guarantee the '
+                'lowest possible latency')
             global_group.add(self._motion_row)
 
         # LOD lives here (not on the Customize tab with the rest of
@@ -757,7 +902,18 @@ class MainWindow(Adw.ApplicationWindow):
         tracking_group.set_title('Tracking')
 
         self._lod_row = None
-        if caps.lod_values:
+        if caps.lod_values and caps.lod_step:
+            lo, hi = caps.lod_values[0], caps.lod_values[-1]
+            row, self._lod_row = self._make_slider_row(
+                'Lift-off Distance', 'Height at which tracking stops when lifting the mouse',
+                lo, hi, caps.lod_step, format_value=lambda v: f'{v:.1f} mm')
+            row.set_tooltip_text(
+                'Lower (0.7-1.0mm): Prevents unwanted cursor drift when '
+                'resetting your mouse; ideal for low-sensitivity gaming.\n\n'
+                'Higher (1.5-2.0mm): Prevents sensor skipping on textured '
+                'pads or when using thick aftermarket skates.')
+            tracking_group.add(row)
+        elif caps.lod_values:
             self._lod_row = Adw.ComboRow()
             self._lod_row.set_title('Lift-off Distance')
             self._lod_row.set_subtitle('Height at which tracking stops when lifting the mouse')
@@ -800,7 +956,217 @@ class MainWindow(Adw.ApplicationWindow):
         if caps.lod_values:
             groups.append(tracking_group)
         groups.append(dpi_group)
+
+        self._accel_row = None
+        self._speed_row = None
+        if _is_gnome_detected():
+            os_group = Adw.PreferencesGroup()
+            os_group.set_title('Desktop Mouse Settings')
+            os_group.set_description('System-wide GNOME settings (affects all mice)')
+
+            self._accel_row = Adw.ComboRow()
+            self._accel_row.set_title('Acceleration Profile')
+            self._accel_row.set_subtitle('Use "Flat" for raw input (recommended for gaming)')
+            self._accel_row.set_model(Gtk.StringList.new(['Flat (raw)', 'Adaptive (default)']))
+            os_group.add(self._accel_row)
+
+            adj_speed = Gtk.Adjustment(lower=-1.0, upper=1.0, step_increment=0.05,
+                                       page_increment=0.1)
+            self._speed_row = Adw.SpinRow(adjustment=adj_speed, digits=2)
+            self._speed_row.set_title('Pointer Speed')
+            self._speed_row.set_subtitle('Multiplier from -1.0 (slow) to 1.0 (fast), 0 = no change')
+            os_group.add(self._speed_row)
+
+            speed_apply = Adw.ButtonRow()
+            speed_apply.set_title('Apply Desktop Settings')
+            speed_apply.connect('activated', self._on_os_apply)
+            os_group.add(speed_apply)
+
+            groups.append(os_group)
+            self._load_os_settings()
+
+        self._hypr_accel_row = None
+        self._hypr_speed_row = None
+        if _is_hyprland_detected():
+            hypr_group = Adw.PreferencesGroup()
+            hypr_group.set_title('Hyprland Mouse Settings')
+
+            self._hypr_accel_row = Adw.ComboRow()
+            self._hypr_accel_row.set_title('Acceleration Profile')
+            self._hypr_accel_row.set_subtitle('Use "Flat" for raw input (recommended for gaming)')
+            self._hypr_accel_row.set_model(Gtk.StringList.new(['Flat (raw)', 'Adaptive (default)']))
+            hypr_group.add(self._hypr_accel_row)
+
+            adj_hypr_speed = Gtk.Adjustment(lower=-1.0, upper=1.0, step_increment=0.05,
+                                            page_increment=0.1)
+            self._hypr_speed_row = Adw.SpinRow(adjustment=adj_hypr_speed, digits=2)
+            self._hypr_speed_row.set_title('Sensitivity')
+            self._hypr_speed_row.set_subtitle('Multiplier from -1.0 (slow) to 1.0 (fast), 0 = no change')
+            hypr_group.add(self._hypr_speed_row)
+
+            hypr_apply = Adw.ButtonRow()
+            hypr_apply.set_title('Apply Hyprland Settings')
+            hypr_apply.set_tooltip_text(
+                f'Applied live via hyprctl, and written to {self._HYPR_CONF_PATH} '
+                'so it persists - add "source = ~/.config/hypr/'
+                'pulsar-mouse-input.conf" to your hyprland.conf once so it '
+                'takes effect on restart too')
+            hypr_apply.connect('activated', self._on_hypr_apply)
+            hypr_group.add(hypr_apply)
+
+            groups.append(hypr_group)
+            self._load_hypr_settings()
+
+        self._kde_accel_row = None
+        self._kde_speed_row = None
+        if _is_kde_detected():
+            kde_group = Adw.PreferencesGroup()
+            kde_group.set_title('KDE Plasma Mouse Settings')
+            kde_group.set_description(
+                'Written to kcminputrc - persists across restarts, but '
+                'requires kwriteconfig5/6 to be installed')
+
+            self._kde_accel_row = Adw.ComboRow()
+            self._kde_accel_row.set_title('Acceleration Profile')
+            self._kde_accel_row.set_subtitle('Use "Flat" for raw input (recommended for gaming)')
+            self._kde_accel_row.set_model(Gtk.StringList.new(['Flat (raw)', 'Adaptive (default)']))
+            kde_group.add(self._kde_accel_row)
+
+            adj_kde_speed = Gtk.Adjustment(lower=-1.0, upper=1.0, step_increment=0.05,
+                                           page_increment=0.1)
+            self._kde_speed_row = Adw.SpinRow(adjustment=adj_kde_speed, digits=2)
+            self._kde_speed_row.set_title('Pointer Acceleration')
+            self._kde_speed_row.set_subtitle('Multiplier from -1.0 (slow) to 1.0 (fast), 0 = no change')
+            kde_group.add(self._kde_speed_row)
+
+            kde_apply = Adw.ButtonRow()
+            kde_apply.set_title('Apply KDE Settings')
+            kde_apply.connect('activated', self._on_kde_apply)
+            kde_group.add(kde_apply)
+
+            groups.append(kde_group)
+            self._load_kde_settings()
+
         return self._wrap_page(*groups)
+
+    def _load_os_settings(self):
+        import subprocess
+        try:
+            accel = subprocess.check_output(
+                ['gsettings', 'get', 'org.gnome.desktop.peripherals.mouse', 'accel-profile'],
+                text=True).strip().strip("'")
+            speed = subprocess.check_output(
+                ['gsettings', 'get', 'org.gnome.desktop.peripherals.mouse', 'speed'],
+                text=True).strip()
+            self._building = True
+            self._accel_row.set_selected(0 if accel == 'flat' else 1)
+            self._speed_row.set_value(float(speed))
+            self._building = False
+        except Exception:
+            pass
+
+    def _on_os_apply(self, _row):
+        import subprocess
+        accel = 'flat' if self._accel_row.get_selected() == 0 else 'adaptive'
+        speed = self._speed_row.get_value()
+        try:
+            subprocess.run(['gsettings', 'set', 'org.gnome.desktop.peripherals.mouse',
+                            'accel-profile', accel], check=True)
+            subprocess.run(['gsettings', 'set', 'org.gnome.desktop.peripherals.mouse',
+                            'speed', str(speed)], check=True)
+            self._show_toast('Desktop settings applied')
+        except Exception as e:
+            self._show_error(f'Could not apply desktop settings: {e}')
+
+    # Dedicated snippet file rather than editing hyprland.conf directly -
+    # that file's structure varies too much per user (multiple `input {}`
+    # blocks, source-split configs, comments) to safely locate-and-patch
+    # without risking corrupting something we don't understand. Requires a
+    # one-time `source = ~/.config/hypr/pulsar-mouse-input.conf` line in
+    # the user's own hyprland.conf, same pattern many other Hyprland addon
+    # tools use for the same reason.
+    _HYPR_CONF_PATH = os.path.expanduser('~/.config/hypr/pulsar-mouse-input.conf')
+
+    def _load_hypr_settings(self):
+        import subprocess, json
+        try:
+            accel_raw = json.loads(subprocess.check_output(
+                ['hyprctl', 'getoption', 'input:accel_profile', '-j'], text=True))
+            speed_raw = json.loads(subprocess.check_output(
+                ['hyprctl', 'getoption', 'input:sensitivity', '-j'], text=True))
+            accel = accel_raw.get('str', 'adaptive')
+            speed = speed_raw.get('float', 0.0)
+            self._building = True
+            self._hypr_accel_row.set_selected(0 if accel == 'flat' else 1)
+            self._hypr_speed_row.set_value(speed)
+            self._building = False
+        except Exception:
+            pass
+
+    def _on_hypr_apply(self, _row):
+        import subprocess
+        accel = 'flat' if self._hypr_accel_row.get_selected() == 0 else 'adaptive'
+        speed = self._hypr_speed_row.get_value()
+        try:
+            # Live effect, immediately - runtime-only, hence also writing
+            # the snippet file below for the setting to survive a restart.
+            subprocess.run(['hyprctl', 'keyword', 'input:accel_profile', accel], check=True)
+            subprocess.run(['hyprctl', 'keyword', 'input:sensitivity', f'{speed:.6f}'], check=True)
+            with open(self._HYPR_CONF_PATH, 'w') as f:
+                f.write(
+                    'input {\n'
+                    f'    sensitivity = {speed:.6f}    # Range: -1.0 to 1.0 (0 = default)\n'
+                    f'    accel_profile = {accel} # Optional: removes mouse acceleration ("flat" or "adaptive")\n'
+                    '}\n'
+                )
+            self._show_toast('Hyprland settings applied')
+        except Exception as e:
+            self._show_error(f'Could not apply Hyprland settings: {e}')
+
+    def _load_kde_settings(self):
+        import subprocess, shutil
+        reader = shutil.which('kreadconfig6') or shutil.which('kreadconfig5')
+        if reader is None:
+            return
+        try:
+            flat = subprocess.check_output(
+                [reader, '--file', 'kcminputrc', '--group', 'Mouse',
+                 '--key', 'XLbInptAccelProfileFlat', '--default', 'false'],
+                text=True).strip()
+            speed = subprocess.check_output(
+                [reader, '--file', 'kcminputrc', '--group', 'Mouse',
+                 '--key', 'XLbInptPointerAcceleration', '--default', '0.0'],
+                text=True).strip()
+            self._building = True
+            self._kde_accel_row.set_selected(0 if flat == 'true' else 1)
+            self._kde_speed_row.set_value(float(speed))
+            self._building = False
+        except Exception:
+            pass
+
+    def _on_kde_apply(self, _row):
+        import subprocess, shutil
+        writer = shutil.which('kwriteconfig6') or shutil.which('kwriteconfig5')
+        if writer is None:
+            self._show_error('kwriteconfig5/6 not found - cannot write KDE settings')
+            return
+        flat = 'true' if self._kde_accel_row.get_selected() == 0 else 'false'
+        speed = self._kde_speed_row.get_value()
+        try:
+            subprocess.run([writer, '--file', 'kcminputrc', '--group', 'Mouse',
+                            '--key', 'XLbInptAccelProfileFlat', flat], check=True)
+            subprocess.run([writer, '--file', 'kcminputrc', '--group', 'Mouse',
+                            '--key', 'XLbInptPointerAcceleration', str(speed)], check=True)
+            # Best-effort live reload - harmless no-op if kwin isn't the
+            # compositor or the dbus call isn't available; the config file
+            # write above is what actually matters for persistence.
+            for qdbus in ('qdbus6', 'qdbus'):
+                if shutil.which(qdbus):
+                    subprocess.run([qdbus, 'org.kde.KWin', '/KWin', 'reconfigure'])
+                    break
+            self._show_toast('KDE settings applied')
+        except Exception as e:
+            self._show_error(f'Could not apply KDE settings: {e}')
 
     def _build_customize_page(self):
         caps = self._caps
@@ -815,7 +1181,7 @@ class MainWindow(Adw.ApplicationWindow):
         self._bright_row = None
         if caps.has_led:
             row, self._bright_row = self._make_slider_row(
-                'LED Brightness', '0% – 100%', 0, 100, 5,
+                'LED Brightness', '', 0, 100, 5,
                 format_value=lambda v: f'{int(v)}%')
             led_group.add(row)
 
@@ -841,12 +1207,13 @@ class MainWindow(Adw.ApplicationWindow):
             self._breath_row_container, self._breath_row = self._make_slider_row(
                 'Pulse Speed', '', lo, hi, 1,
                 marks=[(lo, 'Slow'), (hi, 'Fast')])
+            self._breath_row.set_draw_value(False)
             self._breath_row_container.set_visible(False)
             led_group.add(self._breath_row_container)
 
         btn_group = Adw.PreferencesGroup()
         btn_group.set_title('Button Bindings')
-        btn_group.set_description('Use the CLI (--button) to remap buttons')
+        btn_group.set_description('Click a button to remap it')
 
         self._btn_rows = {}
         for btn_name, btn_id in caps.buttons.items():
@@ -854,6 +1221,9 @@ class MainWindow(Adw.ApplicationWindow):
             label = caps.button_labels.get(btn_name, btn_name.capitalize())
             row.set_title(label)
             row.set_subtitle('–')
+            row.set_activatable(True)
+            row.add_suffix(Gtk.Image.new_from_icon_name('go-next-symbolic'))
+            row.connect('activated', self._on_button_row_activated, btn_id, label)
             btn_group.add(row)
             self._btn_rows[btn_id] = row
 
@@ -946,15 +1316,15 @@ X-GNOME-Autostart-enabled=true
                 row, self._power_saving_row = self._make_slider_row(
                     'Wireless Power Saving',
                     'Inactivity before the mouse sleeps (30 sec – 15 min)',
-                    30, 900, 30,
+                    30, 900, 30, snap=True,
                     format_value=lambda v: f'{int(v) // 60}:{int(v) % 60:02d}')
                 power_group.add(row)
 
             if hasattr(device, 'set_low_power_threshold'):
                 row, self._low_power_row = self._make_slider_row(
                     'Low Power Mode',
-                    'Battery percentage that triggers low power mode (0 – 100)',
-                    0, 100, 5)
+                    'Battery percentage that triggers low power mode',
+                    0, 100, 5, snap=True)
                 power_group.add(row)
 
             groups.append(power_group)
@@ -1006,9 +1376,33 @@ X-GNOME-Autostart-enabled=true
         charging = '  (charging)' if pwr['power_connected'] else ''
         self._home_battery_row.set_subtitle(f'{pct}%{charging}')
 
-    def _home_hidraw_listener(self):
+    def _refresh_firmware_version(self):
         device = self._device
-        if device is None or not hasattr(device, 'find_hidraw'):
+        if device is None or self._firmware_row is None:
+            return
+
+        def _read():
+            try:
+                with _USB_LOCK:
+                    device.open()
+                    try:
+                        fw = device.get_firmware_version()
+                    finally:
+                        device.close()
+                if fw != 'unknown':
+                    GLib.idle_add(self._firmware_row.set_subtitle, fw)
+            except Exception:
+                pass
+        threading.Thread(target=_read, daemon=True).start()
+
+    def _home_hidraw_listener(self):
+        # Only ever acts on signal_percent events (unlike the tray's own
+        # _hidraw_listener, which also handles DPI) - gated on get_power,
+        # not find_hidraw, for the same reason as _home_signal_row's
+        # construction above: find_hidraw's base-class default makes
+        # hasattr() on it true for every driver, wired or wireless.
+        device = self._device
+        if device is None or self._home_signal_row is None:
             return
         path = device.find_hidraw()
         if not path:
@@ -1035,10 +1429,12 @@ X-GNOME-Autostart-enabled=true
             os.close(fd)
 
     def _set_home_signal(self, pct):
+        if self._home_signal_row is None:
+            return
         self._home_signal_row.set_subtitle(f'{pct}%  —  {_connection_quality_label(pct)}')
 
     def _make_slider_row(self, title, subtitle, lo, hi, step,
-                         format_value=None, marks=None):
+                         format_value=None, marks=None, snap=False):
         """An Adw.ActionRow with a real Gtk.Scale slider as its suffix,
         rather than a SpinRow's +/- stepper. Gtk.Scale (a Gtk.Range
         subclass) already has the same get_value()/set_value() API a
@@ -1051,7 +1447,11 @@ X-GNOME-Autostart-enabled=true
         `marks`, if given, is a list of (value, label) endpoint captions
         drawn below the trough (e.g. [(0, 'Slow'), (100, 'Fast')]) -
         these are direction cues alongside the numeric readout, not a
-        replacement for it.
+        replacement for it. `snap`, if True, rounds the value to the
+        nearest multiple of `step` (relative to `lo`) as the user drags -
+        step_increment on its own only affects keyboard/scroll-wheel
+        nudges, not mouse-drag positioning, which GtkRange otherwise
+        computes continuously from pointer position.
         """
         row = Adw.ActionRow()
         row.set_title(title)
@@ -1064,6 +1464,21 @@ X-GNOME-Autostart-enabled=true
         scale.set_size_request(180, -1)
         for mark_value, label in (marks or []):
             scale.add_mark(mark_value, Gtk.PositionType.BOTTOM, label)
+        if snap:
+            def _snap(s, _step=step, _lo=lo):
+                # Skip while populating from a real device read (see
+                # _populate_global()'s self._building guard) - the stored
+                # value on real hardware isn't guaranteed to already be a
+                # step multiple (seen e.g. 297s power-saving, not a
+                # multiple of 30), and snapping it here would silently
+                # change what the next Apply writes back to the device
+                # without the user ever touching this slider.
+                if self._building:
+                    return
+                snapped = _lo + round((s.get_value() - _lo) / _step) * _step
+                if snapped != s.get_value():
+                    s.set_value(snapped)
+            scale.connect('value-changed', _snap)
         if format_value is not None:
             # GtkScale's own "format-value" is a C-only vfunc, not
             # connectable as a signal in this GI binding (raises
@@ -1089,6 +1504,26 @@ X-GNOME-Autostart-enabled=true
     def _on_test_clicked(self, _row):
         dialog = InputTestDialog(transient_for=self, device=self._device)
         dialog.present()
+
+    def _on_button_row_activated(self, _row, btn_id, label):
+        current = self._btn_rows[btn_id].get_subtitle()
+        dialog = RemapButtonDialog(
+            transient_for=self, btn_label=label, current_spec=current,
+            on_applied=lambda t, a1, a2: self._run_bg(
+                lambda: self._do_remap_button(btn_id, t, a1, a2)))
+        dialog.present()
+
+    def _do_remap_button(self, btn_id, btn_type, a1, a2):
+        if not self._open_dev():
+            return
+        try:
+            self._device.set_button(btn_id, btn_type, a1, a2, self._profile)
+            t, ra1, ra2 = self._device.get_button(btn_id, self._profile)
+            GLib.idle_add(self._btn_rows[btn_id].set_subtitle, describe_button(t, ra1, ra2))
+            GLib.idle_add(self._show_toast, 'Button remapped')
+        except Exception as e:
+            GLib.idle_add(self._show_error, f'Remap error: {e}')
+        self._close_dev()
 
     def _on_profile_changed(self, combo, _param):
         if self._building:
@@ -1236,6 +1671,8 @@ X-GNOME-Autostart-enabled=true
         }
         if self._home_mode_row is not None:
             self._home_mode_row.set_subtitle(f"{s['poll_hz']} Hz")
+        if self._home_dpi_row is not None:
+            self._home_dpi_row.set_subtitle(f"{s['dpi_values'][s['active'] - 1]} DPI")
         if self._debounce_row:
             s['debounce'] = int(self._debounce_row.get_value())
         if self._angle_row:
@@ -1249,7 +1686,10 @@ X-GNOME-Autostart-enabled=true
         if self._low_power_row:
             s['low_power'] = int(self._low_power_row.get_value())
         if self._lod_row:
-            s['lod'] = caps.lod_values[self._lod_row.get_selected()]
+            if caps.lod_step:
+                s['lod'] = round(self._lod_row.get_value(), 1)
+            else:
+                s['lod'] = caps.lod_values[self._lod_row.get_selected()]
         if self._bright_row:
             lo, hi = caps.brightness_range
             pct = self._bright_row.get_value()
@@ -1478,11 +1918,14 @@ X-GNOME-Autostart-enabled=true
         caps = self._caps
         self._building = True
         if self._lod_row and lod is not None:
-            try:
-                lod_idx = caps.lod_values.index(lod)
-            except ValueError:
-                lod_idx = 0
-            self._lod_row.set_selected(lod_idx)
+            if caps.lod_step:
+                self._lod_row.set_value(lod)
+            else:
+                try:
+                    lod_idx = caps.lod_values.index(lod)
+                except ValueError:
+                    lod_idx = 0
+                self._lod_row.set_selected(lod_idx)
         if self._bright_row and brightness is not None:
             lo, hi = caps.brightness_range
             pct = round((brightness - lo) / (hi - lo) * 100) if hi > lo else 0
@@ -1506,6 +1949,8 @@ X-GNOME-Autostart-enabled=true
         for i, row in enumerate(self._dpi_rows):
             row.set_value(stages[i][0] if i < len(stages) else 800)
             row.set_sensitive(i < num)
+        if self._home_dpi_row is not None and 1 <= active <= len(stages):
+            self._home_dpi_row.set_subtitle(f'{stages[active - 1][0]} DPI')
 
         if self._color_buttons and colors:
             for i, btn in enumerate(self._color_buttons):
@@ -1531,6 +1976,190 @@ X-GNOME-Autostart-enabled=true
         self._toast_overlay.add_toast(toast)
 
 
+class RemapButtonDialog(Adw.Window):
+    """Dialog for remapping a single mouse button via category + preset
+    dropdowns, rather than typing a raw --button spec string like the CLI.
+    Builds the same spec strings parse_button_function() already accepts
+    (e.g. 'left', 'dpi+', 'ctrl+c') from the selected dropdowns/checkboxes,
+    so it reuses all of hid.py's existing parsing/validation instead of
+    duplicating it.
+    """
+
+    _CATEGORIES = ['Mouse Click', 'Scroll', 'DPI', 'Profile Switch',
+                   'Media Key', 'Keyboard Shortcut', 'Disabled']
+    _MOD_NAMES = ['ctrl', 'shift', 'alt', 'super']
+
+    def __init__(self, btn_label: str, current_spec: str, on_applied, **kwargs):
+        super().__init__(**kwargs, title=f'Remap {btn_label}',
+                         default_width=360, default_height=-1)
+        self.set_modal(True)
+        self._on_applied = on_applied
+
+        toolbar = Adw.ToolbarView()
+        self.set_content(toolbar)
+        toolbar.add_top_bar(Adw.HeaderBar())
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        box.set_margin_top(16)
+        box.set_margin_bottom(16)
+        box.set_margin_start(16)
+        box.set_margin_end(16)
+        toolbar.set_content(box)
+
+        group = Adw.PreferencesGroup()
+        box.append(group)
+
+        self._category_row = Adw.ComboRow()
+        self._category_row.set_title('Function')
+        self._category_row.set_model(Gtk.StringList.new(self._CATEGORIES))
+        self._category_row.connect('notify::selected', self._on_category_changed)
+        group.add(self._category_row)
+
+        self._sub_row = Adw.ComboRow()
+        self._sub_row.set_title('Action')
+        group.add(self._sub_row)
+
+        self._mod_row = Adw.ActionRow()
+        self._mod_row.set_title('Modifiers')
+        mod_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self._mod_checks = {}
+        for name in self._MOD_NAMES:
+            cb = Gtk.CheckButton(label=name.capitalize())
+            mod_box.append(cb)
+            self._mod_checks[name] = cb
+        self._mod_row.add_suffix(mod_box)
+        group.add(self._mod_row)
+
+        self._error_label = Gtk.Label()
+        self._error_label.add_css_class('error')
+        self._error_label.set_wrap(True)
+        self._error_label.set_visible(False)
+        box.append(self._error_label)
+
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8,
+                          halign=Gtk.Align.END)
+        cancel_btn = Gtk.Button(label='Cancel')
+        cancel_btn.connect('clicked', lambda _: self.close())
+        set_btn = Gtk.Button(label='Set')
+        set_btn.add_css_class('suggested-action')
+        set_btn.connect('clicked', self._on_set_clicked)
+        btn_box.append(cancel_btn)
+        btn_box.append(set_btn)
+        box.append(btn_box)
+
+        self._preselect(current_spec)
+
+    def _category_options(self, cat: str):
+        return {
+            'Mouse Click': list(MOUSE_ACTIONS),
+            'Scroll': list(SCROLL_ACTIONS),
+            'DPI': list(DPI_ACTIONS),
+            'Profile Switch': list(PROFILE_ACTIONS),
+            'Media Key': list(MEDIA_CODES),
+            'Keyboard Shortcut': sorted(HID_KEYS),
+        }.get(cat, [])
+
+    def _on_category_changed(self, *_args):
+        self._update_visible_rows()
+
+    def _update_visible_rows(self):
+        # Only reached via _on_category_changed() (the user picking a
+        # different category), never during __init__ - _preselect() below
+        # already fully owns initial model/visibility/selection, and
+        # rebuilding the model here would reset that selection back to 0.
+        cat = self._CATEGORIES[self._category_row.get_selected()]
+        if cat == 'Disabled':
+            self._sub_row.set_visible(False)
+            self._mod_row.set_visible(False)
+            return
+        self._sub_row.set_visible(True)
+        self._sub_row.set_title('Key' if cat == 'Keyboard Shortcut' else 'Action')
+        options = self._category_options(cat)
+        self._sub_row.set_model(Gtk.StringList.new([o.capitalize() for o in options]))
+        self._mod_row.set_visible(cat == 'Keyboard Shortcut')
+
+    def _preselect(self, spec: str):
+        spec = (spec or '').strip().lower()
+        if not spec or spec == '–' or spec == 'disabled':
+            self._category_row.set_selected(self._CATEGORIES.index('Disabled'))
+            self._sub_row.set_visible(False)
+            self._mod_row.set_visible(False)
+            return
+        if spec in MOUSE_ACTIONS:
+            self._select(spec, 'Mouse Click', list(MOUSE_ACTIONS))
+            return
+        if spec in SCROLL_ACTIONS:
+            self._select(spec, 'Scroll', list(SCROLL_ACTIONS))
+            return
+        if spec in DPI_ACTIONS:
+            self._select(spec, 'DPI', list(DPI_ACTIONS))
+            return
+        if spec in PROFILE_ACTIONS:
+            self._select(spec, 'Profile Switch', list(PROFILE_ACTIONS))
+            return
+        if spec in MEDIA_CODES:
+            self._select(spec, 'Media Key', list(MEDIA_CODES))
+            return
+        # Keyboard shortcut: mod+mod+key, every part a known modifier/key -
+        # same vocabulary check parse_button_function() itself uses.
+        parts = spec.split('+')
+        mods = [p for p in parts if p in HID_MODS]
+        keys = [p for p in parts if p in HID_KEYS]
+        if keys and len(mods) + len(keys) == len(parts):
+            self._category_row.set_selected(self._CATEGORIES.index('Keyboard Shortcut'))
+            self._sub_row.set_model(Gtk.StringList.new([k.capitalize() for k in sorted(HID_KEYS)]))
+            self._sub_row.set_title('Key')
+            self._sub_row.set_visible(True)
+            self._mod_row.set_visible(True)
+            try:
+                self._sub_row.set_selected(sorted(HID_KEYS).index(keys[0]))
+            except ValueError:
+                pass
+            for name, cb in self._mod_checks.items():
+                cb.set_active(name in mods or (name == 'super' and 'gui' in mods))
+            return
+        # Unrecognised (raw hex fallback from describe_button(), or a type
+        # this dialog doesn't model) - default to Mouse Click/Left rather
+        # than guessing further.
+        self._select('left', 'Mouse Click', list(MOUSE_ACTIONS))
+
+    def _select(self, value, category, options):
+        self._category_row.set_selected(self._CATEGORIES.index(category))
+        self._sub_row.set_model(Gtk.StringList.new([o.capitalize() for o in options]))
+        self._sub_row.set_title('Action')
+        self._sub_row.set_visible(True)
+        self._mod_row.set_visible(False)
+        try:
+            self._sub_row.set_selected(options.index(value))
+        except ValueError:
+            pass
+
+    def _build_spec(self) -> str:
+        cat = self._CATEGORIES[self._category_row.get_selected()]
+        if cat == 'Disabled':
+            return 'disabled'
+        options = self._category_options(cat)
+        idx = self._sub_row.get_selected()
+        if idx == Gtk.INVALID_LIST_POSITION or idx >= len(options):
+            raise ValueError('Choose an action')
+        value = options[idx]
+        if cat == 'Keyboard Shortcut':
+            mods = [name for name, cb in self._mod_checks.items() if cb.get_active()]
+            return '+'.join(mods + [value])
+        return value
+
+    def _on_set_clicked(self, _btn):
+        try:
+            spec = self._build_spec()
+            t, a1, a2 = parse_button_function(spec)
+        except ValueError as e:
+            self._error_label.set_label(str(e))
+            self._error_label.set_visible(True)
+            return
+        self.close()
+        self._on_applied(t, a1, a2)
+
+
 class InputTestDialog(Adw.Window):
     """Input test dialog with a mouse diagram and event log."""
 
@@ -1544,10 +2173,143 @@ class InputTestDialog(Adw.Window):
     _GTK_BTN_NAMES = {1: 'Left', 2: 'Middle', 3: 'Right',
                        8: 'Back (both sides)', 9: 'Forward (both sides)'}
 
+    # User-provided top-down mouse artwork (single fill path, 800x800
+    # source canvas) - drawn via _draw_svg_path() rather than hand-
+    # transcribed into Cairo calls, since hand-copying ~50 curve segments
+    # into Python literals is exactly the kind of thing that silently
+    # introduces a typo'd control point. Parsed once at class-definition
+    # time (see _ICON_SEGMENTS/_ICON_BBOX below), not per-frame.
+    _ICON_PATH_D = (
+        "M 499.50 455.52 C487.38,457.50 478.28,456.98 464.89,453.55 "
+        "C458.21,451.84 443.77,445.39 438.99,441.99 L 436.00 439.86 "
+        "L 436.00 425.31 C436.00,399.22 430.99,375.90 415.97,332.05 "
+        "C410.98,317.50 407.04,304.45 407.20,303.05 "
+        "C407.46,300.82 408.82,299.97 418.07,296.27 "
+        "C453.93,281.91 494.45,279.18 532.60,288.55 "
+        "C548.28,292.40 566.86,299.35 568.48,301.97 "
+        "C568.82,302.52 564.16,317.93 558.12,336.23 "
+        "C543.08,381.85 539.02,400.93 539.01,426.08 L 539.01 426.71 "
+        "C539.00,434.75 539.00,438.52 537.25,441.08 "
+        "C535.65,443.41 532.62,444.74 526.83,447.38 "
+        "C517.15,451.79 510.82,453.68 499.50,455.52 "
+        "ZM 570.52 292.96 C569.75,294.21 568.99,294.23 567.00,293.06 "
+        "C564.01,291.30 541.30,283.84 533.15,281.93 "
+        "C522.61,279.46 506.36,277.00 500.57,277.00 "
+        "C498.13,277.00 494.98,276.56 493.57,276.02 "
+        "C491.17,275.11 491.00,274.61 491.00,268.45 "
+        "C491.00,262.51 491.27,261.63 493.67,259.67 "
+        "C500.58,254.04 503.85,250.19 504.88,246.48 "
+        "C506.21,241.70 506.33,211.12 505.04,205.58 "
+        "C503.92,200.74 501.36,197.19 496.91,194.27 "
+        "C494.40,192.62 492.96,191.71 492.13,190.41 "
+        "C491.00,188.64 491.00,186.16 491.00,180.15 L 491.00 179.58 "
+        "C491.00,166.32 491.04,166.29 502.78,167.91 "
+        "C528.36,171.43 549.81,180.74 559.44,192.49 "
+        "C570.50,205.99 575.77,228.77 574.69,258.50 "
+        "C574.15,273.22 572.07,290.46 570.52,292.96 "
+        "ZM 417.34 289.47 C405.40,294.41 405.37,294.41 404.63,292.48 "
+        "C402.52,286.97 400.80,263.37 401.28,246.50 "
+        "C401.86,225.84 404.20,214.47 410.32,202.43 "
+        "C417.66,187.97 433.04,177.37 455.00,171.64 "
+        "C467.62,168.34 481.82,166.42 483.23,167.83 "
+        "C483.82,168.42 484.33,173.54 484.39,179.56 "
+        "C484.49,189.64 484.37,190.32 482.18,191.86 "
+        "C470.04,200.42 470.00,200.54 470.00,226.30 "
+        "C470.00,250.69 470.18,251.31 478.98,257.50 "
+        "C482.66,260.08 483.62,261.42 484.32,264.96 "
+        "C484.79,267.33 484.90,270.74 484.56,272.53 "
+        "C483.87,276.22 482.21,276.97 474.63,276.99 "
+        "C461.10,277.02 432.24,283.31 417.34,289.47 "
+        "ZM 555.06 427.34 L 554.65 427.77 "
+        "C550.42,432.24 548.26,434.52 547.15,434.09 "
+        "C546.00,433.64 546.00,430.23 546.00,423.27 L 546.00 422.63 "
+        "C546.00,404.04 550.80,379.12 559.70,351.50 "
+        "C565.22,334.36 566.76,332.00 572.47,332.00 "
+        "C575.40,332.00 575.58,332.54 577.58,346.74 "
+        "C582.20,379.64 574.63,406.71 555.06,427.34 "
+        "ZM 429.90 424.46 C429.85,427.78 429.48,431.62 429.10,433.00 "
+        "C428.42,435.41 428.14,435.24 420.95,427.94 "
+        "C409.17,415.98 401.85,401.49 398.43,383.34 "
+        "C396.51,373.14 396.95,348.86 399.24,338.50 "
+        "C400.43,333.15 400.86,332.47 403.24,332.19 "
+        "C408.06,331.62 409.58,333.44 413.37,344.22 "
+        "C423.01,371.71 430.20,406.59 429.90,424.46 "
+        "ZM 495.75 249.48 C490.47,255.09 483.56,254.83 478.51,248.83 "
+        "L 475.86 245.68 L 476.18 225.26 L 476.50 204.84 L 480.24 201.42 "
+        "C485.92,196.22 493.20,197.00 497.00,203.23 "
+        "C498.81,206.21 498.99,208.27 499.00,226.26 L 499.00 246.03 "
+        "ZM 406.00 324.18 C406.00,325.52 401.74,325.07 398.26,323.36 "
+        "C393.76,321.14 391.31,316.68 388.59,305.82 "
+        "C384.50,289.48 384.48,289.15 387.69,287.93 "
+        "C389.23,287.34 391.91,287.14 393.66,287.46 "
+        "C396.79,288.05 396.89,288.26 399.06,297.78 "
+        "C400.27,303.13 402.33,311.07 403.63,315.43 "
+        "C404.94,319.79 406.00,323.72 406.00,324.18 "
+        "ZM 578.91 322.22 C577.56,323.23 574.79,324.32 572.76,324.65 "
+        "L 569.07 325.25 L 570.12 321.88 "
+        "C570.69,320.02 572.87,311.75 574.94,303.50 L 578.73 288.50 "
+        "L 590.29 287.89 L 589.66 293.20 "
+        "C588.13,306.22 583.46,318.82 578.91,322.22 "
+        "ZM 394.68 280.22 C393.12,281.21 389.04,281.09 386.25,279.97 "
+        "C384.08,279.10 384.00,278.61 384.02,266.28 "
+        "C384.05,252.08 385.81,245.75 390.21,244.11 "
+        "C393.37,242.93 393.96,244.23 394.02,252.50 "
+        "C394.05,256.35 394.47,263.99 394.96,269.49 "
+        "C395.62,276.89 395.55,279.67 394.68,280.22 "
+        "ZM 590.24 279.35 C588.52,280.42 582.41,280.98 581.20,280.18 "
+        "C580.15,279.48 580.12,275.99 581.07,261.41 "
+        "C581.71,251.56 582.37,243.35 582.53,243.17 "
+        "C583.31,242.30 587.31,245.47 589.05,248.31 "
+        "C590.72,251.06 590.99,253.40 591.00,265.19 "
+        "C591.00,272.72 590.66,279.09 590.24,279.35 Z"
+    )
+
+    # Approximate centroids (in the icon's own 800x800 source space) of
+    # each interactive zone, eyeballed from the traced artwork's own
+    # sub-shapes (left/right click paddles at the top, the small oval
+    # between them for the wheel, the two side bars for thumb buttons).
+    # Used to position highlight rings on _draw() clicks/scroll/DPI events
+    # - the artwork itself doesn't carry this semantic info, so this is
+    # our own mapping on top of it, not something derived from the SVG.
+    # Centroids taken directly from each of the icon's own 10 subpaths
+    # (computed with _svg_path_bbox() per-subpath, not eyeballed) so
+    # every highlight actually lands on the shape it's meant to indicate.
+    _ICON_ZONES = {
+        1: (443, 230),        # left click paddle (subpath 2)
+        3: (533, 230),        # right click paddle (subpath 1)
+        2: (487, 226),        # wheel (subpath 5)
+        'scroll_up': (487, 183),    # above the wheel, not on top of it
+        'scroll_down': (487, 269),  # below the wheel
+        'dpi': (487, 182),
+        # GTK's back(8)/forward(9) codes don't say which physical side
+        # was pressed - the OS can't tell, since both sides of a
+        # symmetric thumb pair report the same code (see _GTK_BTN_NAMES'
+        # "both sides" labels). So unlike the zones above, 8/9 aren't
+        # looked up directly here - _draw() lights up every caps.buttons
+        # thumb name whose *default* binding matches that direction
+        # (thumb1/thumb3 = front = forward, thumb2/thumb4 = back, per
+        # each driver's own comments). Forward sits on the small thumb-
+        # click bar (subpaths 8/9); back sits lower, on the larger grip
+        # panel beneath it (subpaths 4/3) - two visually distinct shapes
+        # in the artwork, not one bar sharing both meanings.
+        'thumb1': (390, 262),   # left, front/forward (subpath 8)
+        'thumb2': (395, 306),   # left, back (subpath 6 - between the thumb
+                                 # bar and the larger lower panel, not the
+                                 # panel itself)
+        'thumb3': (586, 262),   # right, front/forward (subpath 9)
+        'thumb4': (580, 307),   # right, back (subpath 7, same as above)
+    }
+
+    # Parsed once at class-definition time, not per-frame - _draw() runs
+    # on every pointer move over the diagram.
+    _ICON_SEGMENTS = _parse_svg_path(_ICON_PATH_D)
+    _ICON_BBOX = _svg_path_bbox(_ICON_SEGMENTS)
+
     def __init__(self, device: PulsarDevice | None = None, **kwargs):
         super().__init__(**kwargs, title='Input Test', default_width=380, default_height=520)
         self.set_modal(True)
         self._device = device
+        self._buttons = device.capabilities.buttons if device else {}
 
         self._left_handed = False
         try:
@@ -1706,156 +2468,63 @@ class InputTestDialog(Adw.Window):
         cr.paint()
 
         mx, my, mw, mh = w * 0.15, h * 0.02, w * 0.7, h * 0.92
-        cx = mx + mw / 2
-        cr.set_source_rgb(0.30, 0.30, 0.33)
-        self._body_path(cr, mx, my, mw, mh, cx)
-        cr.fill()
+        bx0, by0, bx1, by1 = self._ICON_BBOX
+        sx = mw / (bx1 - bx0)
+        sy = mh / (by1 - by0)
+        tx = mx - bx0 * sx
+        ty = my - by0 * sy
 
-        # Left/right click zones - drawn as persistent visible buttons
-        # (like the thumb buttons below), not just a highlight that only
-        # appears while clicked, so they read as obvious click targets.
-        # Clipped to the body outline so they follow the domed shell
-        # shape (rounded top corners etc.) instead of overflowing it as
-        # plain rectangles - rects below are sized to overshoot the body
-        # edges slightly and let the clip do the rounding. Drawn before
-        # the scroll wheel/divider so those render on top, like they
-        # physically sit above the button housings.
-        cr.save()
-        self._body_path(cr, mx, my, mw, mh, cx)
-        cr.clip()
-        lr_buttons = {1: 'L', 3: 'R'}
-        lr_zones = {
-            1: (mx, my, mw * 0.49, mh * 0.36),
-            3: (mx + mw * 0.51, my, mw * 0.49, mh * 0.36),
-        }
-        for btn_id, label in lr_buttons.items():
-            zx, zy, zw, zh = lr_zones[btn_id]
-            if self._active_btn == btn_id:
-                cr.set_source_rgb(0.3, 0.7, 1.0)
-            else:
-                cr.set_source_rgb(0.40, 0.40, 0.44)
-            self._rounded_rect(cr, zx, zy, zw, zh, 10)
-            cr.fill()
-            cr.set_source_rgb(0.9, 0.9, 0.9)
-            cr.set_font_size(12)
-            ext = cr.text_extents(label)
-            cr.move_to(zx + zw / 2 - ext.width / 2, zy + zh * 0.55)
-            cr.show_text(label)
-        cr.restore()
-
-        cr.set_source_rgb(0.20, 0.20, 0.22)
-        cr.set_line_width(2)
-        cr.move_to(w * 0.5, my)
-        cr.line_to(w * 0.5, my + mh * 0.40)
-        cr.stroke()
-
-        ww, wh = mw * 0.18, mh * 0.18
-        wx = w * 0.5 - ww / 2
-        wy = my + mh * 0.08
-        is_scroll = isinstance(self._active_btn, str) and self._active_btn.startswith('scroll')
-        if is_scroll or self._active_btn == 2:
-            cr.set_source_rgb(0.3, 0.7, 1.0)
+        # Which zone(s) should glow. Most active states (including
+        # 'scroll_up'/'scroll_down', which have their own positions above
+        # and below the wheel rather than sharing its dot) map to exactly
+        # one; GTK's back(8)/forward(9) can map to two (a 4-thumb-button
+        # device like the X2A has a front+back pair on each side, and the
+        # OS can't say which side was pressed - see _ICON_ZONES' comment)
+        # or one (the FO1's thumb1/thumb2, both on the left).
+        active = self._active_btn
+        if active == 9:
+            positions = [self._ICON_ZONES[n] for n in ('thumb1', 'thumb3')
+                        if n in self._buttons]
+        elif active == 8:
+            positions = [self._ICON_ZONES[n] for n in ('thumb2', 'thumb4')
+                        if n in self._buttons]
+        elif active in self._ICON_ZONES:
+            positions = [self._ICON_ZONES[active]]
         else:
-            cr.set_source_rgb(0.45, 0.45, 0.50)
-        self._rounded_rect(cr, wx, wy, ww, wh, ww * 0.3)
+            positions = []
+
+        cr.set_source_rgb(0.55, 0.55, 0.58)
+        _draw_svg_path(cr, self._ICON_SEGMENTS, tx, ty, sx, sy)
         cr.fill()
 
-        if self._active_btn == 'scroll_up':
-            cr.set_source_rgb(1, 1, 1)
-            cr.move_to(wx + ww / 2, wy + 3)
-            cr.line_to(wx + ww / 2 - 4, wy + wh / 2)
-            cr.line_to(wx + ww / 2 + 4, wy + wh / 2)
-            cr.close_path()
-            cr.fill()
-        elif self._active_btn == 'scroll_down':
-            cr.set_source_rgb(1, 1, 1)
-            cr.move_to(wx + ww / 2, wy + wh - 3)
-            cr.line_to(wx + ww / 2 - 4, wy + wh / 2)
-            cr.line_to(wx + ww / 2 + 4, wy + wh / 2)
-            cr.close_path()
+        # Glow drawn on top of the icon, not behind it - the left/right
+        # click zones sit under solid opaque paddle shapes in the traced
+        # artwork, so a glow drawn first would be completely covered
+        # there (only visible over thin/outline areas like the wheel or
+        # thumb bars). Translucent so the linework still shows through.
+        r = 15 * min(sx, sy)
+        for zx, zy in positions:
+            gcx, gcy = zx * sx + tx, zy * sy + ty
+            cr.set_source_rgba(0.3, 0.7, 1.0, 0.65)
+            cr.arc(gcx, gcy, r, 0, 2 * math.pi)
             cr.fill()
 
-        thumb_buttons = [
-            ('left',  0.38, 'FWD',  9),
-            ('left',  0.52, 'BACK', 8),
-        ]
-        for side, ty, label, btn_id in thumb_buttons:
-            if side == 'left':
-                bx = mx - mw * 0.08
-            else:
-                bx = mx + mw * 0.90
-            by = my + mh * ty
-            bw = mw * 0.18
-            bh = mh * 0.10
-            if self._active_btn == btn_id:
-                cr.set_source_rgb(0.3, 0.7, 1.0)
-            else:
-                cr.set_source_rgb(0.40, 0.40, 0.44)
-            self._rounded_rect(cr, bx, by, bw, bh, 4)
-            cr.fill()
-            cr.set_source_rgb(0.9, 0.9, 0.9)
-            cr.set_font_size(9)
-            ext = cr.text_extents(label)
-            cr.move_to(bx + bw / 2 - ext.width / 2, by + bh / 2 + ext.height / 2)
-            cr.show_text(label)
-
-        dx, dy = mx + mw * 0.22, my + mh * 0.45
-        dr = 7 if self._active_btn == 'dpi' else 5
-        if self._active_btn == 'dpi':
-            cr.set_source_rgb(0.3, 0.7, 1.0)
-        else:
-            cr.set_source_rgb(0.50, 0.50, 0.55)
-        cr.arc(dx, dy, dr, 0, 2 * math.pi)
-        cr.fill()
-        cr.set_source_rgb(0.9, 0.9, 0.9) if self._active_btn == 'dpi' else cr.set_source_rgb(0.7, 0.7, 0.7)
-        cr.set_font_size(8)
-        ext = cr.text_extents('DPI')
-        cr.move_to(dx - ext.width / 2, dy + dr + ext.height + 2)
-        cr.show_text('DPI')
-
-    @staticmethod
-    def _body_path(cr, mx, my, mw, mh, cx):
-        """Traces the mouse body silhouette without filling it - shared
-        by the body fill and the L/R button clip so both use the exact
-        same outline (see _draw())."""
-        cr.new_path()
-        cr.move_to(cx, my)
-        cr.curve_to(mx + mw * 0.80, my,
-                    mx + mw * 0.94, my + mh * 0.04,
-                    mx + mw * 0.94, my + mh * 0.12)
-        cr.curve_to(mx + mw * 0.94, my + mh * 0.30,
-                    mx + mw * 0.90, my + mh * 0.40,
-                    mx + mw * 0.90, my + mh * 0.50)
-        cr.curve_to(mx + mw * 0.90, my + mh * 0.62,
-                    mx + mw * 0.93, my + mh * 0.72,
-                    mx + mw * 0.92, my + mh * 0.82)
-        cr.curve_to(mx + mw * 0.91, my + mh * 0.92,
-                    mx + mw * 0.75, my + mh,
-                    cx, my + mh)
-        cr.curve_to(mx + mw * 0.25, my + mh,
-                    mx + mw * 0.09, my + mh * 0.92,
-                    mx + mw * 0.08, my + mh * 0.82)
-        cr.curve_to(mx + mw * 0.07, my + mh * 0.72,
-                    mx + mw * 0.10, my + mh * 0.62,
-                    mx + mw * 0.10, my + mh * 0.50)
-        cr.curve_to(mx + mw * 0.10, my + mh * 0.40,
-                    mx + mw * 0.06, my + mh * 0.30,
-                    mx + mw * 0.06, my + mh * 0.12)
-        cr.curve_to(mx + mw * 0.06, my + mh * 0.04,
-                    mx + mw * 0.20, my,
-                    cx, my)
-        cr.close_path()
-
-    @staticmethod
-    def _rounded_rect(cr, x, y, w, h, r):
-        import math
-        r = min(r, w / 2, h / 2)
-        cr.new_path()
-        cr.arc(x + r, y + r, r, math.pi, 1.5 * math.pi)
-        cr.arc(x + w - r, y + r, r, 1.5 * math.pi, 2 * math.pi)
-        cr.arc(x + w - r, y + h - r, r, 0, 0.5 * math.pi)
-        cr.arc(x + r, y + h - r, r, 0.5 * math.pi, math.pi)
-        cr.close_path()
+            # Scroll direction arrow, drawn on top of the wheel's glow -
+            # a plain wheel click and a scroll are otherwise the same dot.
+            if active == 'scroll_up':
+                cr.set_source_rgb(1, 1, 1)
+                cr.move_to(gcx, gcy - r * 0.5)
+                cr.line_to(gcx - r * 0.45, gcy + r * 0.3)
+                cr.line_to(gcx + r * 0.45, gcy + r * 0.3)
+                cr.close_path()
+                cr.fill()
+            elif active == 'scroll_down':
+                cr.set_source_rgb(1, 1, 1)
+                cr.move_to(gcx, gcy + r * 0.5)
+                cr.line_to(gcx - r * 0.45, gcy - r * 0.3)
+                cr.line_to(gcx + r * 0.45, gcy - r * 0.3)
+                cr.close_path()
+                cr.fill()
 
 
 def main():

@@ -6,3 +6,4 @@ build/
 *.deb
 pulsar-x2a-linux_*_*/
 pulsar-mouse-linux_*_*/
+result

@@ -27,7 +27,13 @@ class DeviceCapabilities:
 
     buttons: dict[str, int]                     # name -> button_id
     polling_rates: list[int]                    # [125, 250, 500, 1000]
-    lod_values: list[int]                       # [1, 2] in mm
+    lod_values: list[int]                       # [1, 2] in mm - or [lo, hi]
+                                                 # bounds when lod_step is set
+    # Set only on devices confirmed (via capture/live probe) to support
+    # sub-1mm LOD steps - lod_values is then just [lo, hi] and the GUI
+    # renders a slider instead of the discrete-choice dropdown every other
+    # driver uses. None (default) preserves the dropdown for everyone else.
+    lod_step: Optional[float] = None
 
     has_led: bool               = True
     led_effects: list[str]      = field(default_factory=lambda: ['off', 'steady', 'breath'])
@@ -135,10 +141,10 @@ class PulsarDevice(ABC):
 
     # ── Per-profile optional settings ─────────────────────────────────────
 
-    def get_lod(self, profile: int) -> int:
+    def get_lod(self, profile: int) -> float:
         raise NotImplementedError
 
-    def set_lod(self, mm: int, profile: int) -> None:
+    def set_lod(self, mm: float, profile: int) -> None:
         raise NotImplementedError
 
     def get_brightness(self, profile: int) -> int:

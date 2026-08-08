@@ -154,12 +154,13 @@ class PulsarFeinmann8K(PulsarDevice):
         # 'breath'. list(dict) preserves LED_NAME_TO_VAL's insertion order,
         # so this always matches that dict's keys.
         led_effects=list(LED_NAME_TO_VAL),
-        # Confirmed 2026-08-07: on-wire protocol actually supports 0.1mm
-        # steps (captured 0.7/1.0/2.0mm all as raw byte = mm*10), but the
-        # shared int-only set_lod()/--lod CLI interface only exposes whole
-        # mm - listing the two values every other model in this codebase
-        # supports until the API is extended to carry finer precision.
-        lod_values=[1, 2],
+        # Confirmed 2026-08-07: on-wire protocol supports 0.1mm steps
+        # (captured 0.7/1.0/2.0mm all as raw byte = mm*10). 0.7-2.0mm is
+        # this model's full range (per spec/Fusion) - lod_values holds the
+        # [lo, hi] bounds rather than a discrete list since lod_step is
+        # set, telling the GUI to render a slider instead of a dropdown.
+        lod_values=[0.7, 2.0],
+        lod_step=0.1,
         button_labels={
             'left': 'Left Click', 'right': 'Right Click', 'wheel': 'Wheel Click',
             'thumb1': 'Thumb 1 (forward)', 'thumb2': 'Thumb 2 (back)',
@@ -531,25 +532,26 @@ class PulsarFeinmann8K(PulsarDevice):
         # writing new DPI values for a stage was never captured.
         raise NotImplementedError
 
-    def get_lod(self, profile: int) -> int:
+    def get_lod(self, profile: int) -> float:
         # cat=0x07/reg=0x82(=0x02|0x80)/sub=0x03 - reply byte[8] is raw =
         # mm*10, same encoding as the write (see set_lod below). Confirmed
         # 2026-08-07 via Windows capture: read back 20 (2.0mm). Rounded to
-        # whole mm since the public API is int-only (see set_lod).
+        # 1 decimal (not a whole mm) since 2026-08-08: this model's real
+        # range is 0.7-2.0mm in 0.1mm steps, per lod_values/lod_step above.
         resp = self._query_ctrl(0x07, 0x02, 0x03, profile)
-        return round(resp[8] / 10)
+        return round(resp[8] / 10, 1)
 
-    def set_lod(self, mm: int, profile: int) -> None:
+    def set_lod(self, mm: float, profile: int) -> None:
         # Captured 2026-08-07: dragging the LOD slider 0.7mm -> 1.0mm ->
         # 2.0mm -> 0.7mm in Fusion produced cat=0x07/reg=0x02/sub=0x03,
         # payload=[0x02, raw] where raw = mm*10 (0.7mm->7, 1.0mm->10,
-        # 2.0mm->20) - the device clearly supports 0.1mm steps, but the
-        # set_lod()/--lod interface here is int-only like every other
-        # driver in this codebase, so only whole-mm values are reachable
-        # through this method for now.
-        if mm not in self.capabilities.lod_values:
-            raise ValueError(f"LOD must be one of {self.capabilities.lod_values}")
-        self._cmd(0x07, 0x02, 0x03, profile, [0x02, mm * 10])
+        # 2.0mm->20) - live-verified 2026-08-08 across the full 0.7-2.0mm
+        # range. round() on the payload byte absorbs float imprecision
+        # (0.7 * 10 == 7.000000000000001 in Python).
+        lo, hi = self.capabilities.lod_values[0], self.capabilities.lod_values[-1]
+        if not lo - 1e-9 <= mm <= hi + 1e-9:
+            raise ValueError(f"LOD must be between {lo} and {hi} mm")
+        self._cmd(0x07, 0x02, 0x03, profile, [0x02, round(mm * 10)])
 
     # ── Per-profile: LED ─────────────────────────────────────────────────────
 
