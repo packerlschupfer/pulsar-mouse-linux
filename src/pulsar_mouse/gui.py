@@ -63,6 +63,24 @@ def _connection_quality_label(pct):
     return 'Poor'
 
 
+def _battery_icon_name(pct, charging):
+    # Standard freedesktop/Adwaita battery icon levels - each has a
+    # "-charging-" variant the icon theme provides, so charging just
+    # inserts that segment rather than needing a separate icon set.
+    if pct >= 90:
+        level = 'full'
+    elif pct >= 60:
+        level = 'good'
+    elif pct >= 30:
+        level = 'low'
+    elif pct >= 15:
+        level = 'caution'
+    else:
+        level = 'empty'
+    charging_part = '-charging' if charging else ''
+    return f'battery-{level}{charging_part}-symbolic'
+
+
 def _is_gnome_detected() -> bool:
     """Whether GNOME is the running desktop - the org.gnome.desktop.
     peripherals.mouse gsettings schema this app's OS-settings group reads/
@@ -828,12 +846,13 @@ class MainWindow(Adw.ApplicationWindow):
             status_group.add(self._home_signal_row)
 
         self._home_battery_row = None
+        self._home_battery_icon = None
         if is_wireless:
             self._home_battery_row = Adw.ActionRow()
             self._home_battery_row.set_title('Battery')
             self._home_battery_row.set_subtitle('—')
-            self._home_battery_row.add_prefix(
-                Gtk.Image.new_from_icon_name('battery-good-symbolic'))
+            self._home_battery_icon = Gtk.Image.new_from_icon_name('battery-good-symbolic')
+            self._home_battery_row.add_prefix(self._home_battery_icon)
             status_group.add(self._home_battery_row)
 
         return box
@@ -1378,8 +1397,11 @@ X-GNOME-Autostart-enabled=true
         if self._home_battery_row is None:
             return
         pct = pwr['battery_percent']
-        charging = '  (charging)' if pwr['power_connected'] else ''
-        self._home_battery_row.set_subtitle(f'{pct}%{charging}')
+        charging = pwr['power_connected']
+        label = '  (charging)' if charging else ''
+        self._home_battery_row.set_subtitle(f'{pct}%{label}')
+        if self._home_battery_icon is not None:
+            self._home_battery_icon.set_from_icon_name(_battery_icon_name(pct, charging))
 
     def _refresh_firmware_version(self):
         device = self._device
