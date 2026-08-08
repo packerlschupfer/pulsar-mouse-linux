@@ -12,6 +12,13 @@
 -- supported values (not a raw DPI/Hz range), so every position lands on
 -- an actual valid value - equivalent to a slider with a notch per option.
 --
+-- Root is a ui.scroll, not a ui.column - the panel surface already insets
+-- its own content (Style::panelPadding on the host side), so an outer
+-- `padding` prop here would double up on that, and scrolling is a safety
+-- net against the fixed panel height (declared in plugin.toml) not fitting
+-- every combination of rows (the speed slider alone changes content height
+-- depending on which LED effect is selected).
+--
 --   panel.render(tree)          declarative UI tree
 --   panel.close()                close the panel surface
 --   noctalia.runAsync(cmd, cb)  CLI read/write
@@ -61,7 +68,7 @@ local function render()
 
   if not loaded and errorText == nil then
     table.insert(rows, ui.label({ text = noctalia.tr("ui.loading"), color = "outline" }))
-    panel.render(ui.column({ gap = 10, padding = 16 }, rows))
+    panel.render(ui.scroll({ flexGrow = 1, gap = 10 }, rows))
     return
   end
 
@@ -258,7 +265,7 @@ local function render()
     end
   end
 
-  panel.render(ui.column({ gap = 10, padding = 16 }, rows))
+  panel.render(ui.scroll({ flexGrow = 1, gap = 10 }, rows))
 end
 
 local function readStatus()
