@@ -7,7 +7,7 @@
 Linux configuration tool for **Pulsar gaming mice**.
 
 Plugin architecture — each mouse model has its own protocol driver.
-Currently supports the **Pulsar X2A Medium Wired**, **Pulsar X2H Wired Medium**, **Pulsar X2A Wireless**, and **Pulsar Feinmann 8K / FO1**.
+Currently supports the **Pulsar Xlite Wired**, **Pulsar X2 Wired**, **Pulsar X2H Wired Medium**, **Pulsar X2A Medium Wired**, **Pulsar Xlite v4**, **Pulsar Feinmann 8K / FO1**, and **Pulsar X2A Wireless / X2 V2 Mini** — see [Supported Mice](#supported-mice) below.
 
 Reverse-engineered from USB HID captures of Pulsar Fusion on Windows 11.
 Wireless (Nordic) protocol based on [python-pulsar-mouse-tool](https://github.com/andrewrabert/python-pulsar-mouse-tool) by andrewrabert.
@@ -40,11 +40,13 @@ Wireless (Nordic) protocol based on [python-pulsar-mouse-tool](https://github.co
 
 | Model | Driver | VID:PID | Status |
 |---|---|---|---|
-| Pulsar X2A Medium Wired | `x2a` | `3710:1404` | Fully supported |
+| Pulsar Xlite Wired | `xlite_wired` | `3710:1401` | Supported (Sonix, 50 DPI step) |
+| Pulsar X2 Wired | `x2_wired` | `3710:1402` | Supported (Sonix) |
 | Pulsar X2H Wired Medium | `x2h` | `3710:1403` | Fully supported |
-| Pulsar Xlite v4 | `xlite_v4` | `3710:3401` | Untested (same Sonix protocol as X2A) |
+| Pulsar X2A Medium Wired | `x2a` | `3710:1404` | Fully supported |
+| Pulsar Xlite v4 | `xlite_v4` | `3710:3401` | Untested (same Sonix protocol) |
+| Pulsar Feinmann 8K / FO1 | `feinmann8k` | `3710:5404` | Fully supported (wireless dongle, 8K Hz polling, 6 onboard profiles) |
 | Pulsar X2A Wireless / X2 V2 Mini | `nordic` | `3554:f507` `3554:f508` | Supported (Nordic chipset, battery status) |
-| Pulsar Feinmann 8K / FO1 | `feinmann8k` | `3710:5404` | Fully supported (6 onboard profiles, wireless) |
 
 Want to add support for your mouse? See [Adding a new driver](#adding-a-new-driver) below.
 

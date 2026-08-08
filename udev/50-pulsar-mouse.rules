@@ -11,6 +11,14 @@
 #   sudo udevadm control --reload-rules && sudo udevadm trigger
 #   (then re-plug the mouse or reboot)
 
+# Pulsar Xlite Wired (VID 0x3710, PID 0x1401)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="1401", MODE="0660", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="1401", MODE="0660", TAG+="uaccess"
+
+# Pulsar X2 Wired (VID 0x3710, PID 0x1402)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="1402", MODE="0660", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="1402", MODE="0660", TAG+="uaccess"
+
 # Pulsar X2A Medium Wired (VID 0x3710, PID 0x1404)
 SUBSYSTEM=="usb", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="1404", MODE="0660", TAG+="uaccess"
 KERNEL=="hidraw*", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="1404", MODE="0660", TAG+="uaccess"
