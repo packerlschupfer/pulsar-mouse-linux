@@ -313,31 +313,43 @@ class PulsarMouseApp(Adw.Application):
         return self._device
 
     def _on_activate(self, app):
-        wins = self.get_windows()
-        if wins:
-            wins[0].present()
+        # Always present self._win if it's still alive, otherwise construct
+        # a fresh MainWindow - never try to re-show a *hidden* one. A
+        # hidden-not-destroyed GtkWindow can't be reliably re-mapped as a
+        # real compositor surface on this Wayland/Hyprland + GTK4 combo
+        # (present(), even preceded by set_visible(True), silently does
+        # nothing - live-verified both ways failing), so MainWindow no
+        # longer hides on close, it really closes/destroys - this is the
+        # one code path (fresh construction + present()) that's always
+        # worked reliably, used both for the true first launch and every
+        # reactivation after. _build_tray() only runs once (gated on
+        # self._sni), even though this whole branch re-runs on every
+        # reactivation after the window's been closed - the tray/SNI
+        # service must stay the same one for the app's lifetime.
+        if self._win is not None and not self._win.in_destruction():
+            self._win.present()
             return
         device = self._find_or_create_device()
         win = MainWindow(application=app, device=device)
         win.present()
         self._win = win
-        if device:
-            self._build_tray(win, device)
+        if device and self._sni is None:
+            self._build_tray(device)
         self.hold()
 
     # ── System-tray ──────────────────────────────────────────────────────────
 
-    def _build_tray(self, win: 'MainWindow', device: PulsarDevice):
+    def _build_tray(self, device: PulsarDevice):
         caps = device.capabilities
         sni = _StatusNotifierItem('pulsar-mouse', 'input-mouse', caps.name)
-        sni.set_on_activate(win.present)
+        sni.set_on_activate(lambda: self.activate())
         self._sni = sni
 
         root = Dbusmenu.Menuitem.new()
 
         item_open = Dbusmenu.Menuitem.new()
         item_open.property_set(Dbusmenu.MENUITEM_PROP_LABEL, 'Open Settings')
-        item_open.connect('item-activated', lambda _i, _t: win.present())
+        item_open.connect('item-activated', lambda _i, _t: self.activate())
         root.child_append(item_open)
 
         self._battery_text = None
@@ -730,13 +742,38 @@ class MainWindow(Adw.ApplicationWindow):
         self.set_title(self._caps.name if self._caps else 'Pulsar Mouse')
         self.set_default_size(560, 740)
         self.set_icon_name('input-mouse')
-        self.set_hide_on_close(True)
+        # Not set_hide_on_close(True) - a hidden-not-destroyed GtkWindow
+        # can't be reliably re-shown later (present(), even preceded by
+        # set_visible(True), does not re-map it as a real compositor
+        # surface on this Wayland/Hyprland + GTK4 combo - live-verified
+        # both ways failing, see PulsarMouseApp._on_activate for the
+        # actual fix: always construct a fresh MainWindow instead of
+        # trying to revive a hidden one, since that's the one path
+        # that's always worked reliably). Closing this window really
+        # destroys it - PulsarMouseApp.hold() keeps the app itself alive
+        # regardless, so the tray survives.
         self._profile = 1
         self._building = False
+        self._home_hidraw_fd = None
+        self.connect('destroy', self._on_destroy)
 
         self._build_ui()
         GLib.idle_add(self._reload)
         GLib.idle_add(self._start_home_updates)
+
+    def _on_destroy(self, _win):
+        # Unblocks _home_hidraw_listener's os.read() so that thread exits
+        # instead of leaking forever - it has no other connection to this
+        # window's lifetime (see _start_home_updates's docstring for why
+        # it's a separate listener from the tray's). Guarded since it may
+        # already be closed (listener's own `finally: os.close(fd)` can
+        # race this on a genuine device disconnect).
+        if self._home_hidraw_fd is not None:
+            try:
+                os.close(self._home_hidraw_fd)
+            except OSError:
+                pass
+            self._home_hidraw_fd = None
         GLib.idle_add(self._refresh_firmware_version)
 
     def _build_ui(self):
@@ -1577,6 +1614,7 @@ X-GNOME-Autostart-enabled=true
             fd = os.open(path, os.O_RDONLY)
         except OSError:
             return
+        self._home_hidraw_fd = fd
         last_update = 0.0
         try:
             while True:
@@ -1592,7 +1630,15 @@ X-GNOME-Autostart-enabled=true
         except OSError:
             pass
         finally:
-            os.close(fd)
+            # Guarded: _on_destroy may have already closed this fd to
+            # unblock the os.read() above (that's the intended shutdown
+            # path, not just a stray double-close).
+            if self._home_hidraw_fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                self._home_hidraw_fd = None
 
     def _set_home_signal(self, pct):
         if self._home_signal_row is None:
