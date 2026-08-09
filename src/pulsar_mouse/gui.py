@@ -37,6 +37,9 @@ from pulsar_mouse.hid import (
 )
 
 APP_ID = 'io.github.packerlschupfer.PulsarMouse'
+# Display name of the application itself, as distinct from caps.name (the
+# connected mouse's model). Used for the Home tab's heading under the logo.
+APP_NAME = 'Pulsar Mouse Linux'
 
 # Serialises all USB open/close operations so the tray and window don't collide.
 _USB_LOCK = threading.Lock()
@@ -1001,7 +1004,11 @@ class MainWindow(Adw.ApplicationWindow):
         icon = self._logo_image(96)
         box.append(icon)
 
-        title = Gtk.Label(label=caps.name)
+        # The application's name, not the model's - the connected mouse is
+        # already identified by the Model row in the status group just
+        # below (and by the window title), so repeating it here as the
+        # page heading was redundant.
+        title = Gtk.Label(label=APP_NAME)
         title.add_css_class('title-1')
         title.set_margin_top(12)
         title.set_halign(Gtk.Align.CENTER)
