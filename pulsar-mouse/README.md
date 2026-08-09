@@ -11,12 +11,12 @@ Battery/signal only apply to wireless mice - on a wired one, the bar widget show
 | ID | `harveywuk/pulsar-mouse` |
 | Entries | Bar widget: `bar`; panel: `controls`; desktop widget: `battery` |
 
-## Usage
+## Requirements
 
-### Requirements
-
-- [pulsar-mouse-linux](https://github.com/harveywuk/pulsar-mouse-linux) installed, with `pulsar-mouse` on `PATH`
+- [pulsar-mouse-linux](https://github.com/harveywuk/pulsar-mouse-linux) installed, with `pulsar-mouse` on `PATH` - every entry in this plugin shells out to it directly (no network calls, no writes outside `~/.cache/pulsar-mouse/`)
 - `pulsar-mouse-gui` running is optional but recommended (autostart) - see Data source
+
+## Usage
 
 ### Updating
 
@@ -34,14 +34,16 @@ Add the `bar` bar widget to your bar. Shows a battery glyph (and percentage, on 
 
 ### Controls Panel
 
-Click the bar widget to open the `controls` panel, split into tabs (Noctalia has no native tabs control - these are just segmented buttons swapping which section renders):
+Click the bar widget to open the `controls` panel. A **Profile** dropdown at the top (hidden on a single-profile mouse) switches the mouse's active profile - picking one calls `--active-profile N` and refreshes every field below, since profile switches affect essentially everything shown, not just DPI/LED. Below that, tabs (Noctalia has no native tabs control - these are just segmented buttons swapping which section renders):
 
 **Sensor**
-- **DPI** - a slider stepping through profile 1's configured DPI stages (not a raw DPI range - every position lands on an actual configured value, like a notch per stage)
+- **DPI** - a slider stepping through the active profile's configured DPI stages (not a raw DPI range - every position lands on an actual configured value, like a notch per stage)
 - **Polling Rate** - a slider the same way, stepping through the device's supported rates
+- **Lift-off Distance** - a slider, in mm (only shown for a driver with a continuous LOD range, like the Feinmann 8K's 0.7-2.0mm in 0.1mm steps - a driver with a fixed discrete LOD list instead isn't currently supported by this panel)
+
+**Advanced**
 - **Debounce** - a slider, in ms
 - **Angle Snap**, **Ripple Control**, **Motion Sync** - toggles
-- **Lift-off Distance** - a slider, in mm (only shown for a driver with a continuous LOD range, like the Feinmann 8K's 0.7-2.0mm in 0.1mm steps - a driver with a fixed discrete LOD list instead isn't currently supported by this panel)
 
 **Lighting**
 - **LED Effect** - a dropdown (off/steady/pulse, or whatever the device supports)
