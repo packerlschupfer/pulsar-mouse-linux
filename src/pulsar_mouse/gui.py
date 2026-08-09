@@ -16,6 +16,7 @@ import sys
 import os
 import json
 import re
+import select
 import struct
 import threading
 import time
@@ -313,6 +314,16 @@ class PulsarMouseApp(Adw.Application):
         return self._device
 
     def _on_activate(self, app):
+        # get_windows(), not self._win/in_destruction() - GtkWidget's
+        # in_destruction() is only True *during* the "destroy" signal
+        # itself, not afterward (live-verified, Opus review this session:
+        # it reads False on an already-closed window, so the earlier
+        # version of this method took the wrong branch and the window
+        # never reappeared - the exact bug this method exists to fix).
+        # get_windows() correctly reflects [] once a window is really
+        # closed (no more set_hide_on_close - see MainWindow.__init__),
+        # which is the one thing this always got right, both before any
+        # of today's changes and after.
         wins = self.get_windows()
         if wins:
             wins[0].present()
@@ -321,23 +332,23 @@ class PulsarMouseApp(Adw.Application):
         win = MainWindow(application=app, device=device)
         win.present()
         self._win = win
-        if device:
-            self._build_tray(win, device)
+        if device and self._sni is None:
+            self._build_tray(device)
         self.hold()
 
     # ── System-tray ──────────────────────────────────────────────────────────
 
-    def _build_tray(self, win: 'MainWindow', device: PulsarDevice):
+    def _build_tray(self, device: PulsarDevice):
         caps = device.capabilities
         sni = _StatusNotifierItem('pulsar-mouse', 'input-mouse', caps.name)
-        sni.set_on_activate(win.present)
+        sni.set_on_activate(lambda: self.activate())
         self._sni = sni
 
         root = Dbusmenu.Menuitem.new()
 
         item_open = Dbusmenu.Menuitem.new()
         item_open.property_set(Dbusmenu.MENUITEM_PROP_LABEL, 'Open Settings')
-        item_open.connect('item-activated', lambda _i, _t: win.present())
+        item_open.connect('item-activated', lambda _i, _t: self.activate())
         root.child_append(item_open)
 
         self._battery_text = None
@@ -522,8 +533,13 @@ class PulsarMouseApp(Adw.Application):
         # Home page has no polling timer of its own - it shares this read
         # rather than doubling up on USB traffic (and possibly waking the
         # mouse from its own power-saving sleep twice as often).
-        if self._win is not None:
-            self._win._set_home_battery(pwr)
+        # get_windows(), not self._win - same reasoning as _on_activate:
+        # self._win can point at an already-closed window in the gap
+        # between a close and the next reopen (nothing nulls it out on
+        # close), and this periodic poll can land in exactly that gap.
+        wins = self.get_windows()
+        if wins:
+            wins[0]._set_home_battery(pwr)
 
     def _set_conn_quality_label(self, pct):
         self._last_signal_percent = pct
@@ -670,7 +686,9 @@ class _ColorPickerButton(Gtk.Button):
 
     def __init__(self):
         super().__init__(css_classes=['flat'])
-        self._rgba = Gdk.RGBA(red=1.0, green=1.0, blue=1.0, alpha=1.0)
+        rgba = Gdk.RGBA()
+        rgba.red, rgba.green, rgba.blue, rgba.alpha = 1.0, 1.0, 1.0, 1.0
+        self._rgba = rgba
         self._swatch = Gtk.DrawingArea(content_width=24, content_height=24)
         self._swatch.set_draw_func(self._draw_swatch)
         self.set_child(self._swatch)
@@ -701,20 +719,31 @@ class _ColorPickerButton(Gtk.Button):
         header.pack_end(select_btn)
         win.set_titlebar(header)
 
-        chooser = Gtk.ColorChooserWidget(use_alpha=True)
+        # use_alpha=False - the on-wire stage-color command is RGB-only
+        # (see set_stage_color()/get_stage_color() below), so an alpha
+        # slider here would be a no-op that misleads users into thinking
+        # it does something.
+        chooser = Gtk.ColorChooserWidget(use_alpha=False)
         chooser.set_rgba(self._rgba)
         win.set_child(chooser)
 
-        cancel_btn.connect('clicked', lambda *_a: win.close())
+        # None of these three handlers capture `win` directly - closing
+        # via `b.get_root()`/`c.get_root()` instead - a captured `win`
+        # here would create win -> {cancel_btn,select_btn} -> GClosure ->
+        # (this lambda) -> win, a reference cycle Python's GC can't break
+        # on its own since it crosses into GObject-land (confirmed via a
+        # live create/close/gc.collect() test leaking one window per
+        # click before this fix).
+        cancel_btn.connect('clicked', lambda b, *_a: b.get_root().close())
 
-        def on_select(*_a):
+        def on_select(b, *_a):
             self.set_rgba(chooser.get_rgba())
-            win.close()
+            b.get_root().close()
         select_btn.connect('clicked', on_select)
 
-        def on_color_activated(_chooser, rgba):
+        def on_color_activated(c, rgba):
             self.set_rgba(rgba)
-            win.close()
+            c.get_root().close()
         chooser.connect('color-activated', on_color_activated)
 
         win.present()
@@ -728,14 +757,48 @@ class MainWindow(Adw.ApplicationWindow):
         self.set_title(self._caps.name if self._caps else 'Pulsar Mouse')
         self.set_default_size(560, 740)
         self.set_icon_name('input-mouse')
-        self.set_hide_on_close(True)
+        # Not set_hide_on_close(True) - a hidden-not-destroyed GtkWindow
+        # can't be reliably re-shown later (present(), even preceded by
+        # set_visible(True), does not re-map it as a real compositor
+        # surface on this Wayland/Hyprland + GTK4 combo - live-verified
+        # both ways failing, see PulsarMouseApp._on_activate for the
+        # actual fix: always construct a fresh MainWindow instead of
+        # trying to revive a hidden one, since that's the one path
+        # that's always worked reliably). Closing this window really
+        # destroys it - PulsarMouseApp.hold() keeps the app itself alive
+        # regardless, so the tray survives.
         self._profile = 1
         self._building = False
+        # A plain bool, not an fd - _home_hidraw_listener owns opening and
+        # closing its own fd entirely on its own thread now (see that
+        # method's docstring for why, this used to try to close the fd
+        # from here instead and had two real problems: (1) GTK4's
+        # "destroy" signal does not reliably fire on a plain close() while
+        # something still holds a Python reference to the window
+        # (PulsarMouseApp._win does, until the next reopen reassigns it),
+        # live-verified via Opus review this session, so the cleanup
+        # never ran at all; (2) even connected to close-request instead,
+        # os.close()ing an fd from this thread while the listener thread
+        # is blocked in os.read() on it is not guaranteed by Linux to
+        # unblock that read promptly - see close(2), "Multithreaded
+        # processes and close()" - empirically it did eventually clear
+        # via the device's own ~1Hz heartbeat waking the read, but that's
+        # an incidental timing coincidence to rely on, not a real fix).
+        self._home_hidraw_stop = False
+        self.connect('close-request', self._on_close_request)
 
         self._build_ui()
         GLib.idle_add(self._reload)
         GLib.idle_add(self._start_home_updates)
         GLib.idle_add(self._refresh_firmware_version)
+
+    def _on_close_request(self, _win):
+        # Just a flag - _home_hidraw_listener polls it via select()'s
+        # timeout (at most ~1s latency) rather than this thread trying to
+        # directly unblock or close the listener's fd - see this class's
+        # own comment above for why that used to be here and didn't work.
+        self._home_hidraw_stop = True
+        return False  # False = allow the close to proceed as normal
 
     def _build_ui(self):
         caps = self._caps
@@ -772,13 +835,15 @@ class MainWindow(Adw.ApplicationWindow):
         # (view-stack page name, sidebar label, icon) - order here is the
         # order rows appear in the sidebar and must line up with
         # nav_list's row index in _on_nav_row_selected() below.
+        self._has_power_page = hasattr(self._device, 'get_power')
         self._nav_pages = [
             ('home', 'Home', 'go-home-symbolic'),
             ('performance', 'Performance', 'input-mouse-symbolic'),
             ('customize', 'Customize', 'preferences-desktop-symbolic'),
-            ('power', 'Power', 'battery-good-symbolic'),
-            ('tools', 'Tools', 'applications-utilities-symbolic'),
         ]
+        if self._has_power_page:
+            self._nav_pages.append(('power', 'Power', 'battery-good-symbolic'))
+        self._nav_pages.append(('tools', 'Tools', 'applications-utilities-symbolic'))
         for _name, label, icon in self._nav_pages:
             row = Adw.ActionRow()
             row.set_title(label)
@@ -843,10 +908,11 @@ class MainWindow(Adw.ApplicationWindow):
         self._view_stack.add_named(self._build_home_page(), 'home')
         self._view_stack.add_named(self._build_performance_page(), 'performance')
         self._view_stack.add_named(self._build_customize_page(), 'customize')
-        self._view_stack.add_named(self._build_power_page(), 'power')
+        if self._has_power_page:
+            self._view_stack.add_named(self._build_power_page(), 'power')
         self._view_stack.add_named(self._build_tools_page(), 'tools')
 
-        content_page = Adw.NavigationPage.new(content_toolbar, 'Settings')
+        content_page = Adw.NavigationPage.new(content_toolbar, '')
         split_view.set_content(content_page)
 
         nav_list.select_row(nav_list.get_row_at_index(0))
@@ -877,6 +943,17 @@ class MainWindow(Adw.ApplicationWindow):
             box.append(g)
         return scroll
 
+    @staticmethod
+    def _logo_image(size=96):
+        icon = Gtk.Image.new_from_icon_name('pulsar-mouse')
+        svg = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__)))), 'data', 'pulsar-mouse.svg')
+        if os.path.isfile(svg):
+            icon = Gtk.Image.new_from_file(svg)
+        icon.set_pixel_size(size)
+        icon.set_halign(Gtk.Align.CENTER)
+        return icon
+
     def _build_home_page(self):
         """Status/landing tab: device name, connection, battery, and
         wireless signal quality - populated live by _start_home_updates(),
@@ -895,14 +972,7 @@ class MainWindow(Adw.ApplicationWindow):
         box.set_margin_start(24)
         box.set_margin_end(24)
 
-        # 'pulsar-mouse' is the project's own logo (data/pulsar-mouse.svg,
-        # by @Scout339), not a generic GTK theme icon - resolved via the
-        # hicolor icon theme entry the package installs it under (see
-        # flake.nix's postInstall), so this only renders correctly once
-        # actually installed, not when just running from the source tree.
-        icon = Gtk.Image.new_from_icon_name('pulsar-mouse')
-        icon.set_pixel_size(96)
-        icon.set_halign(Gtk.Align.CENTER)
+        icon = self._logo_image(96)
         box.append(icon)
 
         title = Gtk.Label(label=caps.name)
@@ -925,6 +995,7 @@ class MainWindow(Adw.ApplicationWindow):
         self._firmware_row.set_title('Firmware Version')
         self._firmware_row.set_subtitle('—')
         self._firmware_row.add_prefix(Gtk.Image.new_from_icon_name('application-x-firmware-symbolic'))
+        self._firmware_row.set_visible(False)
         status_group.add(self._firmware_row)
 
         conn_row = Adw.ActionRow()
@@ -1344,21 +1415,21 @@ class MainWindow(Adw.ApplicationWindow):
             self._led_row.connect('notify::selected', self._on_led_changed)
             led_group.add(self._led_row)
 
-        # Breath speed - self._breath_row is the Gtk.Scale (get_value/
-        # set_value, as elsewhere), self._breath_row_container is the
+        # Breathe speed - self._breathe_row is the Gtk.Scale (get_value/
+        # set_value, as elsewhere), self._breathe_row_container is the
         # wrapping Adw.ActionRow (title + slider together) - the visibility
         # toggle below needs to hide/show the whole row, not just the
         # slider inside it.
-        self._breath_row = None
-        self._breath_row_container = None
-        if caps.has_led and caps.has_breath_speed:
-            lo, hi = caps.breath_speed_range
-            self._breath_row_container, self._breath_row = self._make_slider_row(
+        self._breathe_row = None
+        self._breathe_row_container = None
+        if caps.has_led and caps.has_breathe_speed:
+            lo, hi = caps.breathe_speed_range
+            self._breathe_row_container, self._breathe_row = self._make_slider_row(
                 'Pulse Speed', '', lo, hi, 1,
                 marks=[(lo, 'Slow'), (hi, 'Fast')])
-            self._breath_row.set_draw_value(False)
-            self._breath_row_container.set_visible(False)
-            led_group.add(self._breath_row_container)
+            self._breathe_row.set_draw_value(False)
+            self._breathe_row_container.set_visible(False)
+            led_group.add(self._breathe_row_container)
 
         btn_group = Adw.PreferencesGroup()
         btn_group.set_title('Button Bindings')
@@ -1543,7 +1614,10 @@ X-GNOME-Autostart-enabled=true
                     finally:
                         device.close()
                 if fw != 'unknown':
-                    GLib.idle_add(self._firmware_row.set_subtitle, fw)
+                    def _show_fw(v):
+                        self._firmware_row.set_subtitle(v)
+                        self._firmware_row.set_visible(True)
+                    GLib.idle_add(_show_fw, fw)
             except Exception:
                 pass
         threading.Thread(target=_read, daemon=True).start()
@@ -1554,6 +1628,16 @@ X-GNOME-Autostart-enabled=true
         # not find_hidraw, for the same reason as _home_signal_row's
         # construction above: find_hidraw's base-class default makes
         # hasattr() on it true for every driver, wired or wireless.
+        #
+        # This thread owns its fd exclusively, start to finish - opens
+        # it, and is the only thing that ever closes it. Shutdown is
+        # cooperative: _on_close_request just sets self._home_hidraw_stop
+        # and this loop notices it within one select() timeout (at most
+        # ~1s), rather than another thread reaching in to close the fd
+        # itself to unblock a plain blocking read() - Linux doesn't
+        # guarantee that actually wakes a concurrent read() promptly (see
+        # close(2)), and it invited a check-then-act double-close race on
+        # top. A single stop flag has neither problem.
         device = self._device
         if device is None or self._home_signal_row is None:
             return
@@ -1566,7 +1650,10 @@ X-GNOME-Autostart-enabled=true
             return
         last_update = 0.0
         try:
-            while True:
+            while not self._home_hidraw_stop:
+                ready, _w, _x = select.select([fd], [], [], 1.0)
+                if not ready:
+                    continue  # timeout - just a chance to re-check the stop flag
                 data = os.read(fd, 256)
                 if not data:
                     break
@@ -1662,6 +1749,7 @@ X-GNOME-Autostart-enabled=true
         current = self._btn_rows[btn_id].get_subtitle()
         dialog = RemapButtonDialog(
             transient_for=self, btn_label=label, current_spec=current,
+            device=self._device,
             on_applied=lambda t, a1, a2: self._run_bg(
                 lambda: self._do_remap_button(btn_id, t, a1, a2)))
         dialog.present()
@@ -1672,7 +1760,7 @@ X-GNOME-Autostart-enabled=true
         try:
             self._device.set_button(btn_id, btn_type, a1, a2, self._profile)
             t, ra1, ra2 = self._device.get_button(btn_id, self._profile)
-            GLib.idle_add(self._btn_rows[btn_id].set_subtitle, describe_button(t, ra1, ra2))
+            GLib.idle_add(self._btn_rows[btn_id].set_subtitle, self._device.describe_button(t, ra1, ra2))
             GLib.idle_add(self._show_toast, 'Button remapped')
         except Exception as e:
             GLib.idle_add(self._show_error, f'Remap error: {e}')
@@ -1688,16 +1776,15 @@ X-GNOME-Autostart-enabled=true
         if self._building:
             return
         caps = self._caps
-        if caps and self._breath_row_container:
+        if caps and self._breathe_row_container:
             effects = caps.led_effects
             selected = effects[combo.get_selected()] if combo.get_selected() < len(effects) else ''
-            # The pulsing/breathing effect is always the last entry in
-            # led_effects, by convention of every driver in this codebase
-            # (['off', 'steady', <that one>]) - checked this way rather
-            # than a hardcoded name since drivers differ on what to call
-            # it (feinmann8k.py: 'pulse', base.py's shared default and
-            # other drivers: 'breath').
-            self._breath_row_container.set_visible(selected == effects[-1])
+            # The breathing effect is always the last entry in led_effects,
+            # by convention of every driver in this codebase (['off',
+            # 'steady', 'breathe']) - checked by position rather than the
+            # literal name in case a future driver ever needs a different
+            # one.
+            self._breathe_row_container.set_visible(selected == effects[-1])
 
     def _on_stage_count_changed(self, row, _param):
         if self._building:
@@ -1849,8 +1936,8 @@ X-GNOME-Autostart-enabled=true
             s['brightness'] = round(lo + pct / 100 * (hi - lo))
         if self._led_row:
             s['led'] = caps.led_effects[self._led_row.get_selected()]
-        if self._breath_row:
-            s['breath'] = int(self._breath_row.get_value())
+        if self._breathe_row:
+            s['breathe'] = int(self._breathe_row.get_value())
         if self._color_buttons:
             colors = []
             for btn in self._color_buttons:
@@ -1888,16 +1975,20 @@ X-GNOME-Autostart-enabled=true
                 pass
         _USB_LOCK.release()
 
-    def _do_reload(self):
-        if not self._open_dev():
-            return
-        caps = self._caps
-        device = self._device
+    def _read_and_populate_global(self):
         # Each field guarded independently via _read_field (same reasoning
         # as _do_reload_profile_inner() below) - a reload is 20+ individual
         # USB reads in quick succession, and a transient timeout on any one
         # of them (mouse's RF link briefly asleep) shouldn't blank out
-        # every other already-successful field, including these.
+        # every other already-successful field, including these. These
+        # fields have no --profile N-style targeting at all (see cli.py's
+        # own comment on this split, next to --status-json) - they always
+        # reflect whichever profile is *actually* active on the device,
+        # regardless of which profile's settings the rest of this window
+        # is showing, so this needs re-running any time the active profile
+        # might have changed, not just on a full window reload.
+        caps = self._caps
+        device = self._device
         poll_hz = self._read_field(device.get_polling_rate)
         debounce = self._read_field(device.get_debounce) if caps.has_debounce else None
         angle = self._read_field(device.get_angle_snap) if caps.has_angle_snap else None
@@ -1909,6 +2000,11 @@ X-GNOME-Autostart-enabled=true
                     if hasattr(device, 'get_low_power_threshold') else None)
         GLib.idle_add(self._populate_global, poll_hz, debounce, angle, ripple, motion,
                       power_saving, low_power)
+
+    def _do_reload(self):
+        if not self._open_dev():
+            return
+        self._read_and_populate_global()
         self._do_reload_profile_inner()
         self._close_dev()
 
@@ -1929,6 +2025,15 @@ X-GNOME-Autostart-enabled=true
             pass
         except Exception as e:
             GLib.idle_add(self._show_error, f'Could not switch active profile: {e}')
+        # Real bug, found in review: this used to skip
+        # _read_and_populate_global() entirely, so switching profiles left
+        # the poll/debounce/angle/ripple/motion/power widgets showing the
+        # PREVIOUS active profile's values - and the next Apply would then
+        # write those stale values back over the profile that's actually
+        # active now, silently clobbering it. The Noctalia panel already
+        # got this right (full re-fetch in its own profile-switch
+        # handler); this was the one place that missed it.
+        self._read_and_populate_global()
         self._do_reload_profile_inner()
         self._close_dev()
 
@@ -1944,7 +2049,7 @@ X-GNOME-Autostart-enabled=true
         # it shouldn't blank out every other already-successful field.
         try:
             return fn(*args)
-        except (NotImplementedError, OSError):
+        except Exception:
             return None
 
     def _do_reload_profile_inner(self):
@@ -1955,8 +2060,8 @@ X-GNOME-Autostart-enabled=true
             lod = self._read_field(device.get_lod, p) if caps.lod_values else None
             brightness = self._read_field(device.get_brightness, p) if caps.has_led else None
             led = self._read_field(device.get_led_effect, p) if caps.has_led else None
-            breath = (self._read_field(device.get_breath_speed, p)
-                      if caps.has_led and caps.has_breath_speed else None)
+            breathe = (self._read_field(device.get_breathe_speed, p)
+                      if caps.has_led and caps.has_breathe_speed else None)
             try:
                 # NOTE: on some drivers, get_dpi_stages() is known to
                 # mutate the device's active DPI stage as a side effect of
@@ -1973,7 +2078,7 @@ X-GNOME-Autostart-enabled=true
             buttons = {bid: self._read_field(device.get_button, bid, p)
                        for bid in caps.buttons.values()}
             GLib.idle_add(self._populate_profile,
-                          lod, brightness, led, breath, dpi_info, colors, buttons)
+                          lod, brightness, led, breathe, dpi_info, colors, buttons)
         except Exception as e:
             GLib.idle_add(self._show_error, f'Read error (profile {p}): {e}')
 
@@ -2004,10 +2109,10 @@ X-GNOME-Autostart-enabled=true
                 device.set_brightness(s['brightness'], p)
             if 'led' in s:
                 device.set_led_effect(s['led'], p)
-                # See _on_led_changed()'s comment - the pulsing effect's
-                # name varies per driver, so check by position not string.
-                if s['led'] == caps.led_effects[-1] and 'breath' in s:
-                    device.set_breath_speed(s['breath'], p)
+                # See _on_led_changed()'s comment - checked by position,
+                # not the literal name.
+                if s['led'] == caps.led_effects[-1] and 'breathe' in s:
+                    device.set_breathe_speed(s['breathe'], p)
 
             stages = s['dpi_values'][:s['num_stages']]
             try:
@@ -2067,7 +2172,7 @@ X-GNOME-Autostart-enabled=true
             self._low_power_row.set_value(low_power)
         self._building = False
 
-    def _populate_profile(self, lod, brightness, led, breath, dpi_info, colors, buttons):
+    def _populate_profile(self, lod, brightness, led, breathe, dpi_info, colors, buttons):
         caps = self._caps
         self._building = True
         if self._lod_row and lod is not None:
@@ -2089,10 +2194,10 @@ X-GNOME-Autostart-enabled=true
             except ValueError:
                 led_idx = 1
             self._led_row.set_selected(led_idx)
-        if self._breath_row and breath is not None:
-            self._breath_row.set_value(breath)
-            if led and self._breath_row_container:
-                self._breath_row_container.set_visible(led == caps.led_effects[-1])
+        if self._breathe_row and breathe is not None:
+            self._breathe_row.set_value(breathe)
+            if led and self._breathe_row_container:
+                self._breathe_row_container.set_visible(led == caps.led_effects[-1])
 
         stages = dpi_info['stages']
         num    = dpi_info['count']
@@ -2110,13 +2215,15 @@ X-GNOME-Autostart-enabled=true
                 rgb = colors[i] if i < len(colors) else None
                 if rgb is not None:
                     r, g, b = rgb
-                    btn.set_rgba(Gdk.RGBA(red=r / 255, green=g / 255, blue=b / 255, alpha=1.0))
+                    rgba = Gdk.RGBA()
+                    rgba.red, rgba.green, rgba.blue, rgba.alpha = r / 255, g / 255, b / 255, 1.0
+                    btn.set_rgba(rgba)
                 btn.set_sensitive(i < num)
 
         for btn_id, bind in buttons.items():
             if bind is not None and btn_id in self._btn_rows:
                 t, a1, a2 = bind
-                self._btn_rows[btn_id].set_subtitle(describe_button(t, a1, a2))
+                self._btn_rows[btn_id].set_subtitle(self._device.describe_button(t, a1, a2))
         self._building = False
 
     def _show_error(self, msg: str):
@@ -2142,11 +2249,12 @@ class RemapButtonDialog(Adw.Window):
                    'Media Key', 'Keyboard Shortcut', 'Disabled']
     _MOD_NAMES = ['ctrl', 'shift', 'alt', 'super']
 
-    def __init__(self, btn_label: str, current_spec: str, on_applied, **kwargs):
+    def __init__(self, btn_label: str, current_spec: str, on_applied, device=None, **kwargs):
         super().__init__(**kwargs, title=f'Remap {btn_label}',
                          default_width=360, default_height=-1)
         self.set_modal(True)
         self._on_applied = on_applied
+        self._device = device
 
         toolbar = Adw.ToolbarView()
         self.set_content(toolbar)
@@ -2304,7 +2412,10 @@ class RemapButtonDialog(Adw.Window):
     def _on_set_clicked(self, _btn):
         try:
             spec = self._build_spec()
-            t, a1, a2 = parse_button_function(spec)
+            if self._device is not None:
+                t, a1, a2 = self._device.parse_button_function(spec)
+            else:
+                t, a1, a2 = parse_button_function(spec)
         except ValueError as e:
             self._error_label.set_label(str(e))
             self._error_label.set_visible(True)

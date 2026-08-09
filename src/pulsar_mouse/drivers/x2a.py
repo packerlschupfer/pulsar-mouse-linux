@@ -21,6 +21,7 @@ Per-profile settings (profile=1-5): DPI stages, LOD, brightness, LED effect, but
 import struct
 import glob
 import os
+import time
 from typing import Optional
 
 import usb.core
@@ -37,7 +38,7 @@ POLL_VAL_TO_HZ = {v: k for k, v in POLL_HZ_TO_VAL.items()}
 LOD_MM_TO_VAL  = {1: 0, 2: 1}
 LOD_VAL_TO_MM  = {v: k for k, v in LOD_MM_TO_VAL.items()}
 
-LED_NAME_TO_VAL = {'off': 0, 'steady': 1, 'breath': 2}
+LED_NAME_TO_VAL = {'off': 0, 'steady': 1, 'breathe': 2}
 LED_VAL_TO_NAME = {v: k for k, v in LED_NAME_TO_VAL.items()}
 
 # Factory default button bindings (from Pulsar Fusion reset capture)
@@ -149,18 +150,32 @@ class PulsarX2A(PulsarDevice):
         return bytes(self._dev.ctrl_transfer(
             0xA1, 0x01, self._WVALUE, iface, self.capabilities.report_size))
 
+    _ACK_POLLS = 8
+    _ACK_DELAY = 0.02
+
+    def _poll_ack(self, accept: tuple) -> bytes:
+        rsp = self._get_report()
+        for _ in range(self._ACK_POLLS - 1):
+            if rsp[0] in accept:
+                return rsp
+            time.sleep(self._ACK_DELAY)
+            rsp = self._get_report()
+        return rsp
+
     def _cmd(self, cat, reg, sub, profile, payload=()):
         self._set_report(self._build(cat, reg, sub, profile, payload))
-        rsp = self._get_report()
+        rsp = self._poll_ack((0x01, 0x02))
         if rsp[0] not in (0x01, 0x02):
-            raise IOError(f"Unexpected response byte: 0x{rsp[0]:02x}")
+            raise IOError(f"Unexpected response byte: 0x{rsp[0]:02x} "
+                          f"(after {self._ACK_POLLS} polls)")
         return rsp
 
     def _read(self, cat, reg, sub, profile, payload=()):
         self._set_report(self._build_read(cat, reg, sub, profile, payload))
-        rsp = self._get_report()
+        rsp = self._poll_ack((0x01,))
         if rsp[0] != 0x01:
-            raise IOError(f"Bad response direction byte: 0x{rsp[0]:02x}")
+            raise IOError(f"Bad response direction byte: 0x{rsp[0]:02x} "
+                          f"(after {self._ACK_POLLS} polls)")
         return rsp
 
     # ── Global settings ───────────────────────────────────────────────────
@@ -234,21 +249,25 @@ class PulsarX2A(PulsarDevice):
         rsp = self._read(0x03, 0x04, 0x0F, profile, [0x01])
         return LED_VAL_TO_NAME.get(rsp[8], f"unknown(0x{rsp[8]:02x})")
 
+    def _write_led_block(self, profile: int, effect_val: int, speed: int) -> None:
+        self._cmd(0x03, 0x04, 0x0F, profile, [0x01, effect_val, 0x00, 0x00, speed])
+
     def set_led_effect(self, effect: str, profile: int) -> None:
         val = LED_NAME_TO_VAL.get(effect)
         if val is None:
             raise ValueError(f"Effect must be one of {list(LED_NAME_TO_VAL)}")
-        self._cmd(0x03, 0x04, 0x0F, profile, [0x01, val])
+        self._write_led_block(profile, val, self.get_breathe_speed(profile))
 
-    def get_breath_speed(self, profile: int) -> int:
+    def get_breathe_speed(self, profile: int) -> int:
         rsp = self._read(0x03, 0x04, 0x0F, profile, [0x01])
         return rsp[11]
 
-    def set_breath_speed(self, speed: int, profile: int) -> None:
-        lo, hi = self.capabilities.breath_speed_range
+    def set_breathe_speed(self, speed: int, profile: int) -> None:
+        lo, hi = self.capabilities.breathe_speed_range
         if not lo <= speed <= hi:
-            raise ValueError(f"Breath speed must be {lo}–{hi}")
-        self._cmd(0x03, 0x04, 0x0F, profile, [0x01, 0x02, 0x00, 0x00, speed])
+            raise ValueError(f"Breathe speed must be {lo}–{hi}")
+        rsp = self._read(0x03, 0x04, 0x0F, profile, [0x01])
+        self._write_led_block(profile, rsp[8], speed)
 
     # ── Per-profile: DPI stages ───────────────────────────────────────────
 

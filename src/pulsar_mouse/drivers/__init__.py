@@ -21,7 +21,8 @@ def _discover_builtin() -> dict[str, Type[PulsarDevice]]:
         for attr in dir(mod):
             obj = getattr(mod, attr)
             if (isinstance(obj, type) and issubclass(obj, PulsarDevice)
-                    and obj is not PulsarDevice):
+                    and obj is not PulsarDevice
+                    and obj.__module__ == mod.__name__):
                 drivers[name] = obj
     return drivers
 

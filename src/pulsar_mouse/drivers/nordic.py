@@ -63,10 +63,10 @@ DPI_STAGE_SIZE        = 4
 ADDR_LED_COLOR_BASE   = 0x2C
 LED_COLOR_SIZE        = 4
 
-ADDR_LED_EFFECT       = 0x4C
-ADDR_LED_BRIGHTNESS   = 0x4E
-ADDR_LED_BREATH_SPEED = 0x50
-ADDR_LED_ENABLED      = 0x52
+ADDR_LED_EFFECT        = 0x4C
+ADDR_LED_BRIGHTNESS    = 0x4E
+ADDR_LED_BREATHE_SPEED = 0x50
+ADDR_LED_ENABLED       = 0x52
 
 # Buttons: 4 bytes each (mode, arg1, arg2, checksum)
 ADDR_BUTTON_BASE      = 0x60
@@ -159,8 +159,8 @@ class PulsarNordic(PulsarDevice):
         },
         polling_rates=[125, 250, 500, 1000],
         lod_values=[1, 2],
-        has_breath_speed=True,
-        breath_speed_range=(1, 5),
+        has_breathe_speed=True,
+        breathe_speed_range=(1, 5),
         debounce_range=(0, 30),
         has_stage_colors=True,
         button_labels={
@@ -387,7 +387,7 @@ class PulsarNordic(PulsarDevice):
             return 'off'
         effect = self._mem.get(ADDR_LED_EFFECT, LED_EFFECT_STEADY)
         if effect == LED_EFFECT_BREATHE:
-            return 'breath'
+            return 'breathe'
         return 'steady'
 
     def set_led_effect(self, effect: str, profile: int) -> None:
@@ -396,20 +396,20 @@ class PulsarNordic(PulsarDevice):
         elif effect == 'steady':
             self._write_value(ADDR_LED_EFFECT, LED_EFFECT_STEADY)
             self._write_bool(ADDR_LED_ENABLED, True)
-        elif effect == 'breath':
+        elif effect == 'breathe':
             self._write_value(ADDR_LED_EFFECT, LED_EFFECT_BREATHE)
             self._write_bool(ADDR_LED_ENABLED, True)
         else:
-            raise ValueError("Effect must be 'off', 'steady', or 'breath'")
+            raise ValueError("Effect must be 'off', 'steady', or 'breathe'")
 
-    def get_breath_speed(self, profile: int) -> int:
-        return self._mem.get(ADDR_LED_BREATH_SPEED, 1)
+    def get_breathe_speed(self, profile: int) -> int:
+        return self._mem.get(ADDR_LED_BREATHE_SPEED, 1)
 
-    def set_breath_speed(self, speed: int, profile: int) -> None:
-        lo, hi = self.capabilities.breath_speed_range
+    def set_breathe_speed(self, speed: int, profile: int) -> None:
+        lo, hi = self.capabilities.breathe_speed_range
         if not lo <= speed <= hi:
-            raise ValueError(f"Breath speed must be {lo}–{hi}")
-        self._write_value(ADDR_LED_BREATH_SPEED, speed)
+            raise ValueError(f"Breathe speed must be {lo}–{hi}")
+        self._write_value(ADDR_LED_BREATHE_SPEED, speed)
 
     # ── Per-profile: stage colors ────────────────────────────────────────
 

@@ -12,7 +12,7 @@ import argparse
 from pulsar_mouse import find_device, __version__
 from pulsar_mouse.base import PulsarDevice
 from pulsar_mouse.drivers import discover_all
-from pulsar_mouse.hid import describe_button, parse_button_function
+from pulsar_mouse.hid import describe_button, parse_button_function  # fallback for non-device contexts
 
 
 def _on_off(val: bool) -> str:
@@ -107,13 +107,13 @@ def print_profile(device: PulsarDevice, profile: int):
         try:
             effect = device.get_led_effect(profile)
             bright = device.get_brightness(profile)
-            # The pulsing effect's name varies per driver (feinmann8k.py:
-            # 'pulse', base.py's shared default: 'breath') - it's always
-            # the last entry in led_effects by convention, so check that
-            # way instead of a hardcoded name.
-            if caps.has_breath_speed and effect == caps.led_effects[-1]:
-                speed = device.get_breath_speed(profile)
-                print(f"  LED:              {effect}  speed={speed}/{caps.breath_speed_range[1]}  brightness={bright}/{caps.brightness_range[1]}")
+            # Every driver's pulsing/breathing effect is named 'breathe',
+            # but check by position (always the last entry in led_effects
+            # by convention) rather than the literal name, in case a
+            # future driver ever needs its own different name again.
+            if caps.has_breathe_speed and effect == caps.led_effects[-1]:
+                speed = device.get_breathe_speed(profile)
+                print(f"  LED:              {effect}  speed={speed}/{caps.breathe_speed_range[1]}  brightness={bright}/{caps.brightness_range[1]}")
             else:
                 print(f"  LED:              {effect}  brightness={bright}/{caps.brightness_range[1]}")
         except Exception as e:
@@ -122,7 +122,7 @@ def print_profile(device: PulsarDevice, profile: int):
         print(f"  Buttons:")
         for name, bid in caps.buttons.items():
             t, a1, a2 = device.get_button(bid, profile)
-            print(f"    {name:<8} (0x{bid:02x}): {describe_button(t, a1, a2)}")
+            print(f"    {name:<8} (0x{bid:02x}): {device.describe_button(t, a1, a2)}")
     except Exception as e:
         print(f"  Buttons:          error ({e})")
 
@@ -146,8 +146,10 @@ Examples:
   %(prog)s --active-profile 2       # switch the mouse to profile 2
 
   %(prog)s --poll 1000              # set polling rate on the ACTIVE profile
-  %(prog)s --debounce 3             # ditto - use --active-profile N first
-  %(prog)s --angle-snap on          #   to target a different profile
+  %(prog)s --active-profile 2 --debounce 3  # combining both is safe -
+  %(prog)s --debounce 3 --active-profile 2  # --active-profile always
+                                     #   applies first regardless of order
+  %(prog)s --angle-snap on
   %(prog)s --ripple on
   %(prog)s --motion-sync off
 
@@ -156,7 +158,7 @@ Examples:
   %(prog)s --profile 1 --dpi 400,800,1600 --active-stage 2
   %(prog)s --profile 1 --brightness 200
   %(prog)s --profile 1 --led steady
-  %(prog)s --profile 1 --led breath --breath-speed 50
+  %(prog)s --profile 1 --led breathe --breathe-speed 50
   %(prog)s --profile 1 --stage-color 1 29 96 cd   # R G B for stage 1
 
   %(prog)s --profile 1 --button thumb1 dpi+
@@ -231,9 +233,9 @@ Examples:
                     help='Same as --brightness, but 0-100%% scaled to the '
                          'device\'s actual raw range (matches the GUI/'
                          '--status-json\'s brightness_percent)')
-    pp.add_argument('--led', metavar='steady|breath',
+    pp.add_argument('--led', metavar='steady|breathe',
                     help='LED effect')
-    pp.add_argument('--breath-speed', type=int, metavar='0-100')
+    pp.add_argument('--breathe-speed', type=int, metavar='0-100')
     pp.add_argument('--stage-color', nargs=4, metavar=('STAGE', 'R', 'G', 'B'),
                     type=int, help='Set DPI stage LED color (RGB 0-255)')
     pp.add_argument('--button', nargs=2, metavar=('BTN', 'FUNC'),
@@ -255,7 +257,7 @@ def main():
     device_name = getattr(args, 'device', None)
 
     # `is not None` (not plain truthiness) - `--debounce 0`, `--brightness 0`,
-    # `--breath-speed 0`, etc. are legitimate values, and a truthy check made
+    # `--breathe-speed 0`, etc. are legitimate values, and a truthy check made
     # them indistinguishable from the flag being omitted entirely, silently
     # falling through to read-mode instead of performing the write.
     # `args.reset` is a plain store_true flag, not an optional value, so it's
@@ -265,14 +267,14 @@ def main():
         args.angle_snap, args.ripple, args.motion_sync,
         args.power_saving, args.low_power, args.active_profile,
         args.lod, args.dpi, args.active_stage,
-        args.brightness, args.brightness_percent, args.led, args.breath_speed,
+        args.brightness, args.brightness_percent, args.led, args.breathe_speed,
         args.stage_color, args.button,
         args.import_file,
     ])
 
     profile_required = args.reset or any(x is not None for x in [
         args.lod, args.dpi, args.active_stage,
-        args.brightness, args.brightness_percent, args.led, args.breath_speed,
+        args.brightness, args.brightness_percent, args.led, args.breathe_speed,
         args.stage_color, args.button,
         args.export, args.import_file,
     ])
@@ -311,6 +313,18 @@ def main():
         return
 
     if args.status_json:
+        # This response mixes two different "which profile" scopes: dpi/
+        # lod/led/brightness/breathe_speed below are read from `profile`
+        # (the --profile N argument, or 1 if omitted), while
+        # polling_rate/debounce/angle_snap/ripple_control/motion_sync/
+        # power_saving/low_power have no --profile N targeting at all and
+        # always reflect whichever profile is `active_profile` (which may
+        # differ from `profile`) - see cli.py's argparse group help text
+        # for "settings tracked per the mouse's active profile" for the
+        # underlying reason. A consumer that needs both a specific
+        # profile's stored settings AND that profile actually active
+        # should call --active-profile first (see main()'s ordering
+        # comment) so `profile` and `active_profile` end up equal.
         profile = args.profile if args.profile is not None else 1
         device.open()
         try:
@@ -372,8 +386,8 @@ def main():
                     # --brightness-percent below, not raw --brightness.
                     'brightness_percent': round((brightness - lo) / (hi - lo) * 100) if hi > lo else 0,
                 }
-                if caps.has_breath_speed:
-                    led['breath_speed'] = device.get_breath_speed(profile)
+                if caps.has_breathe_speed:
+                    led['breathe_speed'] = device.get_breathe_speed(profile)
                 status['led'] = led
             print(json.dumps(status))
         finally:
@@ -404,6 +418,16 @@ def main():
                 print(f"  Warning: {w}")
 
         if write_ops:
+            # active-profile first: every "global" write below actually
+            # targets whichever profile is active at the moment it runs
+            # (see cli.py's own settings-group help text) - applying it
+            # after them, as this used to, meant
+            # `--active-profile 2 --poll 1000` silently wrote the polling
+            # rate to the OLD active profile and only switched afterward.
+            if args.active_profile is not None:
+                device.set_active_profile(args.active_profile)
+                print(f"Active profile set to {args.active_profile}")
+
             # ── Global writes ─────────────────────────────────────────
             if args.poll is not None:
                 device.set_polling_rate(args.poll)
@@ -436,10 +460,6 @@ def main():
                 device.set_low_power_threshold(args.low_power)
                 print(f"Low power mode threshold set to {args.low_power}%")
 
-            if args.active_profile is not None:
-                device.set_active_profile(args.active_profile)
-                print(f"Active profile set to {args.active_profile}")
-
             # ── Per-profile writes ────────────────────────────────────
             prof = args.profile
             if args.lod is not None:
@@ -469,9 +489,9 @@ def main():
                 device.set_led_effect(args.led, prof)
                 print(f"Profile {prof} LED effect: {args.led}")
 
-            if args.breath_speed is not None:
-                device.set_breath_speed(args.breath_speed, prof)
-                print(f"Profile {prof} breath speed: {args.breath_speed}/{caps.breath_speed_range[1]}")
+            if args.breathe_speed is not None:
+                device.set_breathe_speed(args.breathe_speed, prof)
+                print(f"Profile {prof} breathe speed: {args.breathe_speed}/{caps.breathe_speed_range[1]}")
 
             if args.stage_color is not None:
                 stage, r, g, b = args.stage_color
@@ -485,11 +505,11 @@ def main():
                     sys.exit(f"Unknown button '{btn_name}'. "
                              f"Use: {', '.join(caps.buttons)}")
                 try:
-                    t, a1, a2 = parse_button_function(func_spec)
+                    t, a1, a2 = device.parse_button_function(func_spec)
                 except ValueError as e:
                     sys.exit(str(e))
                 device.set_button(btn_id, t, a1, a2, prof)
-                print(f"Profile {prof} {btn_name} → {describe_button(t, a1, a2)}")
+                print(f"Profile {prof} {btn_name} → {device.describe_button(t, a1, a2)}")
 
             if args.reset:
                 device.reset_to_defaults(prof)
