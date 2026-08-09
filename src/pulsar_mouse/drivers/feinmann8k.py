@@ -137,9 +137,9 @@ class PulsarFeinmann8K(PulsarDevice):
         # not from an actual test of other profile bytes against hardware.
         num_profiles=6,
         max_dpi_stages=6,
-        dpi_min=100,
-        dpi_max=26000,
-        dpi_step=100,
+        dpi_min=50,
+        dpi_max=32000,
+        dpi_step=10,
         buttons={
             'left':   0x01,
             'right':  0x02,
@@ -528,9 +528,41 @@ class PulsarFeinmann8K(PulsarDevice):
         return self._query_ctrl(0x05, 0x01, 0x02, profile)[7]
 
     def set_dpi_stages(self, stages: list[int], active: int, profile: int) -> None:
-        # Only single-stage reads/active-stage switching were decoded;
-        # writing new DPI values for a stage was never captured.
-        raise NotImplementedError
+        # Captured 2026-08-09: Fusion's DPI tab, adding a stage back after
+        # the stage-count-drop bug (see git history / project notes) -
+        # cat=0x05/reg=0x04/sub=0x21, the *write* counterpart to
+        # get_dpi_stages()'s read (same reg/sub as that read's reply
+        # oddly echoes - see get_dpi_stages()'s docstring; still unclear
+        # whether that's a coincidence or the two commands share a
+        # handler on the device side). Body: byte[7]=a flag byte whose
+        # meaning wasn't pinned down (0x01 and 0x02 both seen across two
+        # separate write bursts in the same capture, with no observed
+        # difference in effect - using 0x01 here, from the burst that
+        # ended in a full, consistent 6-stage list), byte[8]=stage count,
+        # then `count` 5-byte blocks starting at byte[9], same layout as
+        # get_dpi_stages()'s read reply: [stage_num, dpi_x_lo, dpi_x_hi,
+        # dpi_y_lo, dpi_y_hi]. Fusion always sent X==Y (no separate X/Y
+        # DPI control surfaced anywhere in its UI), so this only exposes
+        # one DPI value per stage, matching this method's existing
+        # list[int] signature. NOT YET LIVE-VERIFIED against real
+        # hardware - only reconstructed from the capture; test with a
+        # small change (e.g. one stage's value) before trusting it for
+        # anything that matters.
+        if not 1 <= len(stages) <= self.capabilities.max_dpi_stages:
+            raise ValueError(
+                f"Must specify 1-{self.capabilities.max_dpi_stages} DPI stages")
+        if not 1 <= active <= len(stages):
+            raise ValueError(f"Active stage must be 1-{len(stages)}")
+        for dpi in stages:
+            if not self.capabilities.dpi_min <= dpi <= self.capabilities.dpi_max:
+                raise ValueError(
+                    f"DPI must be {self.capabilities.dpi_min}-"
+                    f"{self.capabilities.dpi_max}")
+        payload = [0x01, len(stages)]
+        for i, dpi in enumerate(stages, start=1):
+            payload += [i, dpi & 0xFF, (dpi >> 8) & 0xFF, dpi & 0xFF, (dpi >> 8) & 0xFF]
+        self._cmd(0x05, 0x04, 0x21, profile, payload)
+        self.set_active_dpi_stage(active, profile)
 
     def get_lod(self, profile: int) -> float:
         # cat=0x07/reg=0x82(=0x02|0x80)/sub=0x03 - reply byte[8] is raw =
