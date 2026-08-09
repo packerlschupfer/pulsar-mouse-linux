@@ -148,7 +148,7 @@ Examples:
   %(prog)s --poll 1000              # set polling rate on the ACTIVE profile
   %(prog)s --active-profile 2 --debounce 3  # combining both is safe -
   %(prog)s --debounce 3 --active-profile 2  # --active-profile always
-                                     #   applies first regardless of order
+                                            #   applies first regardless of order
   %(prog)s --angle-snap on
   %(prog)s --ripple on
   %(prog)s --motion-sync off
