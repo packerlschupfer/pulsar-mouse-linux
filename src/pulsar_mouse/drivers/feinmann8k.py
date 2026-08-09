@@ -318,7 +318,7 @@ class PulsarFeinmann8K(PulsarDevice):
 
     def _query_ctrl(self, cat, reg, sub, profile=0x01, payload=(),
                      initial_delay=0.05, poll_interval=0.02,
-                     timeout=1.0, match_echo=True) -> bytes:
+                     timeout=1.0, expect_echo=None) -> bytes:
         """Read query whose reply comes back in the GET_REPORT completion.
 
         Root-caused 2026-08-07: earlier attempts at this treated a single
@@ -347,27 +347,33 @@ class PulsarFeinmann8K(PulsarDevice):
         answers with a different sub than queried.)
 
         Matching cat/reg alone is not enough, though, and that gap is what
-        `match_echo` closes (2026-08-09). get_stage_color() and
-        get_button() fire the *identical* cat/reg in a tight loop, once per
-        stage/button, so a latched reply left over from the previous
+        the two extra checks below close (2026-08-09). get_stage_color()
+        and get_button() fire the *identical* cat/reg in a tight loop, once
+        per stage/button, so a latched reply left over from the previous
         iteration passes the cat/reg check perfectly and silently returns
         stage N-1's colour as stage N's. The reply carries enough to tell
         them apart and both fields were simply being ignored:
 
-          byte[6]  echoes the requested profile - live-verified for every
-                   per-profile read on this driver (lod, brightness, the
-                   LED block, active DPI stage, DPI stages, stage colour,
-                   button) across profiles 1-3. NOT checked when profile is
-                   the 0x00 "currently active" sentinel, where byte[6] is
-                   overloaded as a data byte instead (get_active_profile
-                   reads the real profile number out of it, get_power reads
-                   the battery percentage).
-          byte[7]  echoes payload[0] whenever a payload was sent - i.e. the
-                   stage for get_stage_color, the button id for
-                   get_button, the 0x01/0x02 marker byte for
-                   brightness/LOD/LED. Live-verified for all four. Reads
-                   with no payload put real data there instead (active DPI
-                   stage), hence the `payload and` guard.
+          byte[6]  echoes the requested profile. Checked automatically,
+                   live-verified for every per-profile read on this driver
+                   (lod, brightness, the LED block, active DPI stage, DPI
+                   stages, stage colour, button) across profiles 1-3. NOT
+                   checked when profile is the 0x00 "currently active"
+                   sentinel, where byte[6] is overloaded as a data byte
+                   instead (get_active_profile reads the real profile
+                   number out of it, get_power the battery percentage).
+          byte[7]  the per-request discriminator, but ONLY for commands
+                   whose reply actually echoes one there - hence the
+                   explicit opt-in `expect_echo` rather than inferring it
+                   from payload[0]. get_stage_color echoes the stage and
+                   get_button the button id (both live-verified), which is
+                   exactly where the tight-loop race lives. Other reads put
+                   real data at byte[7] instead: get_power_saving_timeout's
+                   reply is a uint16 spanning bytes[7:9], so its byte[7] is
+                   the low byte of the seconds value (44 for 300s) and an
+                   inferred-from-payload check rejected every reply it ever
+                   got. Do not widen this without checking each reply
+                   layout individually.
 
         A reply failing either check is treated exactly like a not-ready
         one: keep polling until a matching reply arrives or the deadline
@@ -379,7 +385,7 @@ class PulsarFeinmann8K(PulsarDevice):
         while time.time() < deadline:
             resp = self._poll_ack()
             if (resp[0] == 0x01 and resp[1] == cat and resp[2] == (reg | 0x80)
-                    and self._echo_matches(resp, profile, payload, match_echo)):
+                    and self._echo_matches(resp, profile, expect_echo)):
                 return resp
             time.sleep(poll_interval)
         raise IOError(
@@ -388,15 +394,13 @@ class PulsarFeinmann8K(PulsarDevice):
             "(mouse may be asleep - try moving it or clicking a button)")
 
     @staticmethod
-    def _echo_matches(resp, profile, payload, match_echo) -> bool:
+    def _echo_matches(resp, profile, expect_echo) -> bool:
         """Whether `resp` is answering this exact request - see
         _query_ctrl()'s docstring for the byte[6]/byte[7] rules and why
         each is conditional."""
-        if not match_echo:
-            return True
         if profile and resp[6] != profile:
             return False
-        if payload and resp[7] != payload[0]:
+        if expect_echo is not None and resp[7] != expect_echo:
             return False
         return True
 
@@ -794,7 +798,10 @@ class PulsarFeinmann8K(PulsarDevice):
         # picker earlier that session - not a coincidence), then live-
         # verified via a full set-then-read-back round trip on Linux once
         # _query_ctrl()'s polling loop was fixed - see its docstring.
-        resp = self._query_ctrl(0x05, 0x05, 0x05, profile, [stage])
+        # expect_echo=stage: this exact call, looped over all 6 stages, is
+        # where the stale-reply race bites - see _query_ctrl()'s docstring.
+        resp = self._query_ctrl(0x05, 0x05, 0x05, profile, [stage],
+                                expect_echo=stage)
         return (resp[8], resp[9], resp[10])
 
     # ── Buttons ──────────────────────────────────────────────────────────────
@@ -824,8 +831,10 @@ class PulsarFeinmann8K(PulsarDevice):
         # matching hid.MOUSE_ACTIONS), and the dpi button (0x0b) decoded
         # as BTN_TYPE_DPI/dpiloop (type=9, a1=3) - exactly the expected
         # untouched defaults, which is what confirmed the byte offsets.
+        # expect_echo=btn_id: same tight-loop stale-reply race as
+        # get_stage_color - see _query_ctrl()'s docstring.
         resp = self._query_ctrl(0x04, 0x01, 0x06, profile=profile,
-                                 payload=[btn_id, 0xff])
+                                 payload=[btn_id, 0xff], expect_echo=btn_id)
         return (resp[8], resp[9], resp[10])
 
     # ── Hidraw support ───────────────────────────────────────────────────────
