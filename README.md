@@ -12,7 +12,6 @@ Currently supports the **Pulsar Xlite Wired**, **Pulsar X2 Wired**, **Pulsar X2H
 Reverse-engineered from USB HID captures of Pulsar Fusion on Windows 11.
 Wireless (Nordic) protocol based on [python-pulsar-mouse-tool](https://github.com/andrewrabert/python-pulsar-mouse-tool) by andrewrabert.
 
-> **This fork** ([harveywuk/pulsar-mouse-linux](https://github.com/harveywuk/pulsar-mouse-linux), branch `feinmann8k-driver`) adds the Feinmann 8K/FO1 driver, full multi-profile support, button remapping, GNOME/Hyprland/KDE pointer-settings integration, and a Nix flake. See [What this fork adds](#what-this-fork-adds-beyond-upstream) below. Most of the GUI redesign has been adopted upstream — check there first if you don't need the extras.
 
 ## Screenshots
 
@@ -49,20 +48,6 @@ Wireless (Nordic) protocol based on [python-pulsar-mouse-tool](https://github.co
 | Pulsar X2A Wireless / X2 V2 Mini | `nordic` | `3554:f507` `3554:f508` | Supported (Nordic chipset, battery status) |
 
 Want to add support for your mouse? See [Adding a new driver](#adding-a-new-driver) below.
-
-## What this fork adds (beyond upstream)
-
-On top of the Feinmann 8K/FO1 driver itself, this branch carries a few things not (yet, or by choice) in upstream:
-
-- **Full button remapping** — a GUI dialog for every physical button, not just CLI (`--button`)
-- **Desktop pointer-settings integration** for GNOME, Hyprland, and KDE Plasma (auto-detected, not just GNOME)
-- **Profile import/export** (`--export`/`--import`), so a profile can be backed up or copied across profile slots
-- **Active-profile switching** and **firmware version** display, where the driver supports it
-- **Fine-grained lift-off distance** on the Feinmann (0.7–2.0mm in 0.1mm steps, reverse-engineered from real captures) instead of a coarse 1mm/2mm choice
-- **A traced-to-scale mouse diagram** in the Input Test dialog instead of hand-drawn placeholder shapes
-- **A Nix flake** (`flake.nix`) — see [Nix / NixOS](#option-5-nix--nixos) below
-
-Most of the GUI redesign (sidebar navigation, Home page, connection quality, power management, slider styling) has already been adopted into upstream's `main` — if you don't need the extras above, upstream is the better default.
 
 ## Requirements
 
@@ -136,33 +121,33 @@ pip install --user -e .
 
 ### Option 5: Nix / NixOS
 
-This fork ships a flake. Run it directly without installing:
+Ships a flake. Run it directly without installing:
 
 ```bash
-nix run github:harveywuk/pulsar-mouse-linux/feinmann8k-driver          # GUI
-nix run github:harveywuk/pulsar-mouse-linux/feinmann8k-driver#cli      # CLI
+nix run github:packerlschupfer/pulsar-mouse-linux          # GUI
+nix run github:packerlschupfer/pulsar-mouse-linux#cli      # CLI
 ```
 
 Or add it as a flake input:
 
 ```nix
 inputs.pulsar-mouse-linux = {
-  url = "github:harveywuk/pulsar-mouse-linux/feinmann8k-driver";
+  url = "github:packerlschupfer/pulsar-mouse-linux";
   inputs.nixpkgs.follows = "nixpkgs";
 };
 ```
 
 then either reference `inputs.pulsar-mouse-linux.packages.${system}.default` directly, or pull in `inputs.pulsar-mouse-linux.overlays.default` and use `pkgs.pulsar-mouse-linux` as normal. The package ships the udev rules under `lib/udev/rules.d/` — on NixOS, add it to `services.udev.packages = [ pkgs.pulsar-mouse-linux ];` and they'll be picked up automatically, no manual `udevadm` steps needed.
 
-Also published as a rolling release on [FlakeHub](https://flakehub.com/flake/harveywuk/Pulsar-Mouse-Nix) — use this instead of the `github:` reference if you'd rather resolve through FlakeHub's CDN/registry than GitHub directly:
+Also published as a rolling release on [FlakeHub](https://flakehub.com/flake/packerlschupfer/pulsar-mouse-linux) — use this instead of the `github:` reference if you'd rather resolve through FlakeHub's CDN/registry than GitHub directly:
 
 ```bash
-nix run "https://flakehub.com/f/harveywuk/Pulsar-Mouse-Nix/*.tar.gz"
+nix run "https://flakehub.com/f/packerlschupfer/pulsar-mouse-linux/*.tar.gz"
 ```
 
 ```nix
 inputs.pulsar-mouse-linux = {
-  url = "https://flakehub.com/f/harveywuk/Pulsar-Mouse-Nix/*.tar.gz";
+  url = "https://flakehub.com/f/packerlschupfer/pulsar-mouse-linux/*.tar.gz";
   inputs.nixpkgs.follows = "nixpkgs";
 };
 ```
@@ -249,7 +234,7 @@ pulsar-mouse --battery-json
 
 ```bash
 noctalia msg plugins source add pulsar-mouse path ~/dev/pulsar-mouse-linux   # or wherever you cloned this repo
-noctalia msg plugins enable harveywuk/pulsar-mouse
+noctalia msg plugins enable packerlschupfer/pulsar-mouse
 ```
 
 Then add the `bar` or `battery` widget from Noctalia's widget editor.
@@ -337,7 +322,7 @@ Checksum: bytes[62:64] = LE uint16(sum(bytes[0:62])).
 ## Credits
 
 - [@packerlschupfer](https://github.com/packerlschupfer) — Original creator and maintainer of pulsar-mouse-linux
-- [@harveywuk](https://github.com/harveywuk) — Feinmann 8K/FO1 driver, multi-profile support, button remapping, desktop pointer-settings integration, and the Nix flake (this fork)
+- [@harveywuk](https://github.com/harveywuk) — Feinmann 8K/FO1 driver, multi-profile support, button remapping, desktop pointer-settings integration, Nix flake, GUI redesign
 - [@Scout339](https://github.com/Scout339) — Logo design, wireless mouse testing
 - [andrewrabert](https://github.com/andrewrabert) — [python-pulsar-mouse-tool](https://github.com/andrewrabert/python-pulsar-mouse-tool), reference implementation for the Nordic wireless protocol
 

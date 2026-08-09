@@ -6,6 +6,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Linux configuration tool for Pulsar gaming mice. Plugin architecture where each mouse model has its own protocol driver. Currently supports Pulsar X2A Medium Wired. CLI and GTK4/libadwaita GUI adapt dynamically to device capabilities.
 
+## Repository topology
+
+`packerlschupfer/pulsar-mouse-linux` is the original and canonical repo, created by @packerlschupfer. `harveywuk/pulsar-mouse-linux` is a fork that added the Feinmann 8K driver, redesigned the GUI, and contributed other improvements. Those contributions are adopted back into this repo selectively.
+
+`harveywuk` is a git remote used to pull in their fork's changes. This repo is not subordinate to that fork — it is the other way around.
+
+### Sync workflow
+- When adopting work from harveywuk's fork, `main` is reset to their branch and our patches are squashed into ONE commit on top. This keeps their original commit hashes in the history.
+- This means `main` goes "ahead 1, behind 1" of `origin/main` and lands via force-push. This is by design — do not merge the remote back in; that would resurrect the pre-squash commit.
+- Because history is squashed, README credits are the primary attribution record — they must be updated whenever adopted work lands.
+
 ## Build & Validate
 
 Pure Python project — no compilation step.

@@ -25,7 +25,7 @@
 
           pulsar-mouse-linux = pkgs.python3Packages.buildPythonApplication {
             pname = "pulsar-mouse-linux";
-            version = "0.1.0";
+            version = "0.1.1";
             pyproject = true;
 
             src = self;
@@ -61,7 +61,7 @@
 
             meta = {
               description = "Linux configuration tool for Pulsar gaming mice";
-              homepage = "https://github.com/harveywuk/pulsar-mouse-linux";
+              homepage = "https://github.com/packerlschupfer/pulsar-mouse-linux";
               license = pkgs.lib.licenses.mit;
               mainProgram = "pulsar-mouse-gui";
               platforms = pkgs.lib.platforms.linux;

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pulsar-mouse-linux"
-version = "0.1.0"
+version = "0.1.1"
 description = "Linux configuration tool for Pulsar gaming mice"
 readme = "README.md"
 license = "MIT"
@@ -18,7 +18,10 @@ pulsar-mouse-gui = "pulsar_mouse.gui:main"
 [project.entry-points."pulsar_mouse.drivers"]
 x2a = "pulsar_mouse.drivers.x2a:PulsarX2A"
 x2h = "pulsar_mouse.drivers.x2h:PulsarX2H"
+x2_wired = "pulsar_mouse.drivers.x2_wired:PulsarX2Wired"
 xlite_v4 = "pulsar_mouse.drivers.xlite_v4:PulsarXliteV4"
+xlite_wired = "pulsar_mouse.drivers.xlite_wired:PulsarXliteWired"
+feinmann8k = "pulsar_mouse.drivers.feinmann8k:PulsarFeinmann8K"
 nordic = "pulsar_mouse.drivers.nordic:PulsarNordic"
 
 [tool.setuptools.packages.find]

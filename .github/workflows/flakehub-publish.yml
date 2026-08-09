@@ -1,9 +1,9 @@
-name: "Publish every Git push to feinmann8k-driver to FlakeHub"
+name: "Publish to FlakeHub"
 
 on:
   push:
-    branches:
-      - "feinmann8k-driver"
+    tags:
+      - "v*"
   workflow_dispatch: {}
 
 jobs:
@@ -13,13 +13,13 @@ jobs:
       id-token: "write"
       contents: "read"
     steps:
-      - uses: "actions/checkout@v6"
+      - uses: "actions/checkout@v5"
         with:
           persist-credentials: false
       - uses: "DeterminateSystems/determinate-nix-action@v3"
       - uses: "DeterminateSystems/flakehub-push@main"
         with:
-          name: "harveywuk/Pulsar-Mouse-Nix"
+          name: "packerlschupfer/pulsar-mouse-linux"
           rolling: true
           visibility: "public"
           include-output-paths: true
