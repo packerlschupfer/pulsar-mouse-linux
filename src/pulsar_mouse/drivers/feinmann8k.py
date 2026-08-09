@@ -318,7 +318,7 @@ class PulsarFeinmann8K(PulsarDevice):
 
     def _query_ctrl(self, cat, reg, sub, profile=0x01, payload=(),
                      initial_delay=0.05, poll_interval=0.02,
-                     timeout=1.0) -> bytes:
+                     timeout=1.0, match_echo=True) -> bytes:
         """Read query whose reply comes back in the GET_REPORT completion.
 
         Root-caused 2026-08-07: earlier attempts at this treated a single
@@ -345,19 +345,60 @@ class PulsarFeinmann8K(PulsarDevice):
         cat/reg we asked for. (sub is deliberately not checked - see
         get_dpi_stages()'s docstring for a command that legitimately
         answers with a different sub than queried.)
+
+        Matching cat/reg alone is not enough, though, and that gap is what
+        `match_echo` closes (2026-08-09). get_stage_color() and
+        get_button() fire the *identical* cat/reg in a tight loop, once per
+        stage/button, so a latched reply left over from the previous
+        iteration passes the cat/reg check perfectly and silently returns
+        stage N-1's colour as stage N's. The reply carries enough to tell
+        them apart and both fields were simply being ignored:
+
+          byte[6]  echoes the requested profile - live-verified for every
+                   per-profile read on this driver (lod, brightness, the
+                   LED block, active DPI stage, DPI stages, stage colour,
+                   button) across profiles 1-3. NOT checked when profile is
+                   the 0x00 "currently active" sentinel, where byte[6] is
+                   overloaded as a data byte instead (get_active_profile
+                   reads the real profile number out of it, get_power reads
+                   the battery percentage).
+          byte[7]  echoes payload[0] whenever a payload was sent - i.e. the
+                   stage for get_stage_color, the button id for
+                   get_button, the 0x01/0x02 marker byte for
+                   brightness/LOD/LED. Live-verified for all four. Reads
+                   with no payload put real data there instead (active DPI
+                   stage), hence the `payload and` guard.
+
+        A reply failing either check is treated exactly like a not-ready
+        one: keep polling until a matching reply arrives or the deadline
+        passes, rather than returning the wrong stage's data.
         """
         self._set_report(self._build_read(cat, reg, sub, profile, payload))
         time.sleep(initial_delay)
         deadline = time.time() + timeout
         while time.time() < deadline:
             resp = self._poll_ack()
-            if resp[0] == 0x01 and resp[1] == cat and resp[2] == (reg | 0x80):
+            if (resp[0] == 0x01 and resp[1] == cat and resp[2] == (reg | 0x80)
+                    and self._echo_matches(resp, profile, payload, match_echo)):
                 return resp
             time.sleep(poll_interval)
         raise IOError(
             f"No real reply from device for cat=0x{cat:02x} reg=0x{reg:02x} "
             f"sub=0x{sub:02x} after {timeout*1000:.0f}ms of polling "
             "(mouse may be asleep - try moving it or clicking a button)")
+
+    @staticmethod
+    def _echo_matches(resp, profile, payload, match_echo) -> bool:
+        """Whether `resp` is answering this exact request - see
+        _query_ctrl()'s docstring for the byte[6]/byte[7] rules and why
+        each is conditional."""
+        if not match_echo:
+            return True
+        if profile and resp[6] != profile:
+            return False
+        if payload and resp[7] != payload[0]:
+            return False
+        return True
 
     def _cmd(self, cat, reg, sub, profile=0x01, payload=()) -> None:
         """Fire a write command. No reply is expected/awaited.
@@ -814,6 +855,17 @@ class PulsarFeinmann8K(PulsarDevice):
     def parse_hidraw_event(self, data: bytes) -> Optional[dict]:
         if len(data) >= 5 and data[0] == 0x05 and data[1] == 0x05:
             dpi = struct.unpack_from('<H', data, 3)[0]
+            # data[2] is already 1-based on this model - deliberately NOT
+            # x2a.py's `data[2] + 1` for the byte-identical event, which
+            # would be an off-by-one here. Live-verified 2026-08-09 by
+            # walking the active stage through all six values and
+            # comparing each pushed event against get_active_dpi_stage():
+            # raw byte 1..6 matched the getter exactly every time, and the
+            # dpi field in the same event matched that stage's configured
+            # DPI (400/800/1600/3200/6400/12800). x2a must report this
+            # 0-based; this model does not. (Driven via
+            # set_active_dpi_stage() rather than a physical DPI-button
+            # press - the device pushes the same event either way.)
             stage = data[2]
             return {'dpi': dpi, 'stage': stage}
         # Periodic ~1Hz push, previously unidentified and suspected to be
