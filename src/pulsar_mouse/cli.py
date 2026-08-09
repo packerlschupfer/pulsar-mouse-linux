@@ -107,13 +107,13 @@ def print_profile(device: PulsarDevice, profile: int):
         try:
             effect = device.get_led_effect(profile)
             bright = device.get_brightness(profile)
-            # The pulsing effect's name varies per driver (feinmann8k.py:
-            # 'pulse', base.py's shared default: 'breath') - it's always
-            # the last entry in led_effects by convention, so check that
-            # way instead of a hardcoded name.
-            if caps.has_breath_speed and effect == caps.led_effects[-1]:
-                speed = device.get_breath_speed(profile)
-                print(f"  LED:              {effect}  speed={speed}/{caps.breath_speed_range[1]}  brightness={bright}/{caps.brightness_range[1]}")
+            # Every driver's pulsing/breathing effect is named 'breathe',
+            # but check by position (always the last entry in led_effects
+            # by convention) rather than the literal name, in case a
+            # future driver ever needs its own different name again.
+            if caps.has_breathe_speed and effect == caps.led_effects[-1]:
+                speed = device.get_breathe_speed(profile)
+                print(f"  LED:              {effect}  speed={speed}/{caps.breathe_speed_range[1]}  brightness={bright}/{caps.brightness_range[1]}")
             else:
                 print(f"  LED:              {effect}  brightness={bright}/{caps.brightness_range[1]}")
         except Exception as e:
@@ -156,7 +156,7 @@ Examples:
   %(prog)s --profile 1 --dpi 400,800,1600 --active-stage 2
   %(prog)s --profile 1 --brightness 200
   %(prog)s --profile 1 --led steady
-  %(prog)s --profile 1 --led breath --breath-speed 50
+  %(prog)s --profile 1 --led breathe --breathe-speed 50
   %(prog)s --profile 1 --stage-color 1 29 96 cd   # R G B for stage 1
 
   %(prog)s --profile 1 --button thumb1 dpi+
@@ -231,9 +231,9 @@ Examples:
                     help='Same as --brightness, but 0-100%% scaled to the '
                          'device\'s actual raw range (matches the GUI/'
                          '--status-json\'s brightness_percent)')
-    pp.add_argument('--led', metavar='steady|breath',
+    pp.add_argument('--led', metavar='steady|breathe',
                     help='LED effect')
-    pp.add_argument('--breath-speed', type=int, metavar='0-100')
+    pp.add_argument('--breathe-speed', type=int, metavar='0-100')
     pp.add_argument('--stage-color', nargs=4, metavar=('STAGE', 'R', 'G', 'B'),
                     type=int, help='Set DPI stage LED color (RGB 0-255)')
     pp.add_argument('--button', nargs=2, metavar=('BTN', 'FUNC'),
@@ -255,7 +255,7 @@ def main():
     device_name = getattr(args, 'device', None)
 
     # `is not None` (not plain truthiness) - `--debounce 0`, `--brightness 0`,
-    # `--breath-speed 0`, etc. are legitimate values, and a truthy check made
+    # `--breathe-speed 0`, etc. are legitimate values, and a truthy check made
     # them indistinguishable from the flag being omitted entirely, silently
     # falling through to read-mode instead of performing the write.
     # `args.reset` is a plain store_true flag, not an optional value, so it's
@@ -265,14 +265,14 @@ def main():
         args.angle_snap, args.ripple, args.motion_sync,
         args.power_saving, args.low_power, args.active_profile,
         args.lod, args.dpi, args.active_stage,
-        args.brightness, args.brightness_percent, args.led, args.breath_speed,
+        args.brightness, args.brightness_percent, args.led, args.breathe_speed,
         args.stage_color, args.button,
         args.import_file,
     ])
 
     profile_required = args.reset or any(x is not None for x in [
         args.lod, args.dpi, args.active_stage,
-        args.brightness, args.brightness_percent, args.led, args.breath_speed,
+        args.brightness, args.brightness_percent, args.led, args.breathe_speed,
         args.stage_color, args.button,
         args.export, args.import_file,
     ])
@@ -372,8 +372,8 @@ def main():
                     # --brightness-percent below, not raw --brightness.
                     'brightness_percent': round((brightness - lo) / (hi - lo) * 100) if hi > lo else 0,
                 }
-                if caps.has_breath_speed:
-                    led['breath_speed'] = device.get_breath_speed(profile)
+                if caps.has_breathe_speed:
+                    led['breathe_speed'] = device.get_breathe_speed(profile)
                 status['led'] = led
             print(json.dumps(status))
         finally:
@@ -469,9 +469,9 @@ def main():
                 device.set_led_effect(args.led, prof)
                 print(f"Profile {prof} LED effect: {args.led}")
 
-            if args.breath_speed is not None:
-                device.set_breath_speed(args.breath_speed, prof)
-                print(f"Profile {prof} breath speed: {args.breath_speed}/{caps.breath_speed_range[1]}")
+            if args.breathe_speed is not None:
+                device.set_breathe_speed(args.breathe_speed, prof)
+                print(f"Profile {prof} breathe speed: {args.breathe_speed}/{caps.breathe_speed_range[1]}")
 
             if args.stage_color is not None:
                 stage, r, g, b = args.stage_color

@@ -211,7 +211,7 @@ sudo pulsar-mouse --profile 1 --lod 1    # 1 mm or 2 mm
 # LED brightness and effect (per-profile)
 sudo pulsar-mouse --profile 1 --brightness 200
 sudo pulsar-mouse --profile 1 --led steady
-sudo pulsar-mouse --profile 1 --led breath --breath-speed 50
+sudo pulsar-mouse --profile 1 --led breathe --breathe-speed 50
 
 # Per-stage LED colour (per-profile, RGB 0-255)
 sudo pulsar-mouse --profile 1 --stage-color 1 255 0 0    # stage 1 = red

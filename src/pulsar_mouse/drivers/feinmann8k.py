@@ -86,7 +86,7 @@ Confirmed subtypes:
 
 Status: FULLY VERIFIED. Every write except set_button() itself, and every
 read (polling rate, debounce, LOD, angle snap, ripple control, motion
-sync, brightness, LED effect, breath speed, stage colors, active DPI
+sync, brightness, LED effect, breathe speed, stage colors, active DPI
 stage, all 6 DPI stage values, button bindings), is live-verified against
 real hardware via a full set-then-read-back pass on Linux - see
 _query_ctrl()'s docstring for how the read side was finally cracked.
@@ -116,10 +116,7 @@ POLL_HZ_TO_VAL = {125: 0x01, 250: 0x02, 500: 0x04, 1000: 0x08,
 POLL_VAL_TO_HZ = {v: k for k, v in POLL_HZ_TO_VAL.items()}
 
 # Same cat=0x03/reg=0x04/sub=0x0f command and value mapping as x2a.py.
-# Named 'pulse' here (not base.DeviceCapabilities' shared default 'breath')
-# to match this model's actual name for the effect - overridden in
-# capabilities.led_effects below to match.
-LED_NAME_TO_VAL = {'off': 0, 'steady': 1, 'pulse': 2}
+LED_NAME_TO_VAL = {'off': 0, 'steady': 1, 'breathe': 2}
 LED_VAL_TO_NAME = {v: k for k, v in LED_NAME_TO_VAL.items()}
 
 
@@ -158,10 +155,10 @@ class PulsarFeinmann8K(PulsarDevice):
             'dpi':    0x0b,
         },
         polling_rates=sorted(POLL_HZ_TO_VAL),
-        # Overrides DeviceCapabilities' shared default (['off','steady',
-        # 'breath']) - this model's third LED effect is named 'pulse', not
-        # 'breath'. list(dict) preserves LED_NAME_TO_VAL's insertion order,
-        # so this always matches that dict's keys.
+        # Derived from LED_NAME_TO_VAL rather than left as
+        # DeviceCapabilities' shared default so this always matches that
+        # dict's keys (list(dict) preserves insertion order), even though
+        # the values happen to be identical to the default right now.
         led_effects=list(LED_NAME_TO_VAL),
         # Confirmed 2026-08-07: on-wire protocol supports 0.1mm steps
         # (captured 0.7/1.0/2.0mm all as raw byte = mm*10). 0.7-2.0mm is
@@ -349,7 +346,7 @@ class PulsarFeinmann8K(PulsarDevice):
         forwarding to the mouse over RF (same underlying latency as the
         read side's "answer not ready yet" quirk in _query_ctrl()). Live-
         verified 2026-08-07: two writes fired back-to-back with no delay
-        (e.g. set_brightness() immediately followed by set_breath_speed())
+        (e.g. set_brightness() immediately followed by set_breathe_speed())
         silently lose the *first* one - the dongle appears to have only
         one in-flight RF command slot, and a second SET_REPORT before the
         first has actually reached the mouse just overwrites it. Confirmed
@@ -640,7 +637,7 @@ class PulsarFeinmann8K(PulsarDevice):
     def set_led_effect(self, effect: str, profile: int) -> None:
         # Captured 2026-08-07: cat=0x03/reg=0x04/sub=0x0f, payload=[0x01,
         # val] - identical command and value mapping (off=0/steady=1/
-        # breath=2) to x2a.py's set_led_effect.
+        # breathe=2) to x2a.py's set_led_effect.
         val = LED_NAME_TO_VAL.get(effect)
         if val is None:
             raise ValueError(f"Effect must be one of {list(LED_NAME_TO_VAL)}")
@@ -650,28 +647,28 @@ class PulsarFeinmann8K(PulsarDevice):
         # Same command as the write (cat=0x03/reg=0x84/sub=0x0f), with the
         # same payload=[0x01] marker byte the write sends at byte[7] -
         # querying without it gets no reply at all. Reply byte[8] is the
-        # effect enum (see get_breath_speed for the rest of this reply).
+        # effect enum (see get_breathe_speed for the rest of this reply).
         val = self._query_ctrl(0x03, 0x04, 0x0F, profile, [0x01])[8]
         return LED_VAL_TO_NAME.get(val, f'unknown(0x{val:02x})')
 
-    def set_breath_speed(self, speed: int, profile: int) -> None:
-        # Same command as set_led_effect, with effect pinned to breath (2)
+    def set_breathe_speed(self, speed: int, profile: int) -> None:
+        # Same command as set_led_effect, with effect pinned to breathe (2)
         # and a raw byte appended - same command shape as x2a.py's
-        # set_breath_speed, but live-tested 2026-08-07 and confirmed
+        # set_breathe_speed, but live-tested 2026-08-07 and confirmed
         # INVERTED on this model: raw=100 pulsed visibly slower than
         # raw=5. Unlike x2a (which sends `speed` directly), the raw byte
         # sent to the device is `hi - speed` so the public speed=0..100
         # API stays intuitive (0=slowest, 100=fastest) across drivers.
-        lo, hi = self.capabilities.breath_speed_range
+        lo, hi = self.capabilities.breathe_speed_range
         if not lo <= speed <= hi:
-            raise ValueError(f"Breath speed must be {lo}-{hi}")
+            raise ValueError(f"Breathe speed must be {lo}-{hi}")
         self._cmd(0x03, 0x04, 0x0F, profile, [0x01, 0x02, 0x00, 0x00, hi - speed])
 
-    def get_breath_speed(self, profile: int) -> int:
+    def get_breathe_speed(self, profile: int) -> int:
         # Same reply/marker-byte as get_led_effect (cat=0x03/reg=0x84/
         # sub=0x0f, payload=[0x01]) - byte[11] is the raw inverted speed
         # byte, same `hi - speed` encoding as the write.
-        hi = self.capabilities.breath_speed_range[1]
+        hi = self.capabilities.breathe_speed_range[1]
         raw = self._query_ctrl(0x03, 0x04, 0x0F, profile, [0x01])[11]
         return hi - raw
 
@@ -687,7 +684,7 @@ class PulsarFeinmann8K(PulsarDevice):
         # preset across all 6 stages, giving a clean sample of this command
         # at cat=0x05/reg=0x05/sub=0x05, payload=[stage, r, g, b] - byte-
         # identical to x2a.py's set_stage_color (direct RGB, no inversion
-        # needed here unlike breath speed). Note: observing this traffic
+        # needed here unlike breathe speed). Note: observing this traffic
         # required cycling through all 6 stages in the UI, which - per
         # get_dpi_stages()'s known side effect - also changed the mouse's
         # active DPI stage each time; not an issue for this write itself.

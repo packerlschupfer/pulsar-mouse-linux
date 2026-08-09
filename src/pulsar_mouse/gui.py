@@ -1391,21 +1391,21 @@ class MainWindow(Adw.ApplicationWindow):
             self._led_row.connect('notify::selected', self._on_led_changed)
             led_group.add(self._led_row)
 
-        # Breath speed - self._breath_row is the Gtk.Scale (get_value/
-        # set_value, as elsewhere), self._breath_row_container is the
+        # Breathe speed - self._breathe_row is the Gtk.Scale (get_value/
+        # set_value, as elsewhere), self._breathe_row_container is the
         # wrapping Adw.ActionRow (title + slider together) - the visibility
         # toggle below needs to hide/show the whole row, not just the
         # slider inside it.
-        self._breath_row = None
-        self._breath_row_container = None
-        if caps.has_led and caps.has_breath_speed:
-            lo, hi = caps.breath_speed_range
-            self._breath_row_container, self._breath_row = self._make_slider_row(
+        self._breathe_row = None
+        self._breathe_row_container = None
+        if caps.has_led and caps.has_breathe_speed:
+            lo, hi = caps.breathe_speed_range
+            self._breathe_row_container, self._breathe_row = self._make_slider_row(
                 'Pulse Speed', '', lo, hi, 1,
                 marks=[(lo, 'Slow'), (hi, 'Fast')])
-            self._breath_row.set_draw_value(False)
-            self._breath_row_container.set_visible(False)
-            led_group.add(self._breath_row_container)
+            self._breathe_row.set_draw_value(False)
+            self._breathe_row_container.set_visible(False)
+            led_group.add(self._breathe_row_container)
 
         btn_group = Adw.PreferencesGroup()
         btn_group.set_title('Button Bindings')
@@ -1748,16 +1748,15 @@ X-GNOME-Autostart-enabled=true
         if self._building:
             return
         caps = self._caps
-        if caps and self._breath_row_container:
+        if caps and self._breathe_row_container:
             effects = caps.led_effects
             selected = effects[combo.get_selected()] if combo.get_selected() < len(effects) else ''
-            # The pulsing/breathing effect is always the last entry in
-            # led_effects, by convention of every driver in this codebase
-            # (['off', 'steady', <that one>]) - checked this way rather
-            # than a hardcoded name since drivers differ on what to call
-            # it (feinmann8k.py: 'pulse', base.py's shared default and
-            # other drivers: 'breath').
-            self._breath_row_container.set_visible(selected == effects[-1])
+            # The breathing effect is always the last entry in led_effects,
+            # by convention of every driver in this codebase (['off',
+            # 'steady', 'breathe']) - checked by position rather than the
+            # literal name in case a future driver ever needs a different
+            # one.
+            self._breathe_row_container.set_visible(selected == effects[-1])
 
     def _on_stage_count_changed(self, row, _param):
         if self._building:
@@ -1909,8 +1908,8 @@ X-GNOME-Autostart-enabled=true
             s['brightness'] = round(lo + pct / 100 * (hi - lo))
         if self._led_row:
             s['led'] = caps.led_effects[self._led_row.get_selected()]
-        if self._breath_row:
-            s['breath'] = int(self._breath_row.get_value())
+        if self._breathe_row:
+            s['breathe'] = int(self._breathe_row.get_value())
         if self._color_buttons:
             colors = []
             for btn in self._color_buttons:
@@ -2015,8 +2014,8 @@ X-GNOME-Autostart-enabled=true
             lod = self._read_field(device.get_lod, p) if caps.lod_values else None
             brightness = self._read_field(device.get_brightness, p) if caps.has_led else None
             led = self._read_field(device.get_led_effect, p) if caps.has_led else None
-            breath = (self._read_field(device.get_breath_speed, p)
-                      if caps.has_led and caps.has_breath_speed else None)
+            breathe = (self._read_field(device.get_breathe_speed, p)
+                      if caps.has_led and caps.has_breathe_speed else None)
             try:
                 # NOTE: on some drivers, get_dpi_stages() is known to
                 # mutate the device's active DPI stage as a side effect of
@@ -2033,7 +2032,7 @@ X-GNOME-Autostart-enabled=true
             buttons = {bid: self._read_field(device.get_button, bid, p)
                        for bid in caps.buttons.values()}
             GLib.idle_add(self._populate_profile,
-                          lod, brightness, led, breath, dpi_info, colors, buttons)
+                          lod, brightness, led, breathe, dpi_info, colors, buttons)
         except Exception as e:
             GLib.idle_add(self._show_error, f'Read error (profile {p}): {e}')
 
@@ -2064,10 +2063,10 @@ X-GNOME-Autostart-enabled=true
                 device.set_brightness(s['brightness'], p)
             if 'led' in s:
                 device.set_led_effect(s['led'], p)
-                # See _on_led_changed()'s comment - the pulsing effect's
-                # name varies per driver, so check by position not string.
-                if s['led'] == caps.led_effects[-1] and 'breath' in s:
-                    device.set_breath_speed(s['breath'], p)
+                # See _on_led_changed()'s comment - checked by position,
+                # not the literal name.
+                if s['led'] == caps.led_effects[-1] and 'breathe' in s:
+                    device.set_breathe_speed(s['breathe'], p)
 
             stages = s['dpi_values'][:s['num_stages']]
             try:
@@ -2127,7 +2126,7 @@ X-GNOME-Autostart-enabled=true
             self._low_power_row.set_value(low_power)
         self._building = False
 
-    def _populate_profile(self, lod, brightness, led, breath, dpi_info, colors, buttons):
+    def _populate_profile(self, lod, brightness, led, breathe, dpi_info, colors, buttons):
         caps = self._caps
         self._building = True
         if self._lod_row and lod is not None:
@@ -2149,10 +2148,10 @@ X-GNOME-Autostart-enabled=true
             except ValueError:
                 led_idx = 1
             self._led_row.set_selected(led_idx)
-        if self._breath_row and breath is not None:
-            self._breath_row.set_value(breath)
-            if led and self._breath_row_container:
-                self._breath_row_container.set_visible(led == caps.led_effects[-1])
+        if self._breathe_row and breathe is not None:
+            self._breathe_row.set_value(breathe)
+            if led and self._breathe_row_container:
+                self._breathe_row_container.set_visible(led == caps.led_effects[-1])
 
         stages = dpi_info['stages']
         num    = dpi_info['count']

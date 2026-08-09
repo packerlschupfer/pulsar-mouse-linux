@@ -36,10 +36,10 @@ class DeviceCapabilities:
     lod_step: Optional[float] = None
 
     has_led: bool               = True
-    led_effects: list[str]      = field(default_factory=lambda: ['off', 'steady', 'breath'])
-    has_breath_speed: bool      = True
+    led_effects: list[str]      = field(default_factory=lambda: ['off', 'steady', 'breathe'])
+    has_breathe_speed: bool      = True
     brightness_range: tuple[int, int] = (0, 255)
-    breath_speed_range: tuple[int, int] = (0, 100)
+    breathe_speed_range: tuple[int, int] = (0, 100)
 
     has_angle_snap: bool        = True
     has_ripple_control: bool    = True
@@ -159,10 +159,10 @@ class PulsarDevice(ABC):
     def set_led_effect(self, effect: str, profile: int) -> None:
         raise NotImplementedError
 
-    def get_breath_speed(self, profile: int) -> int:
+    def get_breathe_speed(self, profile: int) -> int:
         raise NotImplementedError
 
-    def set_breath_speed(self, speed: int, profile: int) -> None:
+    def set_breathe_speed(self, speed: int, profile: int) -> None:
         raise NotImplementedError
 
     def get_stage_color(self, stage: int, profile: int) -> tuple[int, int, int]:
@@ -245,9 +245,9 @@ class PulsarDevice(ABC):
                 data['led_effect'] = self.get_led_effect(profile)
             except Exception:
                 pass
-            if caps.has_breath_speed:
+            if caps.has_breathe_speed:
                 try:
-                    data['breath_speed'] = self.get_breath_speed(profile)
+                    data['breathe_speed'] = self.get_breathe_speed(profile)
                 except Exception:
                     pass
         try:
@@ -291,11 +291,11 @@ class PulsarDevice(ABC):
                 self.set_led_effect(data['led_effect'], profile)
             except Exception as e:
                 warnings.append(f'LED effect: {e}')
-        if 'breath_speed' in data and caps.has_led and caps.has_breath_speed:
+        if 'breathe_speed' in data and caps.has_led and caps.has_breathe_speed:
             try:
-                self.set_breath_speed(data['breath_speed'], profile)
+                self.set_breathe_speed(data['breathe_speed'], profile)
             except Exception as e:
-                warnings.append(f'Breath speed: {e}')
+                warnings.append(f'Breathe speed: {e}')
         if 'buttons' in data:
             for name, func_str in data['buttons'].items():
                 bid = caps.buttons.get(name)

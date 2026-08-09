@@ -38,7 +38,7 @@ POLL_VAL_TO_HZ = {v: k for k, v in POLL_HZ_TO_VAL.items()}
 LOD_MM_TO_VAL  = {1: 0, 2: 1}
 LOD_VAL_TO_MM  = {v: k for k, v in LOD_MM_TO_VAL.items()}
 
-LED_NAME_TO_VAL = {'off': 0, 'steady': 1, 'breath': 2}
+LED_NAME_TO_VAL = {'off': 0, 'steady': 1, 'breathe': 2}
 LED_VAL_TO_NAME = {v: k for k, v in LED_NAME_TO_VAL.items()}
 
 # Factory default button bindings (from Pulsar Fusion reset capture)
@@ -256,16 +256,16 @@ class PulsarX2A(PulsarDevice):
         val = LED_NAME_TO_VAL.get(effect)
         if val is None:
             raise ValueError(f"Effect must be one of {list(LED_NAME_TO_VAL)}")
-        self._write_led_block(profile, val, self.get_breath_speed(profile))
+        self._write_led_block(profile, val, self.get_breathe_speed(profile))
 
-    def get_breath_speed(self, profile: int) -> int:
+    def get_breathe_speed(self, profile: int) -> int:
         rsp = self._read(0x03, 0x04, 0x0F, profile, [0x01])
         return rsp[11]
 
-    def set_breath_speed(self, speed: int, profile: int) -> None:
-        lo, hi = self.capabilities.breath_speed_range
+    def set_breathe_speed(self, speed: int, profile: int) -> None:
+        lo, hi = self.capabilities.breathe_speed_range
         if not lo <= speed <= hi:
-            raise ValueError(f"Breath speed must be {lo}–{hi}")
+            raise ValueError(f"Breathe speed must be {lo}–{hi}")
         rsp = self._read(0x03, 0x04, 0x0F, profile, [0x01])
         self._write_led_block(profile, rsp[8], speed)
 
