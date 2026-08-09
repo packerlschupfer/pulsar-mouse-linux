@@ -143,10 +143,11 @@ def build_parser(caps=None):
 Examples:
   %(prog)s                          # show all settings
   %(prog)s --profile 1              # show profile 1 only
+  %(prog)s --active-profile 2       # switch the mouse to profile 2
 
-  %(prog)s --poll 1000              # set polling rate to 1000 Hz
-  %(prog)s --debounce 3             # set debounce time to 3 ms
-  %(prog)s --angle-snap on
+  %(prog)s --poll 1000              # set polling rate on the ACTIVE profile
+  %(prog)s --debounce 3             # ditto - use --active-profile N first
+  %(prog)s --angle-snap on          #   to target a different profile
   %(prog)s --ripple on
   %(prog)s --motion-sync off
 
@@ -177,6 +178,12 @@ Examples:
     p.add_argument('--profile', type=int, metavar='N',
                    help='Profile to read/write (default: all for read)')
 
+    p.add_argument('--active-profile', type=int, metavar='N',
+                   help="Switch the mouse's active profile (which profile it "
+                        "actually uses during normal operation - independent "
+                        "of --profile above, which only targets a profile's "
+                        "stored settings for this command)")
+
     p.add_argument('--battery-json', action='store_true',
                    help='Print battery/charging status as one JSON line and exit '
                         '(for scripts - e.g. {"battery_percent": 85, '
@@ -187,8 +194,18 @@ Examples:
                         '(for scripts - polling_rate, polling_rates, and dpi for '
                         '--profile, or profile 1 if omitted)')
 
-    # Global settings
-    g = p.add_argument_group('global settings (shared across all profiles)')
+    # Settings tracked per the mouse's *active* profile - unlike the
+    # per-profile settings below, these have no --profile N targeting: the
+    # only way to change one for a specific profile is to first switch to
+    # it with --active-profile N. Live-verified 2026-08-09 (feinmann8k.py)
+    # that these actually vary by active profile on at least that driver,
+    # despite the name this group used to have ("global settings, shared
+    # across all profiles") - that was wrong, not just imprecise: writing
+    # one of these while a non-default profile was active used to silently
+    # land on profile 1 instead, a real bug now fixed at the driver level.
+    g = p.add_argument_group(
+        "settings tracked per the mouse's active profile "
+        "(use --active-profile to change which one)")
     g.add_argument('--poll', type=int, metavar='HZ',
                    help='Polling rate (Hz)')
     g.add_argument('--debounce', type=int, metavar='MS',
@@ -246,7 +263,7 @@ def main():
     write_ops = args.reset or any(x is not None for x in [
         args.poll, args.debounce,
         args.angle_snap, args.ripple, args.motion_sync,
-        args.power_saving, args.low_power,
+        args.power_saving, args.low_power, args.active_profile,
         args.lod, args.dpi, args.active_stage,
         args.brightness, args.brightness_percent, args.led, args.breath_speed,
         args.stage_color, args.button,
@@ -272,6 +289,9 @@ def main():
 
     if args.profile is not None and not 1 <= args.profile <= caps.num_profiles:
         sys.exit(f"Error: --profile must be 1–{caps.num_profiles}")
+
+    if args.active_profile is not None and not 1 <= args.active_profile <= caps.num_profiles:
+        sys.exit(f"Error: --active-profile must be 1–{caps.num_profiles}")
 
     if args.battery_json:
         if not hasattr(device, 'get_power'):
@@ -299,6 +319,8 @@ def main():
                 'wireless': hasattr(device, 'get_power'),
                 'profile': profile,
                 'num_profiles': caps.num_profiles,
+                'active_profile': (device.get_active_profile()
+                                    if hasattr(device, 'get_active_profile') else None),
                 'polling_rate': device.get_polling_rate(),
                 'polling_rates': caps.polling_rates,
                 'dpi': {
@@ -413,6 +435,10 @@ def main():
             if args.low_power is not None:
                 device.set_low_power_threshold(args.low_power)
                 print(f"Low power mode threshold set to {args.low_power}%")
+
+            if args.active_profile is not None:
+                device.set_active_profile(args.active_profile)
+                print(f"Active profile set to {args.active_profile}")
 
             # ── Per-profile writes ────────────────────────────────────
             prof = args.profile

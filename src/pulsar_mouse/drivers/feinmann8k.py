@@ -395,50 +395,76 @@ class PulsarFeinmann8K(PulsarDevice):
     def set_power_saving_timeout(self, seconds: int) -> None:
         # Fusion's "Wireless Power Saving" slider (30s-15min). Captured
         # 2026-08-07 dragging it through its full range: cat=0x08/reg=0x05/
-        # sub=0x03, profile=0x01, payload=uint16 LE seconds directly - every
-        # value seen (30, 60, 120, ..., 900) round-tripped byte-exact, no
-        # scaling/offset needed.
+        # sub=0x03, payload=uint16 LE seconds directly - every value seen
+        # (30, 60, 120, ..., 900) round-tripped byte-exact, no
+        # scaling/offset needed. profile=0x00 (not the 0x01 this was
+        # hardcoded to until 2026-08-09) - live-verified this setting is
+        # actually stored per-profile despite being modeled/labeled as
+        # "global" in this driver's API; 0x00 targets whichever profile is
+        # currently active, matching this and the other six "global"
+        # setters' getters, which already correctly used profile=0x00.
+        # The 0x01 hardcode silently wrote to profile 1 regardless of the
+        # active profile - see git history for the live repro.
         if not 30 <= seconds <= 900:
             raise ValueError("Power-saving timeout must be 30-900 seconds")
-        self._cmd(0x08, 0x05, 0x03, 0x01, list(struct.pack('<H', seconds)))
+        self._cmd(0x08, 0x05, 0x03, 0x00, list(struct.pack('<H', seconds)))
 
     def get_power_saving_timeout(self) -> int:
-        # cat=0x08/reg=0x85(=0x05|0x80)/sub=0x03, profile=0x01, payload=
-        # [0x01] (marker byte - without it this gets no reply, same as
-        # get_brightness/get_led_effect). Reply bytes[7:9] are the same
-        # uint16 LE seconds value as the write.
-        resp = self._query_ctrl(0x08, 0x05, 0x03, profile=0x01, payload=[0x01])
+        # cat=0x08/reg=0x85(=0x05|0x80)/sub=0x03, payload=[0x01] (marker
+        # byte - without it this gets no reply, same as get_brightness/
+        # get_led_effect). Reply bytes[7:9] are the same uint16 LE seconds
+        # value as the write. profile=0x00 targets the active profile -
+        # was hardcoded 0x01 until 2026-08-09, the same bug as the setters
+        # above but on the read side: it silently always read profile 1's
+        # stored value regardless of which profile was actually active,
+        # live-verified via a write-profile-2-then-read-while-active repro.
+        resp = self._query_ctrl(0x08, 0x05, 0x03, profile=0x00, payload=[0x01])
         return struct.unpack_from('<H', resp, 7)[0]
 
     def set_low_power_threshold(self, percent: int) -> None:
         # Fusion's "Low Power Mode" slider (0-100%). Captured 2026-08-07
         # dragging it through its range: cat=0x08/reg=0x08/sub=0x02,
-        # profile=0x01, payload=[percent] directly, single byte, no
-        # scaling.
+        # payload=[percent] directly, single byte, no scaling. profile=
+        # 0x00 targets the active profile - see set_power_saving_timeout()'s
+        # comment above for why (was hardcoded 0x01 until 2026-08-09).
         if not 0 <= percent <= 100:
             raise ValueError("Low power threshold must be 0-100")
-        self._cmd(0x08, 0x08, 0x02, 0x01, [percent])
+        self._cmd(0x08, 0x08, 0x02, 0x00, [percent])
 
     def get_low_power_threshold(self) -> int:
         # cat=0x08/reg=0x88(=0x08|0x80)/sub=0x02, profile=0x00, no payload -
         # reply byte[7] is the percentage directly.
         return self._query_ctrl(0x08, 0x08, 0x02, profile=0x00)[7]
 
-    # ── Global settings ─────────────────────────────────────────────────────
+    # ── Per-active-profile settings (misnamed "global settings" until
+    # 2026-08-09 - modeled after x2a.py's *global*, hardware-shared
+    # equivalents of these same fields, but live-verified this model
+    # actually stores each of these per-profile: switching the mouse's
+    # active profile changes the value these getters read back, with no
+    # profile argument threaded through by this driver's callers. Every
+    # setter below used to hardcode profile=0x01 on the wire (a leftover
+    # of the same "num_profiles was assumed to be 1" bug already fixed for
+    # the DPI methods - see capabilities.num_profiles above), which meant
+    # they silently wrote to profile 1's stored copy regardless of which
+    # profile was actually active, while their getters (already using the
+    # correct profile=0x00 "currently active profile" sentinel) read back
+    # the real active profile's unchanged value - live-verified 2026-08-09
+    # via a set-while-profile-2-active-then-check-profile-1 repro. Fixed
+    # by switching every setter here to profile=0x00 too, matching x2a.py's
+    # own use of 0x00 for its equivalent (globally-shared, in that driver)
+    # settings and live-verified against real hardware. ──────────────────
 
     def set_polling_rate(self, hz: int) -> None:
         val = POLL_HZ_TO_VAL.get(hz)
         if val is None:
             raise ValueError(f"Polling rate must be one of {sorted(POLL_HZ_TO_VAL)}")
-        self._cmd(0x01, 0x09, 0x02, 0x01, [val])
+        self._cmd(0x01, 0x09, 0x02, 0x00, [val])
 
     def get_polling_rate(self) -> int:
-        # cat=0x01/reg=0x89(=0x09|0x80)/sub=0x02, profile=0x00 (global
-        # settings are queried with profile=0 on the wire, unlike the
-        # profile=0x01 their *writes* use - confirmed against the Windows
-        # capture and live-verified: querying with the default profile=1
-        # here silently fails). Reply byte[7] is the same POLL_HZ_TO_VAL
-        # bitmask byte used for writes.
+        # cat=0x01/reg=0x89(=0x09|0x80)/sub=0x02, profile=0x00 targets
+        # whichever profile is currently active - see the section comment
+        # above. Reply byte[7] is the same POLL_HZ_TO_VAL bitmask byte
+        # used for writes.
         resp = self._query_ctrl(0x01, 0x09, 0x02, profile=0x00)
         val = resp[7]
         if val not in POLL_VAL_TO_HZ:
@@ -446,25 +472,23 @@ class PulsarFeinmann8K(PulsarDevice):
         return POLL_VAL_TO_HZ[val]
 
     # Captured 2026-08-07: toggling each on Fusion produced a single-byte
-    # SET_REPORT, cat=0x07/sub=0x02/profile=0x01, payload=[1 or 0], differing
-    # only by reg. Live-verified working (no async reply observed or needed,
-    # same as other fire-and-forget global settings).
+    # SET_REPORT, cat=0x07/sub=0x02, payload=[1 or 0], differing only by
+    # reg. Live-verified working (no async reply observed or needed, same
+    # as other fire-and-forget per-active-profile settings).
     def set_angle_snap(self, enabled: bool) -> None:
-        self._cmd(0x07, 0x04, 0x02, 0x01, [1 if enabled else 0])
+        self._cmd(0x07, 0x04, 0x02, 0x00, [1 if enabled else 0])
 
     def get_angle_snap(self) -> bool:
-        # profile=0x00 on the wire for this read, like every other global
-        # setting - see get_polling_rate()'s comment.
         return bool(self._query_ctrl(0x07, 0x04, 0x02, profile=0x00)[7])
 
     def set_ripple_control(self, enabled: bool) -> None:
-        self._cmd(0x07, 0x03, 0x02, 0x01, [1 if enabled else 0])
+        self._cmd(0x07, 0x03, 0x02, 0x00, [1 if enabled else 0])
 
     def get_ripple_control(self) -> bool:
         return bool(self._query_ctrl(0x07, 0x03, 0x02, profile=0x00)[7])
 
     def set_motion_sync(self, enabled: bool) -> None:
-        self._cmd(0x07, 0x05, 0x02, 0x01, [1 if enabled else 0])
+        self._cmd(0x07, 0x05, 0x02, 0x00, [1 if enabled else 0])
 
     def get_motion_sync(self) -> bool:
         return bool(self._query_ctrl(0x07, 0x05, 0x02, profile=0x00)[7])
@@ -472,15 +496,15 @@ class PulsarFeinmann8K(PulsarDevice):
     def set_debounce(self, ms: int) -> None:
         # Captured 2026-08-07: dragging the debounce slider 0->15 then back
         # to 0 in Fusion produced a linear single-byte SET_REPORT per step,
-        # cat=0x04/reg=0x03/sub=0x03/profile=0x01, payload=[ms]. Validated
-        # against capabilities.debounce_range (see its override above),
-        # matching x2a.py's pattern - was hardcoded to 0-15 here while the
+        # cat=0x04/reg=0x03/sub=0x03, payload=[ms]. Validated against
+        # capabilities.debounce_range (see its override above), matching
+        # x2a.py's pattern - was hardcoded to 0-15 here while the
         # capability defaulted to (0, 20), so GUI/CLI/plugin all thought
         # 16-20 was valid and only found out otherwise from this exception.
         lo, hi = self.capabilities.debounce_range
         if not lo <= ms <= hi:
             raise ValueError(f"Debounce must be {lo}-{hi} ms")
-        self._cmd(0x04, 0x03, 0x03, 0x01, [ms])
+        self._cmd(0x04, 0x03, 0x03, 0x00, [ms])
 
     def get_debounce(self) -> int:
         return self._query_ctrl(0x04, 0x03, 0x03, profile=0x00)[7]
