@@ -230,11 +230,15 @@ pulsar-mouse --battery-json
 
 ## Noctalia Plugin
 
-[`pulsar-mouse/`](pulsar-mouse/) is a [Noctalia](https://github.com/noctalia-dev/noctalia) shell plugin — a bar widget and a desktop widget (also usable on Noctalia's lock screen) showing battery percentage and charging status. Works with just the `pulsar-mouse` CLI installed; more efficient if `pulsar-mouse-gui` is also running, since the widgets read its periodic reading instead of polling the mouse themselves. See [its README](pulsar-mouse/README.md) for settings and details.
+There's a [Noctalia](https://github.com/noctalia-dev/noctalia) shell plugin backed by this CLI — a bar widget, a desktop/lock-screen widget showing battery percentage and charging status, and a quick-controls panel (DPI, polling rate, debounce, angle snap/ripple/motion sync, lift-off distance, LED, and on wireless mice power management, plus a profile switcher on multi-profile mice). Works with just the `pulsar-mouse` CLI installed; more efficient if `pulsar-mouse-gui` is also running, since the widgets read its periodic reading instead of polling the mouse themselves.
+
+It used to live in this repo at `pulsar-mouse/`, but moved to its own repo, [pulsar-mouse-noctalia](https://github.com/harveywuk/pulsar-mouse-noctalia), since [noctalia-dev/community-plugins](https://github.com/noctalia-dev/community-plugins) (submitted [here](https://github.com/noctalia-dev/community-plugins/pull/318)) expects each plugin as its own directory with no unrelated code alongside it. See that repo's [README](https://github.com/harveywuk/pulsar-mouse-noctalia/blob/main/pulsar-mouse/README.md) for settings and details.
+
+Once the submission is merged, installing it will just be a search away in Noctalia's plugin store. Until then (or for local development), add it as a path source:
 
 ```bash
-noctalia msg plugins source add pulsar-mouse path ~/dev/pulsar-mouse-linux   # or wherever you cloned this repo
-noctalia msg plugins enable packerlschupfer/pulsar-mouse
+noctalia msg plugins source add pulsar-mouse path ~/dev/pulsar-mouse-noctalia   # or wherever you cloned that repo
+noctalia msg plugins enable harveywuk/pulsar-mouse
 ```
 
 Then add the `bar` or `battery` widget from Noctalia's widget editor.
