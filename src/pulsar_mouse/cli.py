@@ -146,8 +146,10 @@ Examples:
   %(prog)s --active-profile 2       # switch the mouse to profile 2
 
   %(prog)s --poll 1000              # set polling rate on the ACTIVE profile
-  %(prog)s --debounce 3             # ditto - use --active-profile N first
-  %(prog)s --angle-snap on          #   to target a different profile
+  %(prog)s --active-profile 2 --debounce 3  # combining both is safe -
+  %(prog)s --debounce 3 --active-profile 2  # --active-profile always
+                                     #   applies first regardless of order
+  %(prog)s --angle-snap on
   %(prog)s --ripple on
   %(prog)s --motion-sync off
 
@@ -311,6 +313,18 @@ def main():
         return
 
     if args.status_json:
+        # This response mixes two different "which profile" scopes: dpi/
+        # lod/led/brightness/breathe_speed below are read from `profile`
+        # (the --profile N argument, or 1 if omitted), while
+        # polling_rate/debounce/angle_snap/ripple_control/motion_sync/
+        # power_saving/low_power have no --profile N targeting at all and
+        # always reflect whichever profile is `active_profile` (which may
+        # differ from `profile`) - see cli.py's argparse group help text
+        # for "settings tracked per the mouse's active profile" for the
+        # underlying reason. A consumer that needs both a specific
+        # profile's stored settings AND that profile actually active
+        # should call --active-profile first (see main()'s ordering
+        # comment) so `profile` and `active_profile` end up equal.
         profile = args.profile if args.profile is not None else 1
         device.open()
         try:
@@ -404,6 +418,16 @@ def main():
                 print(f"  Warning: {w}")
 
         if write_ops:
+            # active-profile first: every "global" write below actually
+            # targets whichever profile is active at the moment it runs
+            # (see cli.py's own settings-group help text) - applying it
+            # after them, as this used to, meant
+            # `--active-profile 2 --poll 1000` silently wrote the polling
+            # rate to the OLD active profile and only switched afterward.
+            if args.active_profile is not None:
+                device.set_active_profile(args.active_profile)
+                print(f"Active profile set to {args.active_profile}")
+
             # ── Global writes ─────────────────────────────────────────
             if args.poll is not None:
                 device.set_polling_rate(args.poll)
@@ -435,10 +459,6 @@ def main():
             if args.low_power is not None:
                 device.set_low_power_threshold(args.low_power)
                 print(f"Low power mode threshold set to {args.low_power}%")
-
-            if args.active_profile is not None:
-                device.set_active_profile(args.active_profile)
-                print(f"Active profile set to {args.active_profile}")
 
             # ── Per-profile writes ────────────────────────────────────
             prof = args.profile

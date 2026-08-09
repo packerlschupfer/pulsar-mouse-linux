@@ -16,6 +16,7 @@ import sys
 import os
 import json
 import re
+import select
 import struct
 import threading
 import time
@@ -313,21 +314,19 @@ class PulsarMouseApp(Adw.Application):
         return self._device
 
     def _on_activate(self, app):
-        # Always present self._win if it's still alive, otherwise construct
-        # a fresh MainWindow - never try to re-show a *hidden* one. A
-        # hidden-not-destroyed GtkWindow can't be reliably re-mapped as a
-        # real compositor surface on this Wayland/Hyprland + GTK4 combo
-        # (present(), even preceded by set_visible(True), silently does
-        # nothing - live-verified both ways failing), so MainWindow no
-        # longer hides on close, it really closes/destroys - this is the
-        # one code path (fresh construction + present()) that's always
-        # worked reliably, used both for the true first launch and every
-        # reactivation after. _build_tray() only runs once (gated on
-        # self._sni), even though this whole branch re-runs on every
-        # reactivation after the window's been closed - the tray/SNI
-        # service must stay the same one for the app's lifetime.
-        if self._win is not None and not self._win.in_destruction():
-            self._win.present()
+        # get_windows(), not self._win/in_destruction() - GtkWidget's
+        # in_destruction() is only True *during* the "destroy" signal
+        # itself, not afterward (live-verified, Opus review this session:
+        # it reads False on an already-closed window, so the earlier
+        # version of this method took the wrong branch and the window
+        # never reappeared - the exact bug this method exists to fix).
+        # get_windows() correctly reflects [] once a window is really
+        # closed (no more set_hide_on_close - see MainWindow.__init__),
+        # which is the one thing this always got right, both before any
+        # of today's changes and after.
+        wins = self.get_windows()
+        if wins:
+            wins[0].present()
             return
         device = self._find_or_create_device()
         win = MainWindow(application=app, device=device)
@@ -534,8 +533,13 @@ class PulsarMouseApp(Adw.Application):
         # Home page has no polling timer of its own - it shares this read
         # rather than doubling up on USB traffic (and possibly waking the
         # mouse from its own power-saving sleep twice as often).
-        if self._win is not None:
-            self._win._set_home_battery(pwr)
+        # get_windows(), not self._win - same reasoning as _on_activate:
+        # self._win can point at an already-closed window in the gap
+        # between a close and the next reopen (nothing nulls it out on
+        # close), and this periodic poll can land in exactly that gap.
+        wins = self.get_windows()
+        if wins:
+            wins[0]._set_home_battery(pwr)
 
     def _set_conn_quality_label(self, pct):
         self._last_signal_percent = pct
@@ -715,20 +719,31 @@ class _ColorPickerButton(Gtk.Button):
         header.pack_end(select_btn)
         win.set_titlebar(header)
 
-        chooser = Gtk.ColorChooserWidget(use_alpha=True)
+        # use_alpha=False - the on-wire stage-color command is RGB-only
+        # (see set_stage_color()/get_stage_color() below), so an alpha
+        # slider here would be a no-op that misleads users into thinking
+        # it does something.
+        chooser = Gtk.ColorChooserWidget(use_alpha=False)
         chooser.set_rgba(self._rgba)
         win.set_child(chooser)
 
-        cancel_btn.connect('clicked', lambda *_a: win.close())
+        # None of these three handlers capture `win` directly - closing
+        # via `b.get_root()`/`c.get_root()` instead - a captured `win`
+        # here would create win -> {cancel_btn,select_btn} -> GClosure ->
+        # (this lambda) -> win, a reference cycle Python's GC can't break
+        # on its own since it crosses into GObject-land (confirmed via a
+        # live create/close/gc.collect() test leaking one window per
+        # click before this fix).
+        cancel_btn.connect('clicked', lambda b, *_a: b.get_root().close())
 
-        def on_select(*_a):
+        def on_select(b, *_a):
             self.set_rgba(chooser.get_rgba())
-            win.close()
+            b.get_root().close()
         select_btn.connect('clicked', on_select)
 
-        def on_color_activated(_chooser, rgba):
+        def on_color_activated(c, rgba):
             self.set_rgba(rgba)
-            win.close()
+            c.get_root().close()
         chooser.connect('color-activated', on_color_activated)
 
         win.present()
@@ -754,27 +769,36 @@ class MainWindow(Adw.ApplicationWindow):
         # regardless, so the tray survives.
         self._profile = 1
         self._building = False
-        self._home_hidraw_fd = None
-        self.connect('destroy', self._on_destroy)
+        # A plain bool, not an fd - _home_hidraw_listener owns opening and
+        # closing its own fd entirely on its own thread now (see that
+        # method's docstring for why, this used to try to close the fd
+        # from here instead and had two real problems: (1) GTK4's
+        # "destroy" signal does not reliably fire on a plain close() while
+        # something still holds a Python reference to the window
+        # (PulsarMouseApp._win does, until the next reopen reassigns it),
+        # live-verified via Opus review this session, so the cleanup
+        # never ran at all; (2) even connected to close-request instead,
+        # os.close()ing an fd from this thread while the listener thread
+        # is blocked in os.read() on it is not guaranteed by Linux to
+        # unblock that read promptly - see close(2), "Multithreaded
+        # processes and close()" - empirically it did eventually clear
+        # via the device's own ~1Hz heartbeat waking the read, but that's
+        # an incidental timing coincidence to rely on, not a real fix).
+        self._home_hidraw_stop = False
+        self.connect('close-request', self._on_close_request)
 
         self._build_ui()
         GLib.idle_add(self._reload)
         GLib.idle_add(self._start_home_updates)
-
-    def _on_destroy(self, _win):
-        # Unblocks _home_hidraw_listener's os.read() so that thread exits
-        # instead of leaking forever - it has no other connection to this
-        # window's lifetime (see _start_home_updates's docstring for why
-        # it's a separate listener from the tray's). Guarded since it may
-        # already be closed (listener's own `finally: os.close(fd)` can
-        # race this on a genuine device disconnect).
-        if self._home_hidraw_fd is not None:
-            try:
-                os.close(self._home_hidraw_fd)
-            except OSError:
-                pass
-            self._home_hidraw_fd = None
         GLib.idle_add(self._refresh_firmware_version)
+
+    def _on_close_request(self, _win):
+        # Just a flag - _home_hidraw_listener polls it via select()'s
+        # timeout (at most ~1s latency) rather than this thread trying to
+        # directly unblock or close the listener's fd - see this class's
+        # own comment above for why that used to be here and didn't work.
+        self._home_hidraw_stop = True
+        return False  # False = allow the close to proceed as normal
 
     def _build_ui(self):
         caps = self._caps
@@ -1604,6 +1628,16 @@ X-GNOME-Autostart-enabled=true
         # not find_hidraw, for the same reason as _home_signal_row's
         # construction above: find_hidraw's base-class default makes
         # hasattr() on it true for every driver, wired or wireless.
+        #
+        # This thread owns its fd exclusively, start to finish - opens
+        # it, and is the only thing that ever closes it. Shutdown is
+        # cooperative: _on_close_request just sets self._home_hidraw_stop
+        # and this loop notices it within one select() timeout (at most
+        # ~1s), rather than another thread reaching in to close the fd
+        # itself to unblock a plain blocking read() - Linux doesn't
+        # guarantee that actually wakes a concurrent read() promptly (see
+        # close(2)), and it invited a check-then-act double-close race on
+        # top. A single stop flag has neither problem.
         device = self._device
         if device is None or self._home_signal_row is None:
             return
@@ -1614,10 +1648,12 @@ X-GNOME-Autostart-enabled=true
             fd = os.open(path, os.O_RDONLY)
         except OSError:
             return
-        self._home_hidraw_fd = fd
         last_update = 0.0
         try:
-            while True:
+            while not self._home_hidraw_stop:
+                ready, _w, _x = select.select([fd], [], [], 1.0)
+                if not ready:
+                    continue  # timeout - just a chance to re-check the stop flag
                 data = os.read(fd, 256)
                 if not data:
                     break
@@ -1630,15 +1666,7 @@ X-GNOME-Autostart-enabled=true
         except OSError:
             pass
         finally:
-            # Guarded: _on_destroy may have already closed this fd to
-            # unblock the os.read() above (that's the intended shutdown
-            # path, not just a stray double-close).
-            if self._home_hidraw_fd is not None:
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
-                self._home_hidraw_fd = None
+            os.close(fd)
 
     def _set_home_signal(self, pct):
         if self._home_signal_row is None:
@@ -1947,16 +1975,20 @@ X-GNOME-Autostart-enabled=true
                 pass
         _USB_LOCK.release()
 
-    def _do_reload(self):
-        if not self._open_dev():
-            return
-        caps = self._caps
-        device = self._device
+    def _read_and_populate_global(self):
         # Each field guarded independently via _read_field (same reasoning
         # as _do_reload_profile_inner() below) - a reload is 20+ individual
         # USB reads in quick succession, and a transient timeout on any one
         # of them (mouse's RF link briefly asleep) shouldn't blank out
-        # every other already-successful field, including these.
+        # every other already-successful field, including these. These
+        # fields have no --profile N-style targeting at all (see cli.py's
+        # own comment on this split, next to --status-json) - they always
+        # reflect whichever profile is *actually* active on the device,
+        # regardless of which profile's settings the rest of this window
+        # is showing, so this needs re-running any time the active profile
+        # might have changed, not just on a full window reload.
+        caps = self._caps
+        device = self._device
         poll_hz = self._read_field(device.get_polling_rate)
         debounce = self._read_field(device.get_debounce) if caps.has_debounce else None
         angle = self._read_field(device.get_angle_snap) if caps.has_angle_snap else None
@@ -1968,6 +2000,11 @@ X-GNOME-Autostart-enabled=true
                     if hasattr(device, 'get_low_power_threshold') else None)
         GLib.idle_add(self._populate_global, poll_hz, debounce, angle, ripple, motion,
                       power_saving, low_power)
+
+    def _do_reload(self):
+        if not self._open_dev():
+            return
+        self._read_and_populate_global()
         self._do_reload_profile_inner()
         self._close_dev()
 
@@ -1988,6 +2025,15 @@ X-GNOME-Autostart-enabled=true
             pass
         except Exception as e:
             GLib.idle_add(self._show_error, f'Could not switch active profile: {e}')
+        # Real bug, found in review: this used to skip
+        # _read_and_populate_global() entirely, so switching profiles left
+        # the poll/debounce/angle/ripple/motion/power widgets showing the
+        # PREVIOUS active profile's values - and the next Apply would then
+        # write those stale values back over the profile that's actually
+        # active now, silently clobbering it. The Noctalia panel already
+        # got this right (full re-fetch in its own profile-switch
+        # handler); this was the one place that missed it.
+        self._read_and_populate_global()
         self._do_reload_profile_inner()
         self._close_dev()
 

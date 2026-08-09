@@ -37,7 +37,7 @@ class DeviceCapabilities:
 
     has_led: bool               = True
     led_effects: list[str]      = field(default_factory=lambda: ['off', 'steady', 'breathe'])
-    has_breathe_speed: bool      = True
+    has_breathe_speed: bool     = True
     brightness_range: tuple[int, int] = (0, 255)
     breathe_speed_range: tuple[int, int] = (0, 100)
 

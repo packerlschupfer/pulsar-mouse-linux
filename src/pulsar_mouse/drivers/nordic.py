@@ -63,10 +63,10 @@ DPI_STAGE_SIZE        = 4
 ADDR_LED_COLOR_BASE   = 0x2C
 LED_COLOR_SIZE        = 4
 
-ADDR_LED_EFFECT       = 0x4C
-ADDR_LED_BRIGHTNESS   = 0x4E
+ADDR_LED_EFFECT        = 0x4C
+ADDR_LED_BRIGHTNESS    = 0x4E
 ADDR_LED_BREATHE_SPEED = 0x50
-ADDR_LED_ENABLED      = 0x52
+ADDR_LED_ENABLED       = 0x52
 
 # Buttons: 4 bytes each (mode, arg1, arg2, checksum)
 ADDR_BUTTON_BASE      = 0x60
@@ -91,7 +91,7 @@ POLL_HZ_TO_VAL = {1000: 0x01, 500: 0x02, 250: 0x04, 125: 0x08}
 POLL_VAL_TO_HZ = {v: k for k, v in POLL_HZ_TO_VAL.items()}
 
 LED_EFFECT_STEADY  = 0x01
-LED_EFFECT_BREATHEE = 0x02
+LED_EFFECT_BREATHE = 0x02
 
 BUTTON_MODE_DISABLED       = 0x00
 BUTTON_MODE_MOUSE          = 0x01
@@ -386,7 +386,7 @@ class PulsarNordic(PulsarDevice):
         if not enabled:
             return 'off'
         effect = self._mem.get(ADDR_LED_EFFECT, LED_EFFECT_STEADY)
-        if effect == LED_EFFECT_BREATHEE:
+        if effect == LED_EFFECT_BREATHE:
             return 'breathe'
         return 'steady'
 
@@ -397,7 +397,7 @@ class PulsarNordic(PulsarDevice):
             self._write_value(ADDR_LED_EFFECT, LED_EFFECT_STEADY)
             self._write_bool(ADDR_LED_ENABLED, True)
         elif effect == 'breathe':
-            self._write_value(ADDR_LED_EFFECT, LED_EFFECT_BREATHEE)
+            self._write_value(ADDR_LED_EFFECT, LED_EFFECT_BREATHE)
             self._write_bool(ADDR_LED_ENABLED, True)
         else:
             raise ValueError("Effect must be 'off', 'steady', or 'breathe'")
