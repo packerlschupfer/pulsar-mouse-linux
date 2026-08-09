@@ -483,13 +483,26 @@ class PulsarFeinmann8K(PulsarDevice):
         # command from set_active_dpi_stage's cat=0x05/reg=0x01/sub=0x02.
         # Reply echoes back reg=0x84 as expected but oddly sub=0x21 rather
         # than the queried 0x15 (harmless, ignored - not worth chasing).
-        # byte[7]=stage count, then `count` 5-byte blocks starting at
-        # byte[9]: [stage_num, dpi_x_lo, dpi_x_hi, dpi_y_lo, dpi_y_hi].
-        # Confirmed against all 6 known stage values (400/1200/2000/3200/
-        # 6400/12800) byte-exact, in two independent instances in the same
-        # capture.
+        #
+        # ⚠️ byte[7] is NOT the stage count, despite matching the count in
+        # every capture/test up to 2026-08-09 - it's some other counter
+        # that just happened to coincide. Root-caused 2026-08-09 by
+        # writing a deliberately-distinguishable 3-stage list via the
+        # newly-implemented set_dpi_stages() (whose own write payload has
+        # the identical [byte7, byte8, blocks...] shape) and reading back:
+        # byte[7] came back as this driver's own set_dpi_stages() flag
+        # byte (0x01, unrelated to stage count), while byte[8] correctly
+        # read 3, matching what was actually just written; the 5-byte
+        # blocks themselves were untouched, still starting at byte[9].
+        # This is almost certainly the real explanation for the
+        # "DPI stage count randomly drops" bug from 2026-08-08: nothing
+        # was ever corrupting the device's real stage list, this function
+        # was just misreading an unrelated fluctuating byte as if it were
+        # the count. byte[8]=stage count, then `count` 5-byte blocks
+        # starting at byte[9]: [stage_num, dpi_x_lo, dpi_x_hi, dpi_y_lo,
+        # dpi_y_hi].
         resp = self._query_ctrl(0x05, 0x04, 0x15, profile)
-        count = resp[7]
+        count = resp[8]
         stages = []
         off = 9
         for _ in range(count):
