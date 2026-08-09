@@ -30,7 +30,18 @@
 --   noctalia.runAsync(cmd, cb)  CLI read/write
 --   noctalia.json.decode(str)   status comes back as JSON on stdout
 
+-- Which profile is targeted for --profile N reads/writes AND, in lockstep,
+-- the mouse's actual active profile (this panel always keeps the two the
+-- same - picking a profile in the UI calls --active-profile, not just a
+-- local view change, so every field shown always belongs to one coherent
+-- profile). Starts at 1 as a bootstrap placeholder only - the first
+-- readStatus() call corrects it to whatever's actually active on the mouse
+-- (see profileSynced below), since a physical profile button or Fusion on
+-- another OS could have left a different profile active than this panel's
+-- default guess.
 local profile = 1
+local profileSynced = false
+local numProfiles = 0
 local pollingRate = nil
 local pollingRates = {}
 local dpiActive = nil
@@ -57,7 +68,7 @@ local lowPower = nil -- {value, min, max}
 local lowPowerPreview = nil
 local errorText = nil
 local busy = false
-local activeTab = "sensor" -- "sensor" | "lighting" | "power"
+local activeTab = "sensor" -- "sensor" | "advanced" | "lighting" | "power"
 
 -- Forward-declared: sliderRow/toggleRow below build closures (onChange/
 -- onDragEnd) that call render() before its definition is reached in the
@@ -148,6 +159,15 @@ local function sliderRow(key, labelText, formatValue, min, max, step, get, getPr
   }
 end
 
+-- Tried surfacing an extra hint for these three toggles three ways
+-- (2026-08-09): a static description row (worked, but pushed panel height
+-- back up), `tooltip` directly on ui.toggle (silently unsupported - Opus
+-- confirmed via Noctalia's own source that kToggle's prop allowlist has no
+-- `tooltip`, unlike kButton), and a small ui.button({glyph="help-circle",
+-- tooltip=...}) next to the toggle (matches kButton's confirmed-working
+-- tooltip wiring exactly, icon rendered correctly, but the hover popup
+-- itself never appeared in practice - live-tested, no fix found). Dropped
+-- all three - not worth chasing further. Revisit if this becomes reliable.
 local function toggleRow(key, labelText, checked, buildCmd, onSuccess)
   return ui.row({ key = key, gap = 8, align = "center" }, {
     ui.toggle({
@@ -192,10 +212,31 @@ function render()
     return
   end
 
-  -- No native tabs control - a row of segmented buttons standing in for one,
-  -- same variant-swap pattern as the DPI/polling stage buttons used to use
+  if numProfiles > 1 then
+    -- No separate label row above this - "Profile" prefixes each option
+    -- text instead ("Profile 1", "Profile 2", ...), saving a whole row's
+    -- height (this panel was fighting its own scroll safety net at 320px
+    -- wide with a standalone label here).
+    local profileOptions = {}
+    for i = 1, numProfiles do
+      table.insert(profileOptions, `{noctalia.tr("ui.profile-label")} {i}`)
+    end
+    table.insert(rows, ui.select({
+      key = "profile",
+      options = profileOptions,
+      selectedIndex = profile - 1,
+      enabled = not busy,
+      onChange = "onProfileChange",
+    }))
+  end
+
+  -- No native tabs control - segmented buttons standing in for one, same
+  -- variant-swap pattern as the DPI/polling stage buttons used to use
   -- before they became sliders. Power only applies to wireless mice (power
-  -- saving timeout, low-battery threshold) - hidden entirely on a wired one.
+  -- saving timeout, low-battery threshold) - hidden entirely on a wired
+  -- one. Four tabs no longer fit legibly in one row at this panel's 320px
+  -- width (confirmed by eye once Advanced was added) - split into two rows
+  -- of two instead of shrinking the buttons.
   local function tabButton(tab, labelKey)
     return ui.button({
       key = `tab-{tab}`,
@@ -208,11 +249,15 @@ function render()
       end,
     })
   end
-  local tabButtons = { tabButton("sensor", "ui.tab-sensor"), tabButton("lighting", "ui.tab-lighting") }
+  table.insert(rows, ui.row({ key = "tabs-1", gap = 6 }, {
+    tabButton("sensor", "ui.tab-sensor"),
+    tabButton("advanced", "ui.tab-advanced"),
+  }))
+  local tabButtons2 = { tabButton("lighting", "ui.tab-lighting") }
   if wireless then
-    table.insert(tabButtons, tabButton("power", "ui.tab-power"))
+    table.insert(tabButtons2, tabButton("power", "ui.tab-power"))
   end
-  table.insert(rows, ui.row({ key = "tabs", gap = 6 }, tabButtons))
+  table.insert(rows, ui.row({ key = "tabs-2", gap = 6 }, tabButtons2))
 
   if activeTab == "sensor" and #dpiStages > 0 then
     local shownIndex = dpiPreviewIndex or dpiActive
@@ -310,7 +355,23 @@ function render()
     }))
   end
 
-  if activeTab == "sensor" and debounce ~= nil then
+  if activeTab == "sensor" and lod ~= nil then
+    for _, node in ipairs(sliderRow(
+      "lod",
+      noctalia.tr("ui.lod-label"),
+      function(v) return `{string.format("%.1f", v)}mm` end,
+      lod.min, lod.max, lod.step,
+      function() return lod.value end,
+      function() return lodPreview end,
+      function(v) lodPreview = v end,
+      function(v) return `pulsar-mouse --profile {profile} --lod {string.format("%.1f", v)}` end,
+      function(v) lod.value = v end
+    )) do
+      table.insert(rows, node)
+    end
+  end
+
+  if activeTab == "advanced" and debounce ~= nil then
     for _, node in ipairs(sliderRow(
       "debounce",
       noctalia.tr("ui.debounce-label"),
@@ -326,7 +387,7 @@ function render()
     end
   end
 
-  if activeTab == "sensor" and angleSnap ~= nil then
+  if activeTab == "advanced" and angleSnap ~= nil then
     table.insert(rows, toggleRow(
       "angle-snap",
       noctalia.tr("ui.angle-snap-label"),
@@ -336,7 +397,7 @@ function render()
     ))
   end
 
-  if activeTab == "sensor" and rippleControl ~= nil then
+  if activeTab == "advanced" and rippleControl ~= nil then
     table.insert(rows, toggleRow(
       "ripple",
       noctalia.tr("ui.ripple-label"),
@@ -346,7 +407,7 @@ function render()
     ))
   end
 
-  if activeTab == "sensor" and motionSync ~= nil then
+  if activeTab == "advanced" and motionSync ~= nil then
     table.insert(rows, toggleRow(
       "motion-sync",
       noctalia.tr("ui.motion-sync-label"),
@@ -354,22 +415,6 @@ function render()
       function(v) return `pulsar-mouse --motion-sync {v and "on" or "off"}` end,
       function(v) motionSync = v end
     ))
-  end
-
-  if activeTab == "sensor" and lod ~= nil then
-    for _, node in ipairs(sliderRow(
-      "lod",
-      noctalia.tr("ui.lod-label"),
-      function(v) return `{string.format("%.1f", v)}mm` end,
-      lod.min, lod.max, lod.step,
-      function() return lod.value end,
-      function() return lodPreview end,
-      function(v) lodPreview = v end,
-      function(v) return `pulsar-mouse --profile {profile} --lod {string.format("%.1f", v)}` end,
-      function(v) lod.value = v end
-    )) do
-      table.insert(rows, node)
-    end
   end
 
   if activeTab == "power" and powerSaving ~= nil then
@@ -541,6 +586,22 @@ local function readStatus()
         render()
         return
       end
+      numProfiles = decoded.num_profiles or numProfiles
+      -- One-time bootstrap: this query targeted --profile {profile} (still
+      -- the placeholder 1 on first load), but decoded.active_profile is the
+      -- ground truth of what's actually live on the mouse regardless of
+      -- that. Resync `profile` to it and re-fetch once so every field below
+      -- reflects the real active profile from the start, not profile 1's
+      -- stored settings if a different one happens to be active - see
+      -- `profile`'s own comment above for why this can legitimately differ.
+      if not profileSynced then
+        profileSynced = true
+        if decoded.active_profile ~= nil and decoded.active_profile ~= profile then
+          profile = decoded.active_profile
+          readStatus()
+          return
+        end
+      end
       errorText = nil
       wireless = decoded.wireless == true
       pollingRate = decoded.polling_rate
@@ -587,6 +648,37 @@ end
 function onOpen(_context)
   render() -- immediate placeholder while the read below is in flight
   readStatus()
+end
+
+function onProfileChange(index, label)
+  local optionIndex = tonumber(index)
+  if optionIndex == nil then
+    return
+  end
+  local target = optionIndex + 1
+  if target == profile then
+    return
+  end
+  busy = true
+  render()
+  noctalia.runAsync(`pulsar-mouse --active-profile {target}`, function(result)
+    if type(result) == "table" and result.exitCode == 0 then
+      -- Switching the active profile changes essentially every field this
+      -- panel shows (DPI/LOD/LED belong to the newly-active profile now,
+      -- and the poll/debounce/etc. group tracks whichever profile is
+      -- active directly - see `profile`'s comment above) - a single
+      -- optimistic field update like onEffectChange's isn't enough, this
+      -- needs a full re-fetch. readStatus() clears `busy` and re-renders
+      -- itself once that completes, so neither happens here.
+      profile = target
+      errorText = nil
+      readStatus()
+    else
+      busy = false
+      errorText = noctalia.tr("ui.write-failed")
+      render()
+    end
+  end, 10000)
 end
 
 function onEffectChange(index, label)
