@@ -656,6 +656,70 @@ class PulsarMouseApp(Adw.Application):
         threading.Thread(target=_write, daemon=True).start()
 
 
+class _ColorPickerButton(Gtk.Button):
+    """LED color swatch button that opens its own picker window.
+
+    Gtk.ColorDialogButton's built-in Gtk.ColorDialog renders as a small
+    fixed-size window that can't fit its own alpha-slider content without
+    scrolling; on this system that mismatch also triggers a GSK compositing
+    bug where the custom HSV editor page paints transparently (the desktop
+    wallpaper shows through instead of an opaque swatch). Hosting a plain
+    Gtk.ColorChooserWidget in a window we own avoids both: the window sizes
+    itself to its natural content size and renders opaquely.
+    """
+
+    def __init__(self):
+        super().__init__(css_classes=['flat'])
+        self._rgba = Gdk.RGBA(red=1.0, green=1.0, blue=1.0, alpha=1.0)
+        self._swatch = Gtk.DrawingArea(content_width=24, content_height=24)
+        self._swatch.set_draw_func(self._draw_swatch)
+        self.set_child(self._swatch)
+        self.connect('clicked', self._on_clicked)
+
+    def _draw_swatch(self, _area, cr, w, h):
+        cr.set_source_rgba(self._rgba.red, self._rgba.green, self._rgba.blue, self._rgba.alpha)
+        cr.rectangle(0, 0, w, h)
+        cr.fill()
+
+    def get_rgba(self) -> Gdk.RGBA:
+        return self._rgba
+
+    def set_rgba(self, rgba: Gdk.RGBA):
+        self._rgba = rgba
+        self._swatch.queue_draw()
+
+    def _on_clicked(self, _btn):
+        win = Gtk.Window(transient_for=self.get_root(), modal=True)
+        win.set_title('Pick a Color')
+        win.set_resizable(True)
+
+        header = Gtk.HeaderBar()
+        header.set_title_widget(Gtk.Label(label='Pick a Color'))
+        cancel_btn = Gtk.Button(label='Cancel')
+        select_btn = Gtk.Button(label='Select', css_classes=['suggested-action'])
+        header.pack_start(cancel_btn)
+        header.pack_end(select_btn)
+        win.set_titlebar(header)
+
+        chooser = Gtk.ColorChooserWidget(use_alpha=True)
+        chooser.set_rgba(self._rgba)
+        win.set_child(chooser)
+
+        cancel_btn.connect('clicked', lambda *_a: win.close())
+
+        def on_select(*_a):
+            self.set_rgba(chooser.get_rgba())
+            win.close()
+        select_btn.connect('clicked', on_select)
+
+        def on_color_activated(_chooser, rgba):
+            self.set_rgba(rgba)
+            win.close()
+        chooser.connect('color-activated', on_color_activated)
+
+        win.present()
+
+
 class MainWindow(Adw.ApplicationWindow):
     def __init__(self, device: PulsarDevice | None = None, **kwargs):
         super().__init__(**kwargs)
@@ -1029,8 +1093,7 @@ class MainWindow(Adw.ApplicationWindow):
             row = Adw.SpinRow.new_with_range(caps.dpi_min, caps.dpi_max, caps.dpi_step)
             row.set_title(f'Stage {i}')
             if caps.has_stage_colors:
-                color_btn = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog())
-                color_btn.set_rgba(Gdk.RGBA(red=1.0, green=1.0, blue=1.0, alpha=1.0))
+                color_btn = _ColorPickerButton()
                 color_btn.set_valign(Gtk.Align.CENTER)
                 color_btn.set_tooltip_text(f'Stage {i} LED color')
                 row.add_suffix(color_btn)
