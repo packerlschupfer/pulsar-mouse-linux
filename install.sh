@@ -11,16 +11,12 @@ echo
 
 # Python package
 install -d "$PYTHON_SITE/pulsar_mouse/drivers"
-install -m 644 src/pulsar_mouse/__init__.py    "$PYTHON_SITE/pulsar_mouse/"
-install -m 644 src/pulsar_mouse/base.py        "$PYTHON_SITE/pulsar_mouse/"
-install -m 644 src/pulsar_mouse/hid.py         "$PYTHON_SITE/pulsar_mouse/"
-install -m 644 src/pulsar_mouse/cli.py         "$PYTHON_SITE/pulsar_mouse/"
-install -m 644 src/pulsar_mouse/gui.py         "$PYTHON_SITE/pulsar_mouse/"
-install -m 644 src/pulsar_mouse/drivers/__init__.py "$PYTHON_SITE/pulsar_mouse/drivers/"
-install -m 644 src/pulsar_mouse/drivers/x2a.py      "$PYTHON_SITE/pulsar_mouse/drivers/"
-install -m 644 src/pulsar_mouse/drivers/x2h.py      "$PYTHON_SITE/pulsar_mouse/drivers/"
-install -m 644 src/pulsar_mouse/drivers/xlite_v4.py  "$PYTHON_SITE/pulsar_mouse/drivers/"
-install -m 644 src/pulsar_mouse/drivers/nordic.py    "$PYTHON_SITE/pulsar_mouse/drivers/"
+for f in src/pulsar_mouse/*.py; do
+    install -m 644 "$f" "$PYTHON_SITE/pulsar_mouse/"
+done
+for f in src/pulsar_mouse/drivers/*.py; do
+    install -m 644 "$f" "$PYTHON_SITE/pulsar_mouse/drivers/"
+done
 
 # CLI + GUI entry points
 install -d "$PREFIX/bin"

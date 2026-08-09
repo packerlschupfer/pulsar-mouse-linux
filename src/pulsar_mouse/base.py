@@ -182,6 +182,16 @@ class PulsarDevice(ABC):
     def reset_to_defaults(self, profile: int) -> None:
         raise NotImplementedError
 
+    # ── Button encoding hooks ────────────────────────────────────────────
+
+    def describe_button(self, btn_type: int, a1: int, a2: int) -> str:
+        from pulsar_mouse.hid import describe_button
+        return describe_button(btn_type, a1, a2)
+
+    def parse_button_function(self, spec: str) -> tuple[int, int, int]:
+        from pulsar_mouse.hid import parse_button_function
+        return parse_button_function(spec)
+
     # ── Hidraw (for tray / DPI notifications) ─────────────────────────────
 
     def find_hidraw(self) -> Optional[str]:
@@ -196,7 +206,6 @@ class PulsarDevice(ABC):
 
     def export_profile(self, profile: int) -> dict:
         """Read all per-profile settings and return as a serialisable dict."""
-        from pulsar_mouse.hid import describe_button
         caps = self.capabilities
         data = {
             'format': 'pulsar-mouse-profile',
@@ -245,7 +254,7 @@ class PulsarDevice(ABC):
             buttons = {}
             for name, bid in caps.buttons.items():
                 t, a1, a2 = self.get_button(bid, profile)
-                buttons[name] = describe_button(t, a1, a2)
+                buttons[name] = self.describe_button(t, a1, a2)
             data['buttons'] = buttons
         except Exception:
             pass
@@ -253,7 +262,6 @@ class PulsarDevice(ABC):
 
     def import_profile(self, profile: int, data: dict) -> list[str]:
         """Apply profile settings from a dict. Returns list of warnings."""
-        from pulsar_mouse.hid import parse_button_function
         caps = self.capabilities
         warnings = []
         if 'dpi' in data:
@@ -295,7 +303,7 @@ class PulsarDevice(ABC):
                     warnings.append(f'Button "{name}" not found on this device')
                     continue
                 try:
-                    t, a1, a2 = parse_button_function(func_str)
+                    t, a1, a2 = self.parse_button_function(func_str)
                     self.set_button(bid, t, a1, a2, profile)
                 except Exception as e:
                     warnings.append(f'Button {name}: {e}')

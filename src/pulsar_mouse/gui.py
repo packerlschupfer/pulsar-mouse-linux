@@ -670,7 +670,9 @@ class _ColorPickerButton(Gtk.Button):
 
     def __init__(self):
         super().__init__(css_classes=['flat'])
-        self._rgba = Gdk.RGBA(red=1.0, green=1.0, blue=1.0, alpha=1.0)
+        rgba = Gdk.RGBA()
+        rgba.red, rgba.green, rgba.blue, rgba.alpha = 1.0, 1.0, 1.0, 1.0
+        self._rgba = rgba
         self._swatch = Gtk.DrawingArea(content_width=24, content_height=24)
         self._swatch.set_draw_func(self._draw_swatch)
         self.set_child(self._swatch)
@@ -772,13 +774,15 @@ class MainWindow(Adw.ApplicationWindow):
         # (view-stack page name, sidebar label, icon) - order here is the
         # order rows appear in the sidebar and must line up with
         # nav_list's row index in _on_nav_row_selected() below.
+        self._has_power_page = hasattr(self._device, 'get_power')
         self._nav_pages = [
             ('home', 'Home', 'go-home-symbolic'),
             ('performance', 'Performance', 'input-mouse-symbolic'),
             ('customize', 'Customize', 'preferences-desktop-symbolic'),
-            ('power', 'Power', 'battery-good-symbolic'),
-            ('tools', 'Tools', 'applications-utilities-symbolic'),
         ]
+        if self._has_power_page:
+            self._nav_pages.append(('power', 'Power', 'battery-good-symbolic'))
+        self._nav_pages.append(('tools', 'Tools', 'applications-utilities-symbolic'))
         for _name, label, icon in self._nav_pages:
             row = Adw.ActionRow()
             row.set_title(label)
@@ -843,10 +847,11 @@ class MainWindow(Adw.ApplicationWindow):
         self._view_stack.add_named(self._build_home_page(), 'home')
         self._view_stack.add_named(self._build_performance_page(), 'performance')
         self._view_stack.add_named(self._build_customize_page(), 'customize')
-        self._view_stack.add_named(self._build_power_page(), 'power')
+        if self._has_power_page:
+            self._view_stack.add_named(self._build_power_page(), 'power')
         self._view_stack.add_named(self._build_tools_page(), 'tools')
 
-        content_page = Adw.NavigationPage.new(content_toolbar, 'Settings')
+        content_page = Adw.NavigationPage.new(content_toolbar, '')
         split_view.set_content(content_page)
 
         nav_list.select_row(nav_list.get_row_at_index(0))
@@ -877,6 +882,17 @@ class MainWindow(Adw.ApplicationWindow):
             box.append(g)
         return scroll
 
+    @staticmethod
+    def _logo_image(size=96):
+        icon = Gtk.Image.new_from_icon_name('pulsar-mouse')
+        svg = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__)))), 'data', 'pulsar-mouse.svg')
+        if os.path.isfile(svg):
+            icon = Gtk.Image.new_from_file(svg)
+        icon.set_pixel_size(size)
+        icon.set_halign(Gtk.Align.CENTER)
+        return icon
+
     def _build_home_page(self):
         """Status/landing tab: device name, connection, battery, and
         wireless signal quality - populated live by _start_home_updates(),
@@ -895,14 +911,7 @@ class MainWindow(Adw.ApplicationWindow):
         box.set_margin_start(24)
         box.set_margin_end(24)
 
-        # 'pulsar-mouse' is the project's own logo (data/pulsar-mouse.svg,
-        # by @Scout339), not a generic GTK theme icon - resolved via the
-        # hicolor icon theme entry the package installs it under (see
-        # flake.nix's postInstall), so this only renders correctly once
-        # actually installed, not when just running from the source tree.
-        icon = Gtk.Image.new_from_icon_name('pulsar-mouse')
-        icon.set_pixel_size(96)
-        icon.set_halign(Gtk.Align.CENTER)
+        icon = self._logo_image(96)
         box.append(icon)
 
         title = Gtk.Label(label=caps.name)
@@ -925,6 +934,7 @@ class MainWindow(Adw.ApplicationWindow):
         self._firmware_row.set_title('Firmware Version')
         self._firmware_row.set_subtitle('—')
         self._firmware_row.add_prefix(Gtk.Image.new_from_icon_name('application-x-firmware-symbolic'))
+        self._firmware_row.set_visible(False)
         status_group.add(self._firmware_row)
 
         conn_row = Adw.ActionRow()
@@ -1543,7 +1553,10 @@ X-GNOME-Autostart-enabled=true
                     finally:
                         device.close()
                 if fw != 'unknown':
-                    GLib.idle_add(self._firmware_row.set_subtitle, fw)
+                    def _show_fw(v):
+                        self._firmware_row.set_subtitle(v)
+                        self._firmware_row.set_visible(True)
+                    GLib.idle_add(_show_fw, fw)
             except Exception:
                 pass
         threading.Thread(target=_read, daemon=True).start()
@@ -1662,6 +1675,7 @@ X-GNOME-Autostart-enabled=true
         current = self._btn_rows[btn_id].get_subtitle()
         dialog = RemapButtonDialog(
             transient_for=self, btn_label=label, current_spec=current,
+            device=self._device,
             on_applied=lambda t, a1, a2: self._run_bg(
                 lambda: self._do_remap_button(btn_id, t, a1, a2)))
         dialog.present()
@@ -1672,7 +1686,7 @@ X-GNOME-Autostart-enabled=true
         try:
             self._device.set_button(btn_id, btn_type, a1, a2, self._profile)
             t, ra1, ra2 = self._device.get_button(btn_id, self._profile)
-            GLib.idle_add(self._btn_rows[btn_id].set_subtitle, describe_button(t, ra1, ra2))
+            GLib.idle_add(self._btn_rows[btn_id].set_subtitle, self._device.describe_button(t, ra1, ra2))
             GLib.idle_add(self._show_toast, 'Button remapped')
         except Exception as e:
             GLib.idle_add(self._show_error, f'Remap error: {e}')
@@ -1944,7 +1958,7 @@ X-GNOME-Autostart-enabled=true
         # it shouldn't blank out every other already-successful field.
         try:
             return fn(*args)
-        except (NotImplementedError, OSError):
+        except Exception:
             return None
 
     def _do_reload_profile_inner(self):
@@ -2110,13 +2124,15 @@ X-GNOME-Autostart-enabled=true
                 rgb = colors[i] if i < len(colors) else None
                 if rgb is not None:
                     r, g, b = rgb
-                    btn.set_rgba(Gdk.RGBA(red=r / 255, green=g / 255, blue=b / 255, alpha=1.0))
+                    rgba = Gdk.RGBA()
+                    rgba.red, rgba.green, rgba.blue, rgba.alpha = r / 255, g / 255, b / 255, 1.0
+                    btn.set_rgba(rgba)
                 btn.set_sensitive(i < num)
 
         for btn_id, bind in buttons.items():
             if bind is not None and btn_id in self._btn_rows:
                 t, a1, a2 = bind
-                self._btn_rows[btn_id].set_subtitle(describe_button(t, a1, a2))
+                self._btn_rows[btn_id].set_subtitle(self._device.describe_button(t, a1, a2))
         self._building = False
 
     def _show_error(self, msg: str):
@@ -2142,11 +2158,12 @@ class RemapButtonDialog(Adw.Window):
                    'Media Key', 'Keyboard Shortcut', 'Disabled']
     _MOD_NAMES = ['ctrl', 'shift', 'alt', 'super']
 
-    def __init__(self, btn_label: str, current_spec: str, on_applied, **kwargs):
+    def __init__(self, btn_label: str, current_spec: str, on_applied, device=None, **kwargs):
         super().__init__(**kwargs, title=f'Remap {btn_label}',
                          default_width=360, default_height=-1)
         self.set_modal(True)
         self._on_applied = on_applied
+        self._device = device
 
         toolbar = Adw.ToolbarView()
         self.set_content(toolbar)
@@ -2304,7 +2321,10 @@ class RemapButtonDialog(Adw.Window):
     def _on_set_clicked(self, _btn):
         try:
             spec = self._build_spec()
-            t, a1, a2 = parse_button_function(spec)
+            if self._device is not None:
+                t, a1, a2 = self._device.parse_button_function(spec)
+            else:
+                t, a1, a2 = parse_button_function(spec)
         except ValueError as e:
             self._error_label.set_label(str(e))
             self._error_label.set_visible(True)

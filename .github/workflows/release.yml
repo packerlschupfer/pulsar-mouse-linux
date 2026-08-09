@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install build tools
         run: |
@@ -44,16 +44,12 @@ jobs:
           DRIVERS_DIR="${PKG_DIR}/drivers"
           mkdir -p "${DRIVERS_DIR}"
 
-          install -m 644 src/pulsar_mouse/__init__.py  "${PKG_DIR}/"
-          install -m 644 src/pulsar_mouse/base.py      "${PKG_DIR}/"
-          install -m 644 src/pulsar_mouse/hid.py       "${PKG_DIR}/"
-          install -m 644 src/pulsar_mouse/cli.py       "${PKG_DIR}/"
-          install -m 644 src/pulsar_mouse/gui.py       "${PKG_DIR}/"
-          install -m 644 src/pulsar_mouse/drivers/__init__.py "${DRIVERS_DIR}/"
-          install -m 644 src/pulsar_mouse/drivers/x2a.py     "${DRIVERS_DIR}/"
-          install -m 644 src/pulsar_mouse/drivers/x2h.py     "${DRIVERS_DIR}/"
-          install -m 644 src/pulsar_mouse/drivers/xlite_v4.py "${DRIVERS_DIR}/"
-          install -m 644 src/pulsar_mouse/drivers/nordic.py  "${DRIVERS_DIR}/"
+          for f in src/pulsar_mouse/*.py; do
+            install -m 644 "$f" "${PKG_DIR}/"
+          done
+          for f in src/pulsar_mouse/drivers/*.py; do
+            install -m 644 "$f" "${DRIVERS_DIR}/"
+          done
 
           # CLI entry point
           cat > "${DIR}/usr/local/bin/pulsar-mouse" << 'SCRIPT'
@@ -109,17 +105,18 @@ jobs:
           fakeroot dpkg-deb --build "${DIR}"
           echo "DEB_PATH=${DIR}.deb" >> "$GITHUB_ENV"
 
-      - name: Upload .deb
-        uses: softprops/action-gh-release@v2
+      - name: Stash .deb
+        uses: actions/upload-artifact@v4
         with:
-          files: "*.deb"
+          name: deb-package
+          path: "*.deb"
 
   build-tarball:
     name: Build tarball
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set version from tag
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
@@ -131,10 +128,11 @@ jobs:
           cp -r src/ udev/ data/ install.sh pyproject.toml README.md LICENSE "$DIR/"
           tar czf "${DIR}.tar.gz" "$DIR"
 
-      - name: Upload tarball
-        uses: softprops/action-gh-release@v2
+      - name: Stash tarball
+        uses: actions/upload-artifact@v4
         with:
-          files: "*.tar.gz"
+          name: tarball
+          path: "*.tar.gz"
 
   build-rpm:
     name: Build .rpm package
@@ -142,10 +140,10 @@ jobs:
     container: fedora:44
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install build tools
-        run: dnf install -y rpm-build
+        run: dnf install -y rpm-build python3-rpm-macros
 
       - name: Set version from tag
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
@@ -176,16 +174,12 @@ jobs:
           %install
           SITE=%{buildroot}%{python3_sitelib}/pulsar_mouse
           install -d \${SITE}/drivers
-          install -m 644 ${SRC}/src/pulsar_mouse/__init__.py  \${SITE}/
-          install -m 644 ${SRC}/src/pulsar_mouse/base.py      \${SITE}/
-          install -m 644 ${SRC}/src/pulsar_mouse/hid.py       \${SITE}/
-          install -m 644 ${SRC}/src/pulsar_mouse/cli.py       \${SITE}/
-          install -m 644 ${SRC}/src/pulsar_mouse/gui.py       \${SITE}/
-          install -m 644 ${SRC}/src/pulsar_mouse/drivers/__init__.py \${SITE}/drivers/
-          install -m 644 ${SRC}/src/pulsar_mouse/drivers/x2a.py     \${SITE}/drivers/
-          install -m 644 ${SRC}/src/pulsar_mouse/drivers/x2h.py     \${SITE}/drivers/
-          install -m 644 ${SRC}/src/pulsar_mouse/drivers/xlite_v4.py \${SITE}/drivers/
-          install -m 644 ${SRC}/src/pulsar_mouse/drivers/nordic.py  \${SITE}/drivers/
+          for f in ${SRC}/src/pulsar_mouse/*.py; do
+            install -m 644 "\$f" \${SITE}/
+          done
+          for f in ${SRC}/src/pulsar_mouse/drivers/*.py; do
+            install -m 644 "\$f" \${SITE}/drivers/
+          done
 
           install -d %{buildroot}/usr/local/bin
           printf '#!/usr/bin/env python3\nfrom pulsar_mouse.cli import main\nmain()\n' > %{buildroot}/usr/local/bin/pulsar-mouse
@@ -218,17 +212,18 @@ jobs:
           rpmbuild --define "_topdir ${TOPDIR}" -bb "${TOPDIR}/SPECS/${PKG}.spec"
           cp "${TOPDIR}"/RPMS/noarch/*.rpm .
 
-      - name: Upload .rpm
-        uses: softprops/action-gh-release@v2
+      - name: Stash .rpm
+        uses: actions/upload-artifact@v4
         with:
-          files: "*.rpm"
+          name: rpm-package
+          path: "*.rpm"
 
   build-appimage:
     name: Build AppImage
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set version from tag
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
@@ -260,16 +255,12 @@ jobs:
           pip install --target="${SITE}" --quiet pyusb
 
           mkdir -p "${SITE}/pulsar_mouse/drivers"
-          cp src/pulsar_mouse/__init__.py  "${SITE}/pulsar_mouse/"
-          cp src/pulsar_mouse/base.py      "${SITE}/pulsar_mouse/"
-          cp src/pulsar_mouse/hid.py       "${SITE}/pulsar_mouse/"
-          cp src/pulsar_mouse/cli.py       "${SITE}/pulsar_mouse/"
-          cp src/pulsar_mouse/gui.py       "${SITE}/pulsar_mouse/"
-          cp src/pulsar_mouse/drivers/__init__.py "${SITE}/pulsar_mouse/drivers/"
-          cp src/pulsar_mouse/drivers/x2a.py     "${SITE}/pulsar_mouse/drivers/"
-          cp src/pulsar_mouse/drivers/x2h.py     "${SITE}/pulsar_mouse/drivers/"
-          cp src/pulsar_mouse/drivers/xlite_v4.py "${SITE}/pulsar_mouse/drivers/"
-          cp src/pulsar_mouse/drivers/nordic.py  "${SITE}/pulsar_mouse/drivers/"
+          for f in src/pulsar_mouse/*.py; do
+            cp "$f" "${SITE}/pulsar_mouse/"
+          done
+          for f in src/pulsar_mouse/drivers/*.py; do
+            cp "$f" "${SITE}/pulsar_mouse/drivers/"
+          done
 
           # Desktop file + icon
           cp data/pulsar-mouse.desktop "${APPDIR}/pulsar-mouse.desktop"
@@ -308,17 +299,29 @@ jobs:
           ARCH=x86_64 ./appimagetool --no-appstream "${APPDIR}" \
             "pulsar-mouse-linux-${VERSION}-x86_64.AppImage"
 
-      - name: Upload AppImage
-        uses: softprops/action-gh-release@v2
+      - name: Stash AppImage
+        uses: actions/upload-artifact@v4
         with:
-          files: "*.AppImage"
+          name: appimage
+          path: "*.AppImage"
 
-  release-notes:
-    name: Generate release notes
+  publish:
+    name: Publish release
     runs-on: ubuntu-24.04
     needs: [build-deb, build-tarball, build-rpm, build-appimage]
 
     steps:
-      - uses: softprops/action-gh-release@v2
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
         with:
+          merge-multiple: true
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            *.deb
+            *.tar.gz
+            *.rpm
+            *.AppImage
           generate_release_notes: true

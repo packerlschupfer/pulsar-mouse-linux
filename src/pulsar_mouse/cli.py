@@ -12,7 +12,7 @@ import argparse
 from pulsar_mouse import find_device, __version__
 from pulsar_mouse.base import PulsarDevice
 from pulsar_mouse.drivers import discover_all
-from pulsar_mouse.hid import describe_button, parse_button_function
+from pulsar_mouse.hid import describe_button, parse_button_function  # fallback for non-device contexts
 
 
 def _on_off(val: bool) -> str:
@@ -122,7 +122,7 @@ def print_profile(device: PulsarDevice, profile: int):
         print(f"  Buttons:")
         for name, bid in caps.buttons.items():
             t, a1, a2 = device.get_button(bid, profile)
-            print(f"    {name:<8} (0x{bid:02x}): {describe_button(t, a1, a2)}")
+            print(f"    {name:<8} (0x{bid:02x}): {device.describe_button(t, a1, a2)}")
     except Exception as e:
         print(f"  Buttons:          error ({e})")
 
@@ -485,11 +485,11 @@ def main():
                     sys.exit(f"Unknown button '{btn_name}'. "
                              f"Use: {', '.join(caps.buttons)}")
                 try:
-                    t, a1, a2 = parse_button_function(func_spec)
+                    t, a1, a2 = device.parse_button_function(func_spec)
                 except ValueError as e:
                     sys.exit(str(e))
                 device.set_button(btn_id, t, a1, a2, prof)
-                print(f"Profile {prof} {btn_name} → {describe_button(t, a1, a2)}")
+                print(f"Profile {prof} {btn_name} → {device.describe_button(t, a1, a2)}")
 
             if args.reset:
                 device.reset_to_defaults(prof)

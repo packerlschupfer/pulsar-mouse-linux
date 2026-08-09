@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install system dependencies
         run: |
@@ -25,15 +25,9 @@ jobs:
 
       - name: Syntax check
         run: |
-          python3 -m py_compile src/pulsar_mouse/__init__.py
-          python3 -m py_compile src/pulsar_mouse/base.py
-          python3 -m py_compile src/pulsar_mouse/hid.py
-          python3 -m py_compile src/pulsar_mouse/cli.py
-          python3 -m py_compile src/pulsar_mouse/gui.py
-          python3 -m py_compile src/pulsar_mouse/drivers/__init__.py
-          python3 -m py_compile src/pulsar_mouse/drivers/x2a.py
-          python3 -m py_compile src/pulsar_mouse/drivers/x2h.py
-          python3 -m py_compile src/pulsar_mouse/drivers/xlite_v4.py
+          for f in src/pulsar_mouse/*.py src/pulsar_mouse/drivers/*.py; do
+            python3 -m py_compile "$f"
+          done
           echo "Syntax OK"
 
       - name: Import check (backend)
@@ -47,7 +41,12 @@ jobs:
           from pulsar_mouse.drivers import discover_all
           from pulsar_mouse.drivers.x2a import PulsarX2A
           print(f'Backend imports OK — v{__version__}')
-          print(f'Drivers: {list(discover_all())}')
+          drivers = discover_all()
+          print(f'Drivers: {list(drivers)}')
+          for name, cls in drivers.items():
+              assert hasattr(cls, 'capabilities'), f'{name} missing capabilities'
+              assert cls.capabilities.vid_pid_pairs, f'{name} has no VID/PID pairs'
+          print(f'All {len(drivers)} drivers registered correctly')
           print(f'X2A caps: {PulsarX2A.capabilities.name}')
           "
 
