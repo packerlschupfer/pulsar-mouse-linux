@@ -53,6 +53,9 @@ echo "  Debian/Ubuntu: sudo apt install python3-usb python3-gi gir1.2-gtk-4.0 gi
 echo "  Fedora:        sudo dnf install python3-pyusb python3-gobject gtk4 libadwaita"
 echo "  Arch:          sudo pacman -S python-pyusb python-gobject gtk4 libadwaita"
 echo
-echo "Add your user to the plugdev group for access without sudo:"
-echo "  sudo groupadd -f plugdev && sudo usermod -aG plugdev \$USER"
-echo "  (log out and back in)"
+# No plugdev instruction here: the udev rules this script installs grant
+# access via TAG+="uaccess" (systemd-logind ACL for the seat user) and
+# deliberately carry no GROUP="plugdev" - see the rules file's own header.
+# Telling users to create and join a group nothing references just left
+# them with a stale supplementary group and the impression that a re-login
+# was required.

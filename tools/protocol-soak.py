@@ -67,9 +67,10 @@ def main():
     parser.add_argument('--rounds', type=int, default=500)
     args = parser.parse_args()
 
+    # find_device() raises RuntimeError when nothing is found, it never
+    # returns None - the `if device is None: sys.exit(...)` that used to be
+    # here was unreachable.
     device = find_device()
-    if device is None:
-        sys.exit('No supported mouse found')
 
     print(f'Soak testing {device.capabilities.name} for {args.rounds} rounds...')
     device.open()

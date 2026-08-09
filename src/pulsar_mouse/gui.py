@@ -520,14 +520,29 @@ class PulsarMouseApp(Adw.Application):
             self._sni.set_icon(_battery_icon_name(pct, True) if charging else 'input-mouse')
         self._update_tray_tooltip()
         try:
+            # Written to a temp file in the same directory and renamed into
+            # place: os.replace() is atomic on POSIX, so an external reader
+            # (the Noctalia panel polls this file) always sees either the
+            # complete previous contents or the complete new ones. A plain
+            # open('w') truncates first, leaving a window in which a reader
+            # gets an empty or half-written file and fails to parse it.
             os.makedirs(os.path.dirname(self._BATTERY_STATE_PATH), exist_ok=True)
-            with open(self._BATTERY_STATE_PATH, 'w') as f:
-                json.dump({
-                    'wireless': True,
-                    **pwr,
-                    'signal_percent': self._last_signal_percent,
-                    'updated_at': time.time(),
-                }, f)
+            tmp = f'{self._BATTERY_STATE_PATH}.{os.getpid()}.tmp'
+            try:
+                with open(tmp, 'w') as f:
+                    json.dump({
+                        'wireless': True,
+                        **pwr,
+                        'signal_percent': self._last_signal_percent,
+                        'updated_at': time.time(),
+                    }, f)
+                os.replace(tmp, self._BATTERY_STATE_PATH)
+            except BaseException:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
         except OSError:
             pass  # cosmetic (external readers only) - never worth crashing over
         # Home page has no polling timer of its own - it shares this read
@@ -750,6 +765,17 @@ class _ColorPickerButton(Gtk.Button):
 
 
 class MainWindow(Adw.ApplicationWindow):
+    # Only ever assigned by _build_power_page(), which only runs for
+    # drivers that have a power page at all (see _has_power_page). Every
+    # wired driver (x2a/x2h/x2-wired/xlite) skips it, and without these
+    # class-level defaults _apply() raised AttributeError on every single
+    # Apply click on those devices, while _populate_global() raised
+    # *between* setting self._building True and False - permanently
+    # wedging the profile/LED/stage-count change handlers, which all
+    # early-return while _building is set, for the rest of the session.
+    _power_saving_row = None
+    _low_power_row = None
+
     def __init__(self, device: PulsarDevice | None = None, **kwargs):
         super().__init__(**kwargs)
         self._device = device
@@ -1275,10 +1301,17 @@ class MainWindow(Adw.ApplicationWindow):
             speed = subprocess.check_output(
                 ['gsettings', 'get', 'org.gnome.desktop.peripherals.mouse', 'speed'],
                 text=True).strip()
+            # try/finally: a raise between the two assignments (float() on
+            # unexpected gsettings output, say) would otherwise leave
+            # _building stuck True inside this bare except, silently
+            # disabling every change handler in the window - see
+            # _populate_global() for the same fix.
             self._building = True
-            self._accel_row.set_selected(0 if accel == 'flat' else 1)
-            self._speed_row.set_value(float(speed))
-            self._building = False
+            try:
+                self._accel_row.set_selected(0 if accel == 'flat' else 1)
+                self._speed_row.set_value(float(speed))
+            finally:
+                self._building = False
         except Exception:
             pass
 
@@ -1313,10 +1346,13 @@ class MainWindow(Adw.ApplicationWindow):
                 ['hyprctl', 'getoption', 'input:sensitivity', '-j'], text=True))
             accel = accel_raw.get('str', 'adaptive')
             speed = speed_raw.get('float', 0.0)
+            # try/finally for the same reason as _load_os_settings() above.
             self._building = True
-            self._hypr_accel_row.set_selected(0 if accel == 'flat' else 1)
-            self._hypr_speed_row.set_value(speed)
-            self._building = False
+            try:
+                self._hypr_accel_row.set_selected(0 if accel == 'flat' else 1)
+                self._hypr_speed_row.set_value(speed)
+            finally:
+                self._building = False
         except Exception:
             pass
 
@@ -1354,10 +1390,13 @@ class MainWindow(Adw.ApplicationWindow):
                 [reader, '--file', 'kcminputrc', '--group', 'Mouse',
                  '--key', 'XLbInptPointerAcceleration', '--default', '0.0'],
                 text=True).strip()
+            # try/finally for the same reason as _load_os_settings() above.
             self._building = True
-            self._kde_accel_row.set_selected(0 if flat == 'true' else 1)
-            self._kde_speed_row.set_value(float(speed))
-            self._building = False
+            try:
+                self._kde_accel_row.set_selected(0 if flat == 'true' else 1)
+                self._kde_speed_row.set_value(float(speed))
+            finally:
+                self._building = False
         except Exception:
             pass
 
@@ -1751,6 +1790,12 @@ X-GNOME-Autostart-enabled=true
         dialog.present()
 
     def _do_remap_button(self, btn_id, btn_type, a1, a2):
+        # _close_dev() releases _USB_LOCK, so it has to run even if
+        # something in here raises outside the except below (a
+        # KeyError/GLib error, say) - otherwise the lock is never released
+        # and every later USB operation in this process deadlocks. Same
+        # try/finally in _do_reload/_do_reload_profile/_do_apply/_do_reset
+        # and _on_export_finish, which all had the same shape.
         if not self._open_dev():
             return
         try:
@@ -1760,7 +1805,8 @@ X-GNOME-Autostart-enabled=true
             GLib.idle_add(self._show_toast, 'Button remapped')
         except Exception as e:
             GLib.idle_add(self._show_error, f'Remap error: {e}')
-        self._close_dev()
+        finally:
+            self._close_dev()
 
     def _on_profile_changed(self, combo, _param):
         if self._building:
@@ -2000,9 +2046,11 @@ X-GNOME-Autostart-enabled=true
     def _do_reload(self):
         if not self._open_dev():
             return
-        self._read_and_populate_global()
-        self._do_reload_profile_inner()
-        self._close_dev()
+        try:
+            self._read_and_populate_global()
+            self._do_reload_profile_inner()
+        finally:
+            self._close_dev()
 
     def _do_reload_profile(self):
         if not self._open_dev():
@@ -2016,11 +2064,12 @@ X-GNOME-Autostart-enabled=true
         # hasattr() can't tell support apart here - same reasoning as
         # _read_field()'s NotImplementedError handling below.
         try:
-            device.set_active_profile(self._profile)
-        except NotImplementedError:
-            pass
-        except Exception as e:
-            GLib.idle_add(self._show_error, f'Could not switch active profile: {e}')
+            try:
+                device.set_active_profile(self._profile)
+            except NotImplementedError:
+                pass
+            except Exception as e:
+                GLib.idle_add(self._show_error, f'Could not switch active profile: {e}')
         # Real bug, found in review: this used to skip
         # _read_and_populate_global() entirely, so switching profiles left
         # the poll/debounce/angle/ripple/motion/power widgets showing the
@@ -2030,18 +2079,21 @@ X-GNOME-Autostart-enabled=true
         # got this right (full re-fetch in its own profile-switch
         # handler); this was the one place that missed it.
         #
-        # Second bug, found in the review of THAT fix: reading immediately
-        # after the write above races the mouse's RF settle time -
-        # feinmann8k.py's own module docstring says a read right after a
-        # write can return the previous value, ~0.5s is what's actually
-        # needed, and _cmd()'s own built-in 0.3s post-write sleep isn't
-        # enough on its own. Same class of bug _do_reset() already sleeps
-        # before reloading for. This runs on a background thread (see
-        # _run_bg's caller), so it doesn't block the UI.
-        time.sleep(0.5)
-        self._read_and_populate_global()
-        self._do_reload_profile_inner()
-        self._close_dev()
+            # Second bug, found in the review of THAT fix: reading
+            # immediately after the write above races the mouse's RF settle
+            # time - feinmann8k.py's own module docstring says a read right
+            # after a write can return the previous value, ~0.5s is what's
+            # actually needed, and _cmd()'s own built-in 0.3s post-write
+            # sleep isn't enough on its own. That sleep now lives inside
+            # feinmann8k.set_active_profile() itself, so every caller (this,
+            # the CLI, the Noctalia plugin) inherits it instead of each
+            # having to remember - which the CLI did not, and silently
+            # wrote per-active-profile settings to the outgoing profile.
+            # Nothing to do here anymore.
+            self._read_and_populate_global()
+            self._do_reload_profile_inner()
+        finally:
+            self._close_dev()
 
     def _read_field(self, fn, *args):
         # Drivers may only implement a subset of get_* methods (e.g. a
@@ -2068,15 +2120,20 @@ X-GNOME-Autostart-enabled=true
             led = self._read_field(device.get_led_effect, p) if caps.has_led else None
             breathe = (self._read_field(device.get_breathe_speed, p)
                       if caps.has_led and caps.has_breathe_speed else None)
-            try:
-                # NOTE: on some drivers, get_dpi_stages() is known to
-                # mutate the device's active DPI stage as a side effect of
-                # reading it (see that driver's docstring, if so) - every
-                # reload here can silently change what the user thinks is
-                # selected. Not fixed here; tracked as a driver-level issue.
-                dpi_info = device.get_dpi_stages(p)
-            except (NotImplementedError, OSError):
-                dpi_info = {'active': -1, 'count': caps.max_dpi_stages, 'stages': []}
+            # NOTE: on some drivers, get_dpi_stages() is known to mutate
+            # the device's active DPI stage as a side effect of reading it
+            # (see that driver's docstring, if so) - every reload here can
+            # silently change what the user thinks is selected. Not fixed
+            # here; tracked as a driver-level issue.
+            #
+            # None on failure, NOT a synthesised placeholder: this used to
+            # fall back to {'active': -1, 'count': max_dpi_stages,
+            # 'stages': []}, which _populate_profile displayed as a full
+            # set of 800 DPI stages and the next Apply then wrote straight
+            # back to the device. _read_field's own convention (None means
+            # "this read failed, leave the widget alone") is what every
+            # other field here already uses.
+            dpi_info = self._read_field(device.get_dpi_stages, p)
             colors = None
             if caps.has_stage_colors:
                 colors = [self._read_field(device.get_stage_color, i, p)
@@ -2136,7 +2193,8 @@ X-GNOME-Autostart-enabled=true
             GLib.idle_add(self._show_toast, 'Settings applied')
         except Exception as e:
             GLib.idle_add(self._show_error, f'Write error: {e}')
-        self._close_dev()
+        finally:
+            self._close_dev()
 
     def _do_reset(self):
         if not self._open_dev():
@@ -2144,9 +2202,19 @@ X-GNOME-Autostart-enabled=true
         try:
             self._device.reset_to_defaults(self._profile)
             GLib.idle_add(self._show_toast, 'Reset to factory defaults')
+        except NotImplementedError:
+            # The button is only built when caps.has_reset (see
+            # _build_tools_page), so reaching this means a driver
+            # advertises the capability without implementing the method.
+            # base's default raise carries no message at all, so the
+            # generic handler below would show a blank error banner.
+            GLib.idle_add(
+                self._show_error,
+                f'Factory reset is not supported on {self._caps.name}')
         except Exception as e:
             GLib.idle_add(self._show_error, f'Reset error: {e}')
-        self._close_dev()
+        finally:
+            self._close_dev()
         time.sleep(1.0)
         GLib.idle_add(self._reload)
 
@@ -2154,33 +2222,58 @@ X-GNOME-Autostart-enabled=true
 
     def _populate_global(self, poll_hz, debounce, angle, ripple, motion,
                          power_saving=None, low_power=None):
+        # try/finally, not a plain trailing assignment: anything raising in
+        # between used to leave self._building stuck True forever, and
+        # every change handler in this window (_on_profile_changed,
+        # _on_led_changed, _on_stage_count_changed, the sliders' snap
+        # callback) early-returns while it's set - one exception here
+        # silently killed all of them for the rest of the session.
         caps = self._caps
         self._building = True
-        # Find index of polling rate
         try:
-            poll_idx = caps.polling_rates.index(poll_hz)
-        except ValueError:
-            poll_idx = len(caps.polling_rates) - 1
-        self._poll_row.set_selected(poll_idx)
-        if self._home_mode_row is not None:
-            self._home_mode_row.set_subtitle(f'{poll_hz} Hz')
-        if self._debounce_row and debounce is not None:
-            self._debounce_row.set_value(debounce)
-        if self._angle_row and angle is not None:
-            self._angle_row.set_active(angle)
-        if self._ripple_row and ripple is not None:
-            self._ripple_row.set_active(ripple)
-        if self._motion_row and motion is not None:
-            self._motion_row.set_active(motion)
-        if self._power_saving_row and power_saving is not None:
-            self._power_saving_row.set_value(power_saving)
-        if self._low_power_row and low_power is not None:
-            self._low_power_row.set_value(low_power)
-        self._building = False
+            # poll_hz is None when the read genuinely failed (see
+            # _read_field) - leave the row showing whatever it had rather
+            # than falling into the ValueError branch below, which selected
+            # the LAST polling rate in the list. On this hardware that is
+            # 8000 Hz, so a single timed-out read followed by an Apply
+            # silently jumped the mouse to its maximum polling rate. Same
+            # `if x is not None` guard the fields below already use.
+            if poll_hz is not None:
+                try:
+                    poll_idx = caps.polling_rates.index(poll_hz)
+                except ValueError:
+                    poll_idx = len(caps.polling_rates) - 1
+                self._poll_row.set_selected(poll_idx)
+                if self._home_mode_row is not None:
+                    self._home_mode_row.set_subtitle(f'{poll_hz} Hz')
+            if self._debounce_row and debounce is not None:
+                self._debounce_row.set_value(debounce)
+            if self._angle_row and angle is not None:
+                self._angle_row.set_active(angle)
+            if self._ripple_row and ripple is not None:
+                self._ripple_row.set_active(ripple)
+            if self._motion_row and motion is not None:
+                self._motion_row.set_active(motion)
+            if self._power_saving_row and power_saving is not None:
+                self._power_saving_row.set_value(power_saving)
+            if self._low_power_row and low_power is not None:
+                self._low_power_row.set_value(low_power)
+        finally:
+            self._building = False
 
     def _populate_profile(self, lod, brightness, led, breathe, dpi_info, colors, buttons):
+        # try/finally for the same reason as _populate_global() above.
         caps = self._caps
         self._building = True
+        try:
+            self._populate_profile_inner(lod, brightness, led, breathe,
+                                         dpi_info, colors, buttons)
+        finally:
+            self._building = False
+
+    def _populate_profile_inner(self, lod, brightness, led, breathe,
+                                dpi_info, colors, buttons):
+        caps = self._caps
         if self._lod_row and lod is not None:
             if caps.lod_step:
                 self._lod_row.set_value(lod)
@@ -2205,16 +2298,27 @@ X-GNOME-Autostart-enabled=true
             if led and self._breathe_row_container:
                 self._breathe_row_container.set_visible(led == caps.led_effects[-1])
 
-        stages = dpi_info['stages']
-        num    = dpi_info['count']
-        active = dpi_info['active']
-        self._stage_count_row.set_value(num)
-        self._active_stage_row.set_selected(max(0, active - 1))
-        for i, row in enumerate(self._dpi_rows):
-            row.set_value(stages[i][0] if i < len(stages) else 800)
-            row.set_sensitive(i < num)
-        if self._home_dpi_row is not None and 1 <= active <= len(stages):
-            self._home_dpi_row.set_subtitle(f'{stages[active - 1][0]} DPI')
+        # dpi_info is None when the read genuinely failed (see
+        # _do_reload_profile_inner). It used to be replaced with a
+        # synthesised {'active': -1, 'count': max_dpi_stages, 'stages': []}
+        # placeholder, which this then displayed as a full set of 800 DPI
+        # stages - and, worse, is what the next Apply read back off these
+        # widgets and wrote to the device, silently overwriting the real
+        # stage list. Leave every DPI widget (and the colour buttons,
+        # whose sensitivity tracks the stage count) untouched instead,
+        # same as every other field here does on a failed read.
+        num = None
+        if dpi_info is not None:
+            stages = dpi_info['stages']
+            num    = dpi_info['count']
+            active = dpi_info['active']
+            self._stage_count_row.set_value(num)
+            self._active_stage_row.set_selected(max(0, active - 1))
+            for i, row in enumerate(self._dpi_rows):
+                row.set_value(stages[i][0] if i < len(stages) else 800)
+                row.set_sensitive(i < num)
+            if self._home_dpi_row is not None and 1 <= active <= len(stages):
+                self._home_dpi_row.set_subtitle(f'{stages[active - 1][0]} DPI')
 
         if self._color_buttons and colors:
             for i, btn in enumerate(self._color_buttons):
@@ -2224,13 +2328,13 @@ X-GNOME-Autostart-enabled=true
                     rgba = Gdk.RGBA()
                     rgba.red, rgba.green, rgba.blue, rgba.alpha = r / 255, g / 255, b / 255, 1.0
                     btn.set_rgba(rgba)
-                btn.set_sensitive(i < num)
+                if num is not None:
+                    btn.set_sensitive(i < num)
 
         for btn_id, bind in buttons.items():
             if bind is not None and btn_id in self._btn_rows:
                 t, a1, a2 = bind
                 self._btn_rows[btn_id].set_subtitle(self._device.describe_button(t, a1, a2))
-        self._building = False
 
     def _show_error(self, msg: str):
         self._banner.set_title(msg)
@@ -2450,13 +2554,6 @@ class RemapButtonDialog(Adw.Window):
 class InputTestDialog(Adw.Window):
     """Input test dialog with a mouse diagram and event log."""
 
-    _ZONES = {
-        1: ('Left Click',    0.02, 0.02, 0.44, 0.35),
-        2: ('Right Click',   0.54, 0.02, 0.44, 0.35),
-        3: ('Wheel Click',   0.38, 0.06, 0.24, 0.20),
-        8: ('Thumb Back',    0.00, 0.50, 0.30, 0.15),
-        9: ('Thumb Forward', 0.00, 0.36, 0.30, 0.15),
-    }
     _GTK_BTN_NAMES = {1: 'Left', 2: 'Middle', 3: 'Right',
                        8: 'Back (both sides)', 9: 'Forward (both sides)'}
 
@@ -2658,7 +2755,17 @@ class InputTestDialog(Adw.Window):
         vbox.append(scroll_win)
 
         self._dpi_hide_seq = 0
+        # Same cooperative-shutdown flag MainWindow._home_hidraw_listener
+        # uses - see _dpi_listener() below. Without it, every open of this
+        # dialog leaked a thread and an open hidraw fd for the lifetime of
+        # the process.
+        self._dpi_stop = False
+        self.connect('close-request', self._on_close_request)
         threading.Thread(target=self._dpi_listener, daemon=True).start()
+
+    def _on_close_request(self, _win):
+        self._dpi_stop = True
+        return False  # False = allow the close to proceed as normal
 
     def _log(self, msg):
         end = self._log_buf.get_end_iter()
@@ -2711,6 +2818,15 @@ class InputTestDialog(Adw.Window):
         return False
 
     def _dpi_listener(self):
+        # This thread owns its fd exclusively, start to finish, and shuts
+        # down cooperatively: _on_close_request sets self._dpi_stop and the
+        # select() timeout below gives this loop a chance to notice within
+        # ~1s. Identical to MainWindow._home_hidraw_listener - see its
+        # docstring for why the stop flag rather than another thread
+        # closing the fd to unblock a plain blocking read(). This dialog
+        # never got that treatment, so the plain `while True: os.read()`
+        # here blocked forever after the dialog closed, leaking both the
+        # thread and the hidraw fd on every single open.
         device = self._device
         if device is None:
             return
@@ -2722,7 +2838,10 @@ class InputTestDialog(Adw.Window):
         except OSError:
             return
         try:
-            while True:
+            while not self._dpi_stop:
+                ready, _w, _x = select.select([fd], [], [], 1.0)
+                if not ready:
+                    continue  # timeout - just a chance to re-check the stop flag
                 data = os.read(fd, 256)
                 if not data:
                     break
