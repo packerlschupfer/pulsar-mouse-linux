@@ -94,7 +94,8 @@ set_button() is implemented and ran cleanly against hardware, but has no
 live-verified *changed*-value confirmation (see its docstring) since no
 write for it was ever captured, only inferred from the read side's
 already-confirmed layout. get_dpi_stages() is genuinely side-effect-free
-(no longer mutates the active DPI stage - see its docstring).
+(no longer mutates the active DPI stage - see its docstring). set_dpi_stages()
+(2026-08-09) is now implemented and live-verified too - see its docstring.
 """
 
 import glob
@@ -484,25 +485,22 @@ class PulsarFeinmann8K(PulsarDevice):
         # Reply echoes back reg=0x84 as expected but oddly sub=0x21 rather
         # than the queried 0x15 (harmless, ignored - not worth chasing).
         #
-        # ⚠️ byte[7] is NOT the stage count, despite matching the count in
-        # every capture/test up to 2026-08-09 - it's some other counter
-        # that just happened to coincide. Root-caused 2026-08-09 by
-        # writing a deliberately-distinguishable 3-stage list via the
-        # newly-implemented set_dpi_stages() (whose own write payload has
-        # the identical [byte7, byte8, blocks...] shape) and reading back:
-        # byte[7] came back as this driver's own set_dpi_stages() flag
-        # byte (0x01, unrelated to stage count), while byte[8] correctly
-        # read 3, matching what was actually just written; the 5-byte
-        # blocks themselves were untouched, still starting at byte[9].
-        # This is almost certainly the real explanation for the
-        # "DPI stage count randomly drops" bug from 2026-08-08: nothing
-        # was ever corrupting the device's real stage list, this function
-        # was just misreading an unrelated fluctuating byte as if it were
-        # the count. byte[8]=stage count, then `count` 5-byte blocks
-        # starting at byte[9]: [stage_num, dpi_x_lo, dpi_x_hi, dpi_y_lo,
-        # dpi_y_hi].
+        # byte[7]=active stage, byte[8]=stage count, then `count` 5-byte
+        # blocks starting at byte[9]: [stage_num, dpi_x_lo, dpi_x_hi,
+        # dpi_y_lo, dpi_y_hi]. Originally misread as byte[7]=count (an
+        # earlier session's guess that coincidentally matched every test
+        # at the time) - corrected 2026-08-09 after finding x2a.py's
+        # sibling implementation of this exact command already documents
+        # this layout (`rsp[7]`=active, `rsp[8]`=num_stages). The old
+        # byte[7]-as-count bug is almost certainly the real explanation
+        # for an earlier-reported "DPI stage count randomly drops" bug:
+        # nothing was corrupting the device's real stage list, it was
+        # reading the active stage index and calling it the count.
+        # count is clamped defensively - a stale/latched reply here would
+        # otherwise make struct.unpack_from read past the payload.
         resp = self._query_ctrl(0x05, 0x04, 0x15, profile)
-        count = resp[8]
+        active = resp[7]
+        count = min(resp[8], self.capabilities.max_dpi_stages)
         stages = []
         off = 9
         for _ in range(count):
@@ -510,7 +508,6 @@ class PulsarFeinmann8K(PulsarDevice):
             y = struct.unpack_from('<H', resp, off + 3)[0]
             stages.append((x, y))
             off += 5
-        active = self.get_active_dpi_stage(profile)
         return {'active': active, 'count': count, 'stages': stages}
 
     def set_active_dpi_stage(self, stage: int, profile: int) -> None:
@@ -534,33 +531,27 @@ class PulsarFeinmann8K(PulsarDevice):
     def get_active_dpi_stage(self, profile: int) -> int:
         # cat=0x05/reg=0x81(=0x01|0x80)/sub=0x02, no stage in the payload -
         # confirmed 2026-08-07 via Windows capture to be a genuinely
-        # side-effect-free read (unlike get_dpi_stages() above, which reuses
-        # the *write* command cat=0x05/reg=0x01/sub=0x02 with a stage number
-        # and mutates the active stage as a result). Reply byte[7] is the
-        # active stage index.
+        # side-effect-free read. Reply byte[7] is the active stage index.
+        # (get_dpi_stages() above also gets this for free at byte[7] of
+        # its own reply, so this is only needed standalone.)
         return self._query_ctrl(0x05, 0x01, 0x02, profile)[7]
 
     def set_dpi_stages(self, stages: list[int], active: int, profile: int) -> None:
         # Captured 2026-08-09: Fusion's DPI tab, adding a stage back after
-        # the stage-count-drop bug (see git history / project notes) -
+        # the stage-count-drop bug (see get_dpi_stages()'s docstring) -
         # cat=0x05/reg=0x04/sub=0x21, the *write* counterpart to
-        # get_dpi_stages()'s read (same reg/sub as that read's reply
-        # oddly echoes - see get_dpi_stages()'s docstring; still unclear
-        # whether that's a coincidence or the two commands share a
-        # handler on the device side). Body: byte[7]=a flag byte whose
-        # meaning wasn't pinned down (0x01 and 0x02 both seen across two
-        # separate write bursts in the same capture, with no observed
-        # difference in effect - using 0x01 here, from the burst that
-        # ended in a full, consistent 6-stage list), byte[8]=stage count,
-        # then `count` 5-byte blocks starting at byte[9], same layout as
-        # get_dpi_stages()'s read reply: [stage_num, dpi_x_lo, dpi_x_hi,
-        # dpi_y_lo, dpi_y_hi]. Fusion always sent X==Y (no separate X/Y
-        # DPI control surfaced anywhere in its UI), so this only exposes
-        # one DPI value per stage, matching this method's existing
-        # list[int] signature. NOT YET LIVE-VERIFIED against real
-        # hardware - only reconstructed from the capture; test with a
-        # small change (e.g. one stage's value) before trusting it for
-        # anything that matters.
+        # get_dpi_stages()'s read. Body: byte[7]=active stage, byte[8]=
+        # stage count, then `count` 5-byte blocks starting at byte[9]:
+        # [stage_num, dpi_x_lo, dpi_x_hi, dpi_y_lo, dpi_y_hi] - same
+        # layout x2a.py's sibling implementation of this exact command
+        # already uses (confirmed there after initially misreading
+        # byte[7] as an unidentified flag). Fusion always sent X==Y (no
+        # separate X/Y DPI control surfaced anywhere in its UI), so this
+        # only exposes one DPI value per stage, matching this method's
+        # existing list[int] signature. Live-verified 2026-08-09: wrote
+        # 1-stage, 3-stage and 6-stage lists with non-default active
+        # stages, read back correct count/active/values every time via
+        # get_dpi_stages().
         if not 1 <= len(stages) <= self.capabilities.max_dpi_stages:
             raise ValueError(
                 f"Must specify 1-{self.capabilities.max_dpi_stages} DPI stages")
@@ -571,11 +562,10 @@ class PulsarFeinmann8K(PulsarDevice):
                 raise ValueError(
                     f"DPI must be {self.capabilities.dpi_min}-"
                     f"{self.capabilities.dpi_max}")
-        payload = [0x01, len(stages)]
+        payload = [active, len(stages)]
         for i, dpi in enumerate(stages, start=1):
             payload += [i, dpi & 0xFF, (dpi >> 8) & 0xFF, dpi & 0xFF, (dpi >> 8) & 0xFF]
         self._cmd(0x05, 0x04, 0x21, profile, payload)
-        self.set_active_dpi_stage(active, profile)
 
     def get_lod(self, profile: int) -> float:
         # cat=0x07/reg=0x82(=0x02|0x80)/sub=0x03 - reply byte[8] is raw =
