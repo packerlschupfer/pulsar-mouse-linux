@@ -33,7 +33,7 @@ from pulsar_mouse.drivers import discover_all
 from pulsar_mouse.hid import (
     describe_button, parse_button_function,
     MOUSE_ACTIONS, SCROLL_ACTIONS, DPI_ACTIONS, PROFILE_ACTIONS,
-    MEDIA_CODES, HID_MODS, HID_KEYS,
+    MEDIA_CODES, HID_MODS, HID_KEYS, XCLICK_ALIASES,
 )
 
 APP_ID = 'io.github.packerlschupfer.PulsarMouse'
@@ -2251,8 +2251,14 @@ class RemapButtonDialog(Adw.Window):
     duplicating it.
     """
 
+    # 'Double Click' and 'Disabled' are the two categories with no Action
+    # sub-list of their own - see _NO_ACTION_CATEGORIES below, which is what
+    # _update_visible_rows()/_build_spec() key off rather than repeating the
+    # literal names.
     _CATEGORIES = ['Mouse Click', 'Scroll', 'DPI', 'Profile Switch',
-                   'Media Key', 'Keyboard Shortcut', 'Disabled']
+                   'Media Key', 'Keyboard Shortcut', 'Double Click', 'Disabled']
+    # category -> the fixed spec string it always produces
+    _NO_ACTION_CATEGORIES = {'Double Click': 'xclick', 'Disabled': 'disabled'}
     _MOD_NAMES = ['ctrl', 'shift', 'alt', 'super']
 
     def __init__(self, btn_label: str, current_spec: str, on_applied, device=None, **kwargs):
@@ -2335,7 +2341,7 @@ class RemapButtonDialog(Adw.Window):
         # already fully owns initial model/visibility/selection, and
         # rebuilding the model here would reset that selection back to 0.
         cat = self._CATEGORIES[self._category_row.get_selected()]
-        if cat == 'Disabled':
+        if cat in self._NO_ACTION_CATEGORIES:
             self._sub_row.set_visible(False)
             self._mod_row.set_visible(False)
             return
@@ -2349,6 +2355,17 @@ class RemapButtonDialog(Adw.Window):
         spec = (spec or '').strip().lower()
         if not spec or spec == '–' or spec == 'disabled':
             self._category_row.set_selected(self._CATEGORIES.index('Disabled'))
+            self._sub_row.set_visible(False)
+            self._mod_row.set_visible(False)
+            return
+        # Both the current 'xclick' spelling and the legacy 'xclick-double'
+        # one that already-exported profiles and pre-fix devices' rows can
+        # still carry (see hid.XCLICK_ALIASES) - without this the dialog
+        # fell through to its Mouse Click / Left default below, so opening
+        # it on an xclick-bound button and pressing Set silently rebound
+        # that button to plain left-click.
+        if spec in XCLICK_ALIASES:
+            self._category_row.set_selected(self._CATEGORIES.index('Double Click'))
             self._sub_row.set_visible(False)
             self._mod_row.set_visible(False)
             return
@@ -2403,8 +2420,8 @@ class RemapButtonDialog(Adw.Window):
 
     def _build_spec(self) -> str:
         cat = self._CATEGORIES[self._category_row.get_selected()]
-        if cat == 'Disabled':
-            return 'disabled'
+        if cat in self._NO_ACTION_CATEGORIES:
+            return self._NO_ACTION_CATEGORIES[cat]
         options = self._category_options(cat)
         idx = self._sub_row.get_selected()
         if idx == Gtk.INVALID_LIST_POSITION or idx >= len(options):

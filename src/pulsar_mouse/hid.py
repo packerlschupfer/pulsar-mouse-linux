@@ -109,8 +109,24 @@ def describe_button(btn_type: int, a1: int, a2: int) -> str:
         code = a1 | (a2 << 8)
         return MEDIA_CODE_NAMES.get(code, f'media(0x{code:04x})')
     if btn_type == BTN_TYPE_XCLICK:
-        return 'xclick-double'
+        # Must be a string parse_button_function() accepts, or this binding
+        # is the one entry in the whole vocabulary that can't round-trip
+        # through export -> import (base.export_profile stores exactly this
+        # string, base.import_profile feeds it straight back to the
+        # parser) or through the GUI's remap dialog, which pre-selects from
+        # this same string. Used to be 'xclick-double', which the parser
+        # never accepted - see XCLICK_ALIASES below, which keeps profile
+        # JSON exported before this fix importable.
+        return 'xclick'
     return f'type=0x{btn_type:02x} a1=0x{a1:02x} a2=0x{a2:02x}'
+
+
+# Accepted spellings of the double-click binding. 'xclick' is canonical
+# (what describe_button emits and what the GUI/CLI show); 'xclick-double'
+# is what describe_button emitted before 2026-08-09 and therefore what
+# already-exported profile JSON files on disk contain, so it stays
+# accepted on the parse side forever.
+XCLICK_ALIASES = ('xclick', 'xclick-double')
 
 
 def parse_button_function(spec: str) -> tuple[int, int, int]:
@@ -139,7 +155,7 @@ def parse_button_function(spec: str) -> tuple[int, int, int]:
         return (BTN_TYPE_DPI, DPI_ACTIONS[s], 0x00)
     if s in PROFILE_ACTIONS:
         return (BTN_TYPE_PROFILE, PROFILE_ACTIONS[s], 0x00)
-    if s == 'xclick':
+    if s in XCLICK_ALIASES:
         return (BTN_TYPE_XCLICK, 0x01, 0x00)
     if s in MEDIA_CODES:
         code = MEDIA_CODES[s]
