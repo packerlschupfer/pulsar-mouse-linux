@@ -985,18 +985,15 @@ class MainWindow(Adw.ApplicationWindow):
         status_group.set_margin_top(24)
         box.append(status_group)
 
-        model_row = Adw.ActionRow()
+        # Firmware version lives as a hover tooltip on this row rather
+        # than its own row - _refresh_firmware_version() fills it in once
+        # known, leaving no tooltip at all until then rather than a
+        # misleading empty one.
+        self._model_row = model_row = Adw.ActionRow()
         model_row.set_title('Model')
         model_row.set_subtitle(caps.name)
         model_row.add_prefix(Gtk.Image.new_from_icon_name('input-mouse-symbolic'))
         status_group.add(model_row)
-
-        self._firmware_row = Adw.ActionRow()
-        self._firmware_row.set_title('Firmware Version')
-        self._firmware_row.set_subtitle('—')
-        self._firmware_row.add_prefix(Gtk.Image.new_from_icon_name('application-x-firmware-symbolic'))
-        self._firmware_row.set_visible(False)
-        status_group.add(self._firmware_row)
 
         conn_row = Adw.ActionRow()
         conn_row.set_title('Connection')
@@ -1602,7 +1599,7 @@ X-GNOME-Autostart-enabled=true
 
     def _refresh_firmware_version(self):
         device = self._device
-        if device is None or self._firmware_row is None:
+        if device is None or self._model_row is None:
             return
 
         def _read():
@@ -1615,8 +1612,7 @@ X-GNOME-Autostart-enabled=true
                         device.close()
                 if fw != 'unknown':
                     def _show_fw(v):
-                        self._firmware_row.set_subtitle(v)
-                        self._firmware_row.set_visible(True)
+                        self._model_row.set_tooltip_text(f'Firmware {v}')
                     GLib.idle_add(_show_fw, fw)
             except Exception:
                 pass
@@ -2033,6 +2029,16 @@ X-GNOME-Autostart-enabled=true
         # active now, silently clobbering it. The Noctalia panel already
         # got this right (full re-fetch in its own profile-switch
         # handler); this was the one place that missed it.
+        #
+        # Second bug, found in the review of THAT fix: reading immediately
+        # after the write above races the mouse's RF settle time -
+        # feinmann8k.py's own module docstring says a read right after a
+        # write can return the previous value, ~0.5s is what's actually
+        # needed, and _cmd()'s own built-in 0.3s post-write sleep isn't
+        # enough on its own. Same class of bug _do_reset() already sleeps
+        # before reloading for. This runs on a background thread (see
+        # _run_bg's caller), so it doesn't block the UI.
+        time.sleep(0.5)
         self._read_and_populate_global()
         self._do_reload_profile_inner()
         self._close_dev()
