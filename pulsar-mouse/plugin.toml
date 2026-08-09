@@ -16,9 +16,9 @@
 # reuses the same widget type registry as the desktop), so the desktop_widget
 # entry shows up in both places once added via the widget editor.
 
-id = "harveywuk/pulsar-mouse-battery"
-name = "Pulsar Mouse Battery"
-version = "1.5.0"
+id = "harveywuk/pulsar-mouse"
+name = "Pulsar Mouse"
+version = "1.6.0"
 plugin_api = 9
 author = "harveywuk"
 license = "MIT"

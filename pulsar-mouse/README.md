@@ -1,14 +1,14 @@
-# Pulsar Mouse Battery
+# Pulsar Mouse
 
-Bar and desktop widgets showing battery percentage, charging status, and signal strength for a Pulsar gaming mouse (via [pulsar-mouse-linux](https://github.com/harveywuk/pulsar-mouse-linux)), plus a quick-controls panel covering DPI stage, polling rate, debounce, angle snap, ripple control, motion sync, lift-off distance, LED (effect/brightness/speed), and - on wireless mice - power saving/low-battery threshold. Since desktop widgets are shared with Noctalia's lock screen, the desktop widget shows up in both places once added. Works with just the `pulsar-mouse` CLI installed - the GUI/tray isn't required, it's just more efficient if it's running (see Data source).
+Bar and desktop widgets showing battery percentage and charging status (plus signal strength in the bar widget's tooltip) for a Pulsar gaming mouse (via [pulsar-mouse-linux](https://github.com/harveywuk/pulsar-mouse-linux)), plus a quick-controls panel covering DPI stage, polling rate, debounce, angle snap, ripple control, motion sync, lift-off distance, LED (effect/brightness/speed), and - on wireless mice - power saving/low-battery threshold. Since desktop widgets are shared with Noctalia's lock screen, the desktop widget shows up in both places once added. Works with just the `pulsar-mouse` CLI installed - the GUI/tray isn't required, it's just more efficient if it's running (see Data source).
 
-Battery/signal only apply to wireless mice - on a wired one, the bar widget hides itself entirely and the desktop widget shows a plain "Wired" placeholder instead. The controls panel's Sensor and Lighting tabs work for any mouse; the Power tab (wireless power saving, low-battery threshold) only appears for a wireless one.
+Battery/signal only apply to wireless mice - on a wired one, the bar widget shows a plain neutral glyph (still clickable, to reach the panel) and the desktop widget shows a plain "Wired" placeholder instead. The controls panel's Sensor and Lighting tabs work for any mouse; the Power tab (wireless power saving, low-battery threshold) only appears for a wireless one.
 
 ## Plugin
 
 | Field | Value |
 | --- | --- |
-| ID | `harveywuk/pulsar-mouse-battery` |
+| ID | `harveywuk/pulsar-mouse` |
 | Entries | Bar widget: `bar`; panel: `controls`; desktop widget: `battery` |
 
 ## Usage
@@ -24,13 +24,13 @@ Battery/signal only apply to wireless mice - on a wired one, the bar widget hide
 
 ```sh
 noctalia msg plugins update pulsar-mouse   # or whatever you named the source
-noctalia msg plugins disable harveywuk/pulsar-mouse-battery
-noctalia msg plugins enable harveywuk/pulsar-mouse-battery
+noctalia msg plugins disable harveywuk/pulsar-mouse
+noctalia msg plugins enable harveywuk/pulsar-mouse
 ```
 
 ### Bar Widget
 
-Add the `bar` bar widget to your bar. Shows a battery glyph (and percentage, on horizontal bars) with a tooltip for the full status, including signal strength when available; the glyph turns red under 15% uncharged. Hides itself entirely on a wired mouse (no battery to show). If `pulsar-mouse-gui` isn't installed or running at all, this widget still works, it just always reads a fresh value directly from the mouse instead of the GUI's cached one (see Data source).
+Add the `bar` bar widget to your bar. Shows a battery glyph (and percentage, on horizontal bars) with a tooltip for the full status, including signal strength when available; the glyph turns a secondary accent color while charging, or red once battery drops to the mouse's configured Low Power Mode threshold (see Controls Panel; falls back to 15% on a driver that doesn't expose that threshold, e.g. nordic.py). On a wired mouse (no battery to show) it stays visible as a plain neutral glyph rather than hiding, since it's the only way to open the controls panel - DPI/lighting controls still work on a wired mouse, only the Power tab doesn't apply. If `pulsar-mouse-gui` isn't installed or running at all, this widget still works, it just always reads a fresh value directly from the mouse instead of the GUI's cached one (see Data source).
 
 ### Controls Panel
 
@@ -57,7 +57,7 @@ All of these write straight through the `pulsar-mouse` CLI immediately on releas
 You can also open the panel over IPC:
 
 ```sh
-noctalia msg panel-toggle harveywuk/pulsar-mouse-battery:controls
+noctalia msg panel-toggle harveywuk/pulsar-mouse:controls
 ```
 
 ### Desktop Widget
@@ -66,7 +66,7 @@ Add the `battery` desktop widget from Noctalia's desktop-widget editor (it's the
 
 ### Data source
 
-The `bar` and `battery` entries read the battery/signal reading `pulsar-mouse-gui` already writes on its periodic poll (`~/.cache/pulsar-mouse/battery.json`) rather than polling the mouse themselves, so they don't double up on USB traffic. If that file is missing or older than 3 minutes - the GUI isn't installed, isn't running, or was just closed - each falls back to its own direct `pulsar-mouse --battery-json` call instead, so both still work standalone, just with their own USB round-trip each tick and no signal reading (signal strength has no synchronous getter - it only ever arrives via an async event the GUI listens for, so it's only available through the cached file).
+The `bar` and `battery` entries read the battery/signal/low-power-threshold reading `pulsar-mouse-gui` already writes on its periodic poll (`~/.cache/pulsar-mouse/battery.json`) rather than polling the mouse themselves, so they don't double up on USB traffic. If that file is missing or older than 3 minutes - the GUI isn't installed, isn't running, or was just closed - each falls back to its own direct `pulsar-mouse --battery-json` call instead, so both still work standalone, just with their own USB round-trip each tick. Signal strength specifically has no synchronous getter - it only ever arrives via an async event the GUI listens for, so it's only available through the cached file (the CLI fallback just omits it). The low-power threshold, unlike signal, does have a synchronous getter, so it's available via both paths.
 
 ## Settings
 

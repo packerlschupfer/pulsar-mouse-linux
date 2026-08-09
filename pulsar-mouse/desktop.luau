@@ -14,12 +14,6 @@
 -- desktopWidget.setVisible() to hide entirely, so this is the closest
 -- available equivalent.
 --
--- Signal quality has no synchronous getter (see gui.py's own comment on
--- this) - it only arrives via an async hidraw event the GUI listens for, so
--- it's only ever available via the cached state file, never the CLI
--- fallback - the signal row just doesn't appear when only that path is
--- available (e.g. GUI not running).
---
 --   noctalia.readFile(path)     cheap path - reads the GUI's last reading
 --   noctalia.runAsync(cmd, cb)  fallback path - direct CLI read
 --   noctalia.json.decode(str)   both paths return JSON on stdout/in the file
@@ -27,6 +21,8 @@
 
 local STATE_PATH = "~/.cache/pulsar-mouse/battery.json"
 local STALE_AFTER = 180 -- seconds - 3x the GUI's own 60s poll interval
+local LOW_POWER_DEFAULT = 15 -- used when the driver has no low-power-threshold
+                              -- getter (e.g. nordic.py) or it hasn't been read yet
 
 local color = noctalia.getConfig("color")
 local showProgress = noctalia.getConfig("show_progress")
@@ -36,7 +32,7 @@ local glyphSize = noctalia.getConfig("glyph_size")
 local wireless = true -- assume true until a read says otherwise
 local percent = nil
 local charging = false
-local signalPercent = nil
+local lowPowerThreshold = nil
 local errorText = nil
 local checkingCli = false
 
@@ -44,7 +40,10 @@ local function statusColor()
   if errorText ~= nil then
     return "error"
   end
-  if percent ~= nil and percent <= 15 and not charging then
+  if charging then
+    return "secondary"
+  end
+  if percent ~= nil and percent <= (lowPowerThreshold or LOW_POWER_DEFAULT) then
     return "error"
   end
   return color
@@ -67,10 +66,10 @@ local function render()
   -- Every row below gets an explicit, semantic `key` - this list isn't
   -- structurally stable (the 2nd slot alone can hold an error label, a
   -- "--" placeholder, or a percent label depending on state; the progress
-  -- and signal rows appear/disappear independently), so without a key the
-  -- reconciler matches purely by (type, position) and can attach a stale
-  -- node to a different logical row across renders - same bug class fixed
-  -- in panel.luau, just never applied here.
+  -- row appears/disappears independently), so without a key the reconciler
+  -- matches purely by (type, position) and can attach a stale node to a
+  -- different logical row across renders - same bug class fixed in
+  -- panel.luau, just never applied here.
   local rows = {
     statusGlyph(),
   }
@@ -97,15 +96,6 @@ local function render()
       width = 120,
       height = 6,
       radius = 3,
-    }))
-  end
-
-  if signalPercent ~= nil then
-    table.insert(rows, ui.label({
-      key = "signal",
-      text = `{noctalia.tr("ui.signal-label")} {signalPercent}%`,
-      fontSize = 11,
-      color = "on_surface_variant",
     }))
   end
 
@@ -153,7 +143,9 @@ local function readViaCli()
     errorText = nil
     percent = decoded.battery_percent
     charging = decoded.power_connected == true
-    signalPercent = nil -- not available via this path - see header comment
+    -- Unlike signal, this has a synchronous getter, so it IS available here
+    -- (nil on a driver without one, e.g. nordic.py - falls back to LOW_POWER_DEFAULT).
+    lowPowerThreshold = decoded.low_power_threshold
     render()
   end, 10000)
 end
@@ -181,7 +173,7 @@ local function readState()
   errorText = nil
   percent = decoded.battery_percent
   charging = decoded.power_connected == true
-  signalPercent = decoded.signal_percent
+  lowPowerThreshold = decoded.low_power_threshold
   render()
 end
 

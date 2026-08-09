@@ -459,6 +459,8 @@ class PulsarMouseApp(Adw.Application):
                             # the DPI/Hz label.
                             try:
                                 pwr = device.get_power()
+                                if hasattr(device, 'get_low_power_threshold'):
+                                    pwr['low_power_threshold'] = device.get_low_power_threshold()
                             except Exception:
                                 pass
                     finally:
@@ -482,6 +484,8 @@ class PulsarMouseApp(Adw.Application):
                     device.open()
                     try:
                         pwr = device.get_power()
+                        if hasattr(device, 'get_low_power_threshold'):
+                            pwr['low_power_threshold'] = device.get_low_power_threshold()
                     finally:
                         device.close()
                 GLib.idle_add(self._set_battery_label, pwr)

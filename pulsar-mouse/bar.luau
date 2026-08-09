@@ -9,9 +9,11 @@
 -- needed - the file will never exist, so every tick reads live from the
 -- mouse instead.
 --
--- Hides entirely (barWidget.setVisible(false)) for a wired mouse, which has
--- no battery to report - --battery-json returns {"wireless": false} for
--- those rather than an error, so this is a normal, not a failure, state.
+-- Stays visible for a wired mouse (no battery to report - --battery-json
+-- returns {"wireless": false} for those rather than an error, a normal, not
+-- a failure, state) - shows a plain neutral glyph instead of vanishing, so
+-- it's still clickable to reach the controls panel (DPI/lighting work on any
+-- mouse, only the panel's Power tab is wireless-only - see panel.luau).
 --
 -- Icon-only (no percentage label): battery level and charging state are
 -- already in the hover tooltip, so a bar-row number would just be the same
@@ -33,7 +35,7 @@
 --   barWidget.render(tree)      declarative UI tree
 --   barWidget.isVertical()      branch on bar orientation
 --   barWidget.setTooltip(text)  hover detail
---   barWidget.setVisible(bool)  hide entirely for a wired mouse
+--   barWidget.setVisible(bool)  hover/click surface toggle - always kept true now
 --   noctalia.readFile(path)     cheap path - reads the GUI's last reading
 --   noctalia.runAsync(cmd, cb)  fallback path - direct CLI read
 --   noctalia.json.decode(str)   both paths return JSON on stdout/in the file
@@ -41,12 +43,15 @@
 
 local STATE_PATH = "~/.cache/pulsar-mouse/battery.json"
 local STALE_AFTER = 180 -- seconds - 3x the GUI's own 60s poll interval
+local LOW_POWER_DEFAULT = 15 -- used when the driver has no low-power-threshold
+                              -- getter (e.g. nordic.py) or it hasn't been read yet
 
 local wireless = true -- assume true until a read says otherwise, so the
                        -- widget doesn't flash hidden then visible on load
 local percent = nil
 local charging = false
 local signalPercent = nil
+local lowPowerThreshold = nil
 local errorText = nil
 local checkingCli = false
 local isVertical = false
@@ -61,7 +66,10 @@ local function statusColor()
   if errorText ~= nil then
     return "error"
   end
-  if percent ~= nil and percent <= 15 and not charging then
+  if charging then
+    return "secondary"
+  end
+  if percent ~= nil and percent <= (lowPowerThreshold or LOW_POWER_DEFAULT) then
     return "error"
   end
   return "on_surface"
@@ -85,13 +93,18 @@ local function tooltipText()
 end
 
 local function render()
-  barWidget.setVisible(wireless)
-  if not wireless then
-    return
-  end
+  barWidget.setVisible(true)
 
-  local glyph = statusGlyph(statusColor())
-  barWidget.setTooltip(tooltipText())
+  local glyph
+  if not wireless then
+    -- No battery to show, but still clickable - a wired mouse still has
+    -- DPI/lighting controls in the panel, just not the Power tab.
+    glyph = ui.glyph({ name = "mouse-filled", size = glyphSize, color = "on_surface" })
+    barWidget.setTooltip(noctalia.tr("ui.wired"))
+  else
+    glyph = statusGlyph(statusColor())
+    barWidget.setTooltip(tooltipText())
+  end
 
   local container = isVertical and ui.column or ui.row
   barWidget.render(container({ align = "center" }, { glyph }))
@@ -137,6 +150,9 @@ local function readViaCli()
     charging = decoded.power_connected == true
     -- Not available via this path - see header comment.
     signalPercent = nil
+    -- Unlike signal, this has a synchronous getter, so it IS available here
+    -- (nil on a driver without one, e.g. nordic.py - falls back to LOW_POWER_DEFAULT).
+    lowPowerThreshold = decoded.low_power_threshold
     render()
   end, 10000)
 end
@@ -165,6 +181,7 @@ local function readState()
   percent = decoded.battery_percent
   charging = decoded.power_connected == true
   signalPercent = decoded.signal_percent
+  lowPowerThreshold = decoded.low_power_threshold
   render()
 end
 
@@ -175,5 +192,5 @@ function update()
 end
 
 function onClick()
-  noctalia.togglePanel("harveywuk/pulsar-mouse-battery:controls")
+  noctalia.togglePanel("harveywuk/pulsar-mouse:controls")
 end

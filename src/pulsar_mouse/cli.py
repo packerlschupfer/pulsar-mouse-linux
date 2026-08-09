@@ -282,7 +282,10 @@ def main():
             return
         device.open()
         try:
-            print(json.dumps({'wireless': True, **device.get_power()}))
+            pwr = device.get_power()
+            if hasattr(device, 'get_low_power_threshold'):
+                pwr['low_power_threshold'] = device.get_low_power_threshold()
+            print(json.dumps({'wireless': True, **pwr}))
         finally:
             device.close()
         return

@@ -245,11 +245,11 @@ pulsar-mouse --battery-json
 
 ## Noctalia Plugin
 
-[`pulsar-mouse-battery/`](pulsar-mouse-battery/) is a [Noctalia](https://github.com/noctalia-dev/noctalia) shell plugin — a bar widget and a desktop widget (also usable on Noctalia's lock screen) showing battery percentage and charging status. Works with just the `pulsar-mouse` CLI installed; more efficient if `pulsar-mouse-gui` is also running, since the widgets read its periodic reading instead of polling the mouse themselves. See [its README](pulsar-mouse-battery/README.md) for settings and details.
+[`pulsar-mouse/`](pulsar-mouse/) is a [Noctalia](https://github.com/noctalia-dev/noctalia) shell plugin — a bar widget and a desktop widget (also usable on Noctalia's lock screen) showing battery percentage and charging status. Works with just the `pulsar-mouse` CLI installed; more efficient if `pulsar-mouse-gui` is also running, since the widgets read its periodic reading instead of polling the mouse themselves. See [its README](pulsar-mouse/README.md) for settings and details.
 
 ```bash
 noctalia msg plugins source add pulsar-mouse path ~/dev/pulsar-mouse-linux   # or wherever you cloned this repo
-noctalia msg plugins enable harveywuk/pulsar-mouse-battery
+noctalia msg plugins enable harveywuk/pulsar-mouse
 ```
 
 Then add the `bar` or `battery` widget from Noctalia's widget editor.
