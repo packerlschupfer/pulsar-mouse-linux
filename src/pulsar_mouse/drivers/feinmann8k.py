@@ -155,6 +155,15 @@ class PulsarFeinmann8K(PulsarDevice):
             'dpi':    0x0b,
         },
         polling_rates=sorted(POLL_HZ_TO_VAL),
+        # No factory-reset command has been found for this model - nothing
+        # resembling one appears anywhere in the Fusion captures, and this
+        # driver has no reset_to_defaults() override (only x2a.py and
+        # nordic.py implement one). DeviceCapabilities defaults this to
+        # True, which made the GUI draw a "Reset to Factory Defaults"
+        # button that failed with an empty error message (base's bare
+        # `raise NotImplementedError`, which has no text) and made the
+        # CLI's --reset an uncaught traceback.
+        has_reset=False,
         # Derived from LED_NAME_TO_VAL rather than left as
         # DeviceCapabilities' shared default so this always matches that
         # dict's keys (list(dict) preserves insertion order), even though
@@ -250,6 +259,18 @@ class PulsarFeinmann8K(PulsarDevice):
             raise ValueError(
                 f"Profile must be 1-{self.capabilities.num_profiles}")
         self._cmd(0x02, 0x06, 0x01, profile)
+        # Extra settle time on top of _cmd()'s own 0.3s, which live
+        # testing showed is not enough for *this* command specifically:
+        # every "global" setting on this model is really stored per-active-
+        # profile and addressed with the profile=0x00 "whichever is active
+        # now" sentinel, so anything written (or read) too soon after a
+        # profile switch still lands on the OLD profile. The GUI's
+        # profile-switch path already carried its own explicit 0.5s sleep
+        # for exactly this; the CLI's `--active-profile 2 --poll 1000` did
+        # not, and could silently write the polling rate to profile 1.
+        # Sleeping here instead means every caller inherits it rather than
+        # each having to remember - see _do_reload_profile() in gui.py.
+        time.sleep(0.5)
 
     # ── Low-level protocol helpers ──────────────────────────────────────────
 
@@ -634,27 +655,56 @@ class PulsarFeinmann8K(PulsarDevice):
         # guess was wrong in every field. Live-verified fixed.
         self._cmd(0x03, 0x03, 0x03, profile, [0x01, value])
 
+    # ── LED effect + breathe speed share one on-wire command ──────────────
+    # cat=0x03/reg=0x04/sub=0x0f carries BOTH the effect enum (byte[8]) and
+    # the breathe-speed byte (byte[11]) in a single body, so neither setter
+    # can write its own field without also writing the other's. Until
+    # 2026-08-09 both setters here built the whole block from constants:
+    # set_led_effect() sent only [0x01, val], zeroing the stored speed byte
+    # (which then read back as 100% through get_breathe_speed's `hi - raw`
+    # inversion), and set_breathe_speed() pinned the effect to breathe(2),
+    # so setting a speed forcibly switched a steady/off LED to breathing.
+    # That also silently corrupted base.import_profile() (which calls both
+    # setters unconditionally, so importing a profile with
+    # led_effect=steady ended up breathing) and the CLI's --led /
+    # --breathe-speed. Fixed by reading the block first and preserving the
+    # other field - the same read-modify-write pattern x2a.py's
+    # _write_led_block() callers already use for this identical command.
+
+    def _read_led_block(self, profile: int) -> bytes:
+        # cat=0x03/reg=0x84/sub=0x0f with payload=[0x01], the same marker
+        # byte the write sends at byte[7] - querying without it gets no
+        # reply at all.
+        return self._query_ctrl(0x03, 0x04, 0x0F, profile, [0x01])
+
+    def _write_led_block(self, profile: int, effect_val: int,
+                         raw_speed: int) -> None:
+        # raw_speed is the on-wire (inverted) byte, not the public 0-100
+        # speed - see set_breathe_speed().
+        self._cmd(0x03, 0x04, 0x0F, profile,
+                  [0x01, effect_val, 0x00, 0x00, raw_speed])
+
     def set_led_effect(self, effect: str, profile: int) -> None:
         # Captured 2026-08-07: cat=0x03/reg=0x04/sub=0x0f, payload=[0x01,
         # val] - identical command and value mapping (off=0/steady=1/
-        # breathe=2) to x2a.py's set_led_effect.
+        # breathe=2) to x2a.py's set_led_effect. A failed read of the
+        # current block is deliberately allowed to propagate rather than
+        # falling back to a made-up speed, which is exactly the silent
+        # corruption this read-modify-write exists to remove.
         val = LED_NAME_TO_VAL.get(effect)
         if val is None:
             raise ValueError(f"Effect must be one of {list(LED_NAME_TO_VAL)}")
-        self._cmd(0x03, 0x04, 0x0F, profile, [0x01, val])
+        self._write_led_block(profile, val, self._read_led_block(profile)[11])
 
     def get_led_effect(self, profile: int) -> str:
-        # Same command as the write (cat=0x03/reg=0x84/sub=0x0f), with the
-        # same payload=[0x01] marker byte the write sends at byte[7] -
-        # querying without it gets no reply at all. Reply byte[8] is the
-        # effect enum (see get_breathe_speed for the rest of this reply).
-        val = self._query_ctrl(0x03, 0x04, 0x0F, profile, [0x01])[8]
+        # Reply byte[8] is the effect enum (see get_breathe_speed for the
+        # rest of this reply).
+        val = self._read_led_block(profile)[8]
         return LED_VAL_TO_NAME.get(val, f'unknown(0x{val:02x})')
 
     def set_breathe_speed(self, speed: int, profile: int) -> None:
-        # Same command as set_led_effect, with effect pinned to breathe (2)
-        # and a raw byte appended - same command shape as x2a.py's
-        # set_breathe_speed, but live-tested 2026-08-07 and confirmed
+        # Same command as set_led_effect; the stored effect enum is read
+        # back and re-sent unchanged. Live-tested 2026-08-07 and confirmed
         # INVERTED on this model: raw=100 pulsed visibly slower than
         # raw=5. Unlike x2a (which sends `speed` directly), the raw byte
         # sent to the device is `hi - speed` so the public speed=0..100
@@ -662,15 +712,14 @@ class PulsarFeinmann8K(PulsarDevice):
         lo, hi = self.capabilities.breathe_speed_range
         if not lo <= speed <= hi:
             raise ValueError(f"Breathe speed must be {lo}-{hi}")
-        self._cmd(0x03, 0x04, 0x0F, profile, [0x01, 0x02, 0x00, 0x00, hi - speed])
+        self._write_led_block(profile, self._read_led_block(profile)[8],
+                              hi - speed)
 
     def get_breathe_speed(self, profile: int) -> int:
-        # Same reply/marker-byte as get_led_effect (cat=0x03/reg=0x84/
-        # sub=0x0f, payload=[0x01]) - byte[11] is the raw inverted speed
-        # byte, same `hi - speed` encoding as the write.
+        # Reply byte[11] is the raw inverted speed byte, same `hi - speed`
+        # encoding as the write.
         hi = self.capabilities.breathe_speed_range[1]
-        raw = self._query_ctrl(0x03, 0x04, 0x0F, profile, [0x01])[11]
-        return hi - raw
+        return hi - self._read_led_block(profile)[11]
 
     def get_brightness(self, profile: int) -> int:
         # cat=0x03/reg=0x83(=0x03|0x80)/sub=0x03, payload=[0x01] (same
@@ -751,7 +800,8 @@ class PulsarFeinmann8K(PulsarDevice):
         vid = f'{self.capabilities.vid_pid_pairs[0][0]:04x}'
         for path in sorted(glob.glob('/sys/class/hidraw/hidraw*/device/uevent')):
             try:
-                text = open(path).read()
+                with open(path) as f:
+                    text = f.read()
                 if vid not in text.lower():
                     continue
                 phys_line = [l for l in text.splitlines() if 'HID_PHYS' in l]

@@ -351,7 +351,8 @@ class PulsarX2A(PulsarDevice):
         vid = f'{self.capabilities.vid_pid_pairs[0][0]:04x}'
         for path in sorted(glob.glob('/sys/class/hidraw/hidraw*/device/uevent')):
             try:
-                text = open(path).read()
+                with open(path) as f:
+                    text = f.read()
                 if vid not in text:
                     continue
                 phys_line = [l for l in text.splitlines() if 'HID_PHYS' in l]

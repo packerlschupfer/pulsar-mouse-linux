@@ -468,7 +468,7 @@ def main():
 
             if args.dpi is not None:
                 stages = [int(x.strip()) for x in args.dpi.split(',')]
-                active = args.active_stage if args.active_stage else 1
+                active = args.active_stage if args.active_stage is not None else 1
                 device.set_dpi_stages(stages, active, prof)
                 print(f"Profile {prof} DPI stages: {stages}  active={active}")
             elif args.active_stage is not None:
@@ -512,8 +512,23 @@ def main():
                 print(f"Profile {prof} {btn_name} → {device.describe_button(t, a1, a2)}")
 
             if args.reset:
-                device.reset_to_defaults(prof)
-                print(f"Profile {prof} reset to factory defaults")
+                # has_reset is a capability every driver advertises, but
+                # only some (x2a, nordic) actually implement the method
+                # behind it - and base.PulsarDevice's default raises a bare
+                # NotImplementedError with no message, so an unsupported
+                # model used to exit with a raw traceback here. Check the
+                # capability first, and still catch the exception in case a
+                # driver advertises support it doesn't have.
+                if not caps.has_reset:
+                    print("Factory reset is not supported on "
+                          f"{caps.name} — skipped")
+                else:
+                    try:
+                        device.reset_to_defaults(prof)
+                        print(f"Profile {prof} reset to factory defaults")
+                    except NotImplementedError:
+                        print("Factory reset is not supported on "
+                              f"{caps.name} — skipped")
         else:
             # ── Read mode ─────────────────────────────────────────────
             print(f"{caps.name} — current settings")
