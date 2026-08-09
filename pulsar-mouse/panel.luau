@@ -161,13 +161,13 @@ end
 
 -- Tried surfacing an extra hint for these three toggles three ways
 -- (2026-08-09): a static description row (worked, but pushed panel height
--- back up), `tooltip` directly on ui.toggle (silently unsupported - Opus
--- confirmed via Noctalia's own source that kToggle's prop allowlist has no
--- `tooltip`, unlike kButton), and a small ui.button({glyph="help-circle",
--- tooltip=...}) next to the toggle (matches kButton's confirmed-working
--- tooltip wiring exactly, icon rendered correctly, but the hover popup
--- itself never appeared in practice - live-tested, no fix found). Dropped
--- all three - not worth chasing further. Revisit if this becomes reliable.
+-- back up), `tooltip` directly on ui.toggle (silently unsupported -
+-- Noctalia's own source shows kToggle's prop allowlist has no `tooltip`,
+-- unlike kButton), and a small ui.button({glyph="help-circle", tooltip=...})
+-- next to the toggle (matches kButton's confirmed-working tooltip wiring
+-- exactly, icon rendered correctly, but the hover popup itself never
+-- appeared in practice - live-tested, no fix found). Dropped all three -
+-- not worth chasing further. Revisit if this becomes reliable.
 local function toggleRow(key, labelText, checked, buildCmd, onSuccess)
   return ui.row({ key = key, gap = 8, align = "center" }, {
     ui.toggle({
