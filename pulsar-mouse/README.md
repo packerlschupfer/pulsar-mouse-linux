@@ -2,7 +2,7 @@
 
 Bar and desktop widgets showing battery percentage and charging status (plus signal strength in the bar widget's tooltip) for a Pulsar gaming mouse (via [pulsar-mouse-linux](https://github.com/harveywuk/pulsar-mouse-linux)), plus a quick-controls panel covering DPI stage, polling rate, debounce, angle snap, ripple control, motion sync, lift-off distance, LED (effect/brightness/speed), and - on wireless mice - power saving/low-battery threshold. Since desktop widgets are shared with Noctalia's lock screen, the desktop widget shows up in both places once added. Works with just the `pulsar-mouse` CLI installed - the GUI/tray isn't required, it's just more efficient if it's running (see Data source).
 
-Battery/signal only apply to wireless mice - on a wired one, the bar widget shows a plain neutral glyph (still clickable, to reach the panel) and the desktop widget shows a plain "Wired" placeholder instead. The controls panel's Sensor and Lighting tabs work for any mouse; the Power tab (wireless power saving, low-battery threshold) only appears for a wireless one.
+Battery/signal only apply to wireless mice - on a wired one, the bar widget shows a plain neutral glyph (still clickable, to reach the panel) and the desktop widget shows a plain "Wired" placeholder instead. The controls panel's Sensor, Advanced, and Lighting tabs work for any mouse; the Power tab (wireless power saving, low-battery threshold) only appears for a wireless one.
 
 ## Plugin
 
@@ -87,3 +87,10 @@ The `bar` and `battery` entries read the battery/signal/low-power-threshold read
 | `show_progress` | `bool` | `true` | Shows or hides the battery-level progress bar. |
 | `show_percent` | `bool` | `true` | Turn off to rely on just the glyph and progress bar. |
 | `glyph_size` | `int` | `28` | Glyph size, 16-64. |
+
+## Notes
+
+- **No network access.** Every entry talks only to the local `pulsar-mouse` CLI (a spawned process, never a daemon) and, for the bar/desktop widgets, reads a local cache file.
+- **Spawns `pulsar-mouse`** for every read and write - DPI/polling/LED/etc. changes in the controls panel, and the battery-json fallback read in the bar/desktop widgets when the cache is stale or missing.
+- **Writes nothing itself.** `~/.cache/pulsar-mouse/battery.json` is written by `pulsar-mouse-gui` (a separate program from this plugin, part of the same `pulsar-mouse-linux` project) on its own periodic poll - this plugin only ever reads that file, never writes it.
+- Requires Wayland/Hyprland (or another wlroots-based compositor) like the rest of Noctalia - no compositor-specific behavior beyond that in this plugin itself.
