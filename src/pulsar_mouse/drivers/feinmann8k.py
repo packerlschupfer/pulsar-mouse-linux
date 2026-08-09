@@ -141,6 +141,14 @@ class PulsarFeinmann8K(PulsarDevice):
         dpi_min=50,
         dpi_max=32000,
         dpi_step=10,
+        # Wire protocol only supports 0-15 (single byte, captured dragging
+        # Fusion's debounce slider through its full range - see
+        # set_debounce()) - overrides DeviceCapabilities' shared default of
+        # (0, 20), which GUI/CLI/plugin would otherwise trust over
+        # set_debounce()'s own tighter validation, letting a slider drag to
+        # 16-20 raise and (via _do_apply's single try block) abort every
+        # other setting in the same Apply.
+        debounce_range=(0, 15),
         buttons={
             'left':   0x01,
             'right':  0x02,
@@ -464,9 +472,14 @@ class PulsarFeinmann8K(PulsarDevice):
     def set_debounce(self, ms: int) -> None:
         # Captured 2026-08-07: dragging the debounce slider 0->15 then back
         # to 0 in Fusion produced a linear single-byte SET_REPORT per step,
-        # cat=0x04/reg=0x03/sub=0x03/profile=0x01, payload=[ms].
-        if not 0 <= ms <= 15:
-            raise ValueError("Debounce must be 0-15 ms")
+        # cat=0x04/reg=0x03/sub=0x03/profile=0x01, payload=[ms]. Validated
+        # against capabilities.debounce_range (see its override above),
+        # matching x2a.py's pattern - was hardcoded to 0-15 here while the
+        # capability defaulted to (0, 20), so GUI/CLI/plugin all thought
+        # 16-20 was valid and only found out otherwise from this exception.
+        lo, hi = self.capabilities.debounce_range
+        if not lo <= ms <= hi:
+            raise ValueError(f"Debounce must be {lo}-{hi} ms")
         self._cmd(0x04, 0x03, 0x03, 0x01, [ms])
 
     def get_debounce(self) -> int:

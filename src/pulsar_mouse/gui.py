@@ -612,16 +612,22 @@ class PulsarMouseApp(Adw.Application):
             try:
                 with _USB_LOCK:
                     device.open()
-                    info = device.get_dpi_stages(profile=1)
-                    for i, (dx, _dy) in enumerate(info['stages']):
-                        if dx == dpi_val:
-                            device.set_active_dpi_stage(i + 1, profile=1)
-                            break
-                    else:
-                        stages = [dx for dx, _dy in info['stages']]
-                        stages[info['active'] - 1] = dpi_val
-                        device.set_dpi_stages(stages, info['active'], profile=1)
-                    device.close()
+                    # device.close() must run even if a getter/setter above
+                    # raises - see _read_initial_state's comment on this
+                    # same pattern; without it this leaks the device handle
+                    # and every later _open_dev() call fails "Resource busy".
+                    try:
+                        info = device.get_dpi_stages(profile=1)
+                        for i, (dx, _dy) in enumerate(info['stages']):
+                            if dx == dpi_val:
+                                device.set_active_dpi_stage(i + 1, profile=1)
+                                break
+                        else:
+                            stages = [dx for dx, _dy in info['stages']]
+                            stages[info['active'] - 1] = dpi_val
+                            device.set_dpi_stages(stages, info['active'], profile=1)
+                    finally:
+                        device.close()
                 GLib.idle_add(self._update_tray_label, dpi_val, None)
             except Exception:
                 pass
@@ -636,8 +642,10 @@ class PulsarMouseApp(Adw.Application):
             try:
                 with _USB_LOCK:
                     device.open()
-                    device.set_polling_rate(hz)
-                    device.close()
+                    try:
+                        device.set_polling_rate(hz)
+                    finally:
+                        device.close()
                 GLib.idle_add(self._update_tray_label, None, hz)
             except Exception:
                 pass

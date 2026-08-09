@@ -52,7 +52,7 @@ end
 
 local function statusGlyph()
   local name = (errorText ~= nil or percent == nil) and "mouse-off" or "mouse-filled"
-  return ui.glyph({ name = name, size = glyphSize, color = statusColor() })
+  return ui.glyph({ key = "glyph", name = name, size = glyphSize, color = statusColor() })
 end
 
 local function render()
@@ -64,6 +64,13 @@ local function render()
     return
   end
 
+  -- Every row below gets an explicit, semantic `key` - this list isn't
+  -- structurally stable (the 2nd slot alone can hold an error label, a
+  -- "--" placeholder, or a percent label depending on state; the progress
+  -- and signal rows appear/disappear independently), so without a key the
+  -- reconciler matches purely by (type, position) and can attach a stale
+  -- node to a different logical row across renders - same bug class fixed
+  -- in panel.luau, just never applied here.
   local rows = {
     statusGlyph(),
   }
@@ -71,19 +78,20 @@ local function render()
   if errorText ~= nil then
     -- Diagnostic, not decorative - stays visible even with show_percent off,
     -- since otherwise a broken setup would just silently show a bare glyph.
-    table.insert(rows, ui.label({ text = errorText, fontSize = 12, color = "error" }))
+    table.insert(rows, ui.label({ key = "status", text = errorText, fontSize = 12, color = "error" }))
   elseif showPercent and percent == nil then
-    table.insert(rows, ui.label({ text = "--", fontSize = 20, color = "outline" }))
+    table.insert(rows, ui.label({ key = "status", text = "--", fontSize = 20, color = "outline" }))
   elseif showPercent then
     local text = tostring(percent) .. "%"
     if charging then
       text = text .. " " .. noctalia.tr("ui.charging")
     end
-    table.insert(rows, ui.label({ text = text, fontSize = 18, fontWeight = "bold", color = statusColor() }))
+    table.insert(rows, ui.label({ key = "status", text = text, fontSize = 18, fontWeight = "bold", color = statusColor() }))
   end
 
   if showProgress and percent ~= nil then
     table.insert(rows, ui.progress({
+      key = "progress",
       progress = percent / 100,
       fill = statusColor(),
       width = 120,
@@ -94,6 +102,7 @@ local function render()
 
   if signalPercent ~= nil then
     table.insert(rows, ui.label({
+      key = "signal",
       text = `{noctalia.tr("ui.signal-label")} {signalPercent}%`,
       fontSize = 11,
       color = "on_surface_variant",
