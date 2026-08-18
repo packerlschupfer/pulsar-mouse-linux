@@ -11,10 +11,10 @@ USB:
 """
 
 from pulsar_mouse.base import DeviceCapabilities
-from pulsar_mouse.drivers.x2a import PulsarX2A
+from pulsar_mouse.drivers.xlite_v4 import PulsarXliteV4
 
 
-class PulsarXliteV4Wireless(PulsarX2A):
+class PulsarXliteV4Wireless(PulsarXliteV4):
     """Driver for the Pulsar Xlite v4 through its 1K wireless dongle."""
 
     capabilities: DeviceCapabilities = DeviceCapabilities(
