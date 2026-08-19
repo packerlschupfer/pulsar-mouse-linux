@@ -21,6 +21,7 @@ x2h = "pulsar_mouse.drivers.x2h:PulsarX2H"
 x2_wired = "pulsar_mouse.drivers.x2_wired:PulsarX2Wired"
 xlite_v4 = "pulsar_mouse.drivers.xlite_v4:PulsarXliteV4"
 xlite_wired = "pulsar_mouse.drivers.xlite_wired:PulsarXliteWired"
+xlite_v4_wireless = "pulsar_mouse.drivers.xlite_v4_wireless:PulsarXliteV4Wireless"
 feinmann8k = "pulsar_mouse.drivers.feinmann8k:PulsarFeinmann8K"
 nordic = "pulsar_mouse.drivers.nordic:PulsarNordic"
 
