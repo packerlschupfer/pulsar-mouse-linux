@@ -5,7 +5,7 @@ Provides a plugin architecture where each mouse model has its own
 protocol driver, while sharing the CLI and GTK4 GUI framework.
 """
 
-__version__ = '0.1.2'
+__version__ = '0.1.3'
 
 from pulsar_mouse.base import PulsarDevice, DeviceCapabilities
 
