@@ -240,18 +240,13 @@ jobs:
           APPDIR="${APP}.AppDir"
 
           # Create AppDir structure
-          mkdir -p "${APPDIR}/usr/bin"
-          mkdir -p "${APPDIR}/usr/lib"
+          mkdir -p "${APPDIR}/usr/lib/pulsar-mouse"
           mkdir -p "${APPDIR}/usr/share/applications"
           mkdir -p "${APPDIR}/usr/share/icons/hicolor/256x256/apps"
 
-          # Bundle full Python runtime (venv only symlinks stdlib — not portable)
-          PYVER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-          cp /usr/bin/python3 "${APPDIR}/usr/bin/python3"
-          cp -a "/usr/lib/python${PYVER}" "${APPDIR}/usr/lib/"
-
-          # Install pyusb into the bundled stdlib
-          SITE="${APPDIR}/usr/lib/python${PYVER}"
+          # Bundle only the application and pyusb — use system Python
+          # so gi/GTK bindings always match the system's Python ABI.
+          SITE="${APPDIR}/usr/lib/pulsar-mouse"
           pip install --target="${SITE}" --quiet pyusb
 
           mkdir -p "${SITE}/pulsar_mouse/drivers"
@@ -266,27 +261,17 @@ jobs:
           cp data/pulsar-mouse.desktop "${APPDIR}/pulsar-mouse.desktop"
           cp data/pulsar-mouse.png "${APPDIR}/pulsar-mouse.png"
 
-          # AppRun
+          # AppRun — uses system python3, bundles only the app + pyusb
           cat > "${APPDIR}/AppRun" << 'APPRUN'
           #!/bin/bash
           HERE="$(dirname "$(readlink -f "$0")")"
-          export PATH="${HERE}/usr/bin:${PATH}"
-          export PYTHONHOME="${HERE}/usr"
-
-          # Add system site-packages so gi (PyGObject), dbus, etc. are found
-          for d in /usr/lib/python3/dist-packages \
-                   /usr/lib/python3.*/dist-packages \
-                   /usr/lib/python3.*/site-packages \
-                   /usr/lib64/python3.*/site-packages; do
-              [ -d "$d" ] && PYTHONPATH="${PYTHONPATH:+${PYTHONPATH}:}${d}"
-          done
-          export PYTHONPATH
+          export PYTHONPATH="${HERE}/usr/lib/pulsar-mouse${PYTHONPATH:+:${PYTHONPATH}}"
 
           if [ "$1" = "--cli" ]; then
               shift
-              exec "${HERE}/usr/bin/python3" -m pulsar_mouse.cli "$@"
+              exec python3 -m pulsar_mouse.cli "$@"
           else
-              exec "${HERE}/usr/bin/python3" -m pulsar_mouse.gui "$@"
+              exec python3 -m pulsar_mouse.gui "$@"
           fi
           APPRUN
           chmod 755 "${APPDIR}/AppRun"

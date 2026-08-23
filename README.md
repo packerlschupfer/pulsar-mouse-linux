@@ -101,7 +101,8 @@ chmod +x pulsar-mouse-linux-*-x86_64.AppImage
 ./pulsar-mouse-linux-*-x86_64.AppImage --cli     # CLI
 ```
 
-Bundles Python + pyusb. The GUI still needs system GTK4/libadwaita installed.
+Bundles pyusb. Requires system Python 3, PyGObject, GTK4, and libadwaita
+(the same packages listed in [Requirements](#requirements) above).
 udev rules must be installed separately (see below).
 
 ### Option 3: Tarball (any distro)
