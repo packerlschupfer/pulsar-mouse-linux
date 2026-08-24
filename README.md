@@ -264,6 +264,8 @@ The CLI and GUI will automatically detect the new driver and adapt their UI.
 
 External driver packages can also register via entry points without modifying this repo.
 
+Need to reverse-engineer the protocol first? See [docs/usb-capture-guide.md](docs/usb-capture-guide.md) for step-by-step Wireshark/USBPcap instructions and `tools/parse-capture.py` to decode the captures.
+
 ## OS Tweaks for Gaming
 
 The GUI has a "Desktop Mouse Settings" section on the Performance page that
