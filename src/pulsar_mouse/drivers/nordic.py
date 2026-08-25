@@ -75,8 +75,9 @@ BUTTON_ADDRS = {
     'left':    0x60,
     'right':   0x64,
     'wheel':   0x68,
-    'thumb1':  0x6C,   # side front (forward)
-    'thumb2':  0x70,   # side back  (backward)
+    # Xlite V3: physical top = 0x70, bottom = 0x6C (andrewrabert FORWARD/BACK).
+    'thumb1':  0x70,   # side top / front
+    'thumb2':  0x6C,   # side bottom / back
 }
 
 ADDR_DEBOUNCE         = 0xA9
@@ -96,9 +97,20 @@ LED_EFFECT_BREATHE = 0x02
 BUTTON_MODE_DISABLED       = 0x00
 BUTTON_MODE_MOUSE          = 0x01
 BUTTON_MODE_DPI_CHANGE     = 0x02
-BUTTON_MODE_CUSTOM         = 0x05
+BUTTON_MODE_CUSTOM         = 0x05  # ShortcutKey (not inline mod/key)
+BUTTON_MODE_MACRO          = 0x06
 BUTTON_MODE_PROFILE_CHANGE = 0x09
 BUTTON_MODE_DPI_LOCK       = 0x0A
+
+# Keyboard shortcuts live in a separate 16-bit address space (Bibimbap /
+# Fusion layout): base 0x100, 32 bytes per button index.
+# Button slot mode 0x05 stores a pointer (hi, lo) to that record — NOT
+# (modifier, key).  Confirmed via Pulsar Bibimbap cMouse encoding + 
+# andrewrabert ADDR_BUTTON_CUSTOM1 = (0x01, 0x20) == 0x120 == 0x100+32*1.
+SHORTCUT_BASE = 0x100
+SHORTCUT_SIZE = 32
+HID_EVT_MOD = 0x00
+HID_EVT_KEY = 0x01
 
 # Nordic mouse action values are bitmasks, Sonix are sequential.
 # Translate so hid.py's describe_button() works universally.
@@ -109,9 +121,66 @@ _NORDIC_MOUSE_TO_SONIX = {
     0x08: 0x05,  # backward (back)
     0x10: 0x04,  # forward
 }
+_SONIX_MOUSE_TO_NORDIC = {v: k for k, v in _NORDIC_MOUSE_TO_SONIX.items()}
 
-from pulsar_mouse.hid import (BTN_TYPE_MOUSE, BTN_TYPE_KEYBOARD,
+from pulsar_mouse.hid import (BTN_TYPE_DISABLED, BTN_TYPE_MOUSE, BTN_TYPE_KEYBOARD,
                                BTN_TYPE_DPI, BTN_TYPE_PROFILE)
+
+
+def _shortcut_addr(btn_name: str) -> int:
+    """Shortcut records are indexed by button slot order (0x60, 0x64, …)."""
+    btn_addr = BUTTON_ADDRS[btn_name]
+    index = (btn_addr - ADDR_BUTTON_BASE) // BUTTON_SIZE
+    return SHORTCUT_BASE + SHORTCUT_SIZE * index
+
+
+def _build_shortcut_blob(mod: int, key: int) -> bytes:
+    """Bibimbap Qi()-compatible shortcut record (press then release)."""
+    events: list[tuple[int, int]] = []
+    # Modifier values match Bibimbap HID map (LCtrl=1, LShift=2, …).
+    for bit in (0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80):
+        if mod & bit:
+            events.append((HID_EVT_MOD, bit))
+    if key:
+        events.append((HID_EVT_KEY, key))
+    if not events:
+        raise ValueError("Keyboard shortcut needs a key or modifier")
+
+    buf = bytearray()
+    buf.append(2 * len(events))
+    for typ, val in events:
+        buf.append(0x80 | typ)
+        buf.append(val & 0xff)
+        buf.append((val >> 8) & 0xff)
+    for typ, val in reversed(events):
+        buf.append(0x40 | typ)
+        buf.append(val & 0xff)
+        buf.append((val >> 8) & 0xff)
+    buf.append(0)  # overwritten with checksum
+    buf[-1] = ctypes.c_uint8(0x55 - sum(buf[:-1])).value
+    return bytes(buf)
+
+
+def _parse_shortcut_blob(blob: bytes) -> tuple[int, int]:
+    """Return (mod, key) from a shortcut record. Empty → (0, 0)."""
+    if not blob:
+        return (0, 0)
+    n_events = blob[0] // 2
+    if n_events <= 0 or 1 + 3 * n_events > len(blob):
+        return (0, 0)
+    mod = 0
+    key = 0
+    for i in range(n_events):
+        flags = blob[1 + 3 * i]
+        if not (flags & 0x80):
+            continue  # only count press events
+        typ = flags & 0x0f
+        val = blob[2 + 3 * i] | (blob[3 + 3 * i] << 8)
+        if typ == HID_EVT_MOD:
+            mod |= val
+        elif typ == HID_EVT_KEY:
+            key = val
+    return (mod, key)
 
 
 # ── DPI encoding (50 DPI steps, 3 bytes per stage) ──────────────────────────
@@ -166,7 +235,7 @@ class PulsarNordic(PulsarDevice):
         button_labels={
             'left': 'Left Click', 'right': 'Right Click',
             'wheel': 'Wheel Click',
-            'thumb1': 'Side Front (forward)', 'thumb2': 'Side Back (backward)',
+            'thumb1': 'Side Top (front)', 'thumb2': 'Side Bottom (back)',
         },
     )
 
@@ -241,31 +310,63 @@ class PulsarNordic(PulsarDevice):
     # ── Memory access ────────────────────────────────────────────────────
 
     def _mem_read_all(self):
-        """Read the full settings memory map (0x00–0xC8) into cache."""
+        """Read the settings memory map (0x00–0xC0) into cache."""
         self._mem = {}
         addr = 0x00
         while addr <= 0xC0:
-            length = 10
-            resp = self._command(CMD_MEM_GET, b4=addr, b5=length)
-            for i in range(length):
-                self._mem[addr + i] = resp[6 + i]
-            addr += length
+            chunk = self._mem_read_range(addr, 10)
+            for i, val in enumerate(chunk):
+                self._mem[addr + i] = val
+            addr += 10
+
+    def _mem_read_range(self, start: int, length: int) -> bytes:
+        """Read `length` bytes from a 16-bit memory address."""
+        out = bytearray()
+        offset = 0
+        while offset < length:
+            n = min(10, length - offset)
+            addr = start + offset
+            resp = self._command(
+                CMD_MEM_GET,
+                b3=(addr >> 8) & 0xff,
+                b4=addr & 0xff,
+                b5=n,
+            )
+            out.extend(resp[6:6 + n])
+            offset += n
+        return bytes(out)
 
     def _mem_write(self, addresses: dict[int, int]):
         """Write a contiguous block of memory addresses to the device."""
         if not addresses:
             return
         start = min(addresses)
-        length = len(addresses)
+        end = max(addresses)
+        length = end - start + 1
         if length > 10:
             raise ValueError("Cannot write more than 10 bytes at once")
+        # Fill gaps so the device gets a dense block.
+        data = bytes(addresses.get(start + i, self._mem.get(start + i, 0))
+                     for i in range(length))
+        self._mem_write_bytes(start, data)
 
-        kwargs = {'b4': start, 'b5': length}
-        for i, addr in enumerate(range(start, start + length)):
-            kwargs[f'b{6 + i}'] = addresses[addr]
-
-        self._command(CMD_MEM_SET, **kwargs)
-        self._mem.update(addresses)
+    def _mem_write_bytes(self, start: int, data: bytes) -> None:
+        """Write an arbitrary-length blob via 10-byte MEM_SET chunks."""
+        offset = 0
+        while offset < len(data):
+            chunk = data[offset:offset + 10]
+            addr = start + offset
+            kwargs = {
+                'b3': (addr >> 8) & 0xff,
+                'b4': addr & 0xff,
+                'b5': len(chunk),
+            }
+            for i, val in enumerate(chunk):
+                kwargs[f'b{6 + i}'] = val
+            self._command(CMD_MEM_SET, **kwargs)
+            for i, val in enumerate(chunk):
+                self._mem[addr + i] = val
+            offset += len(chunk)
 
     def _write_value(self, addr: int, value: int):
         """Write a single value with its per-byte checksum."""
@@ -444,10 +545,9 @@ class PulsarNordic(PulsarDevice):
         raw_type = self._mem.get(addr, 0)
         raw_a1 = self._mem.get(addr + 1, 0)
         raw_a2 = self._mem.get(addr + 2, 0)
-        return self._translate_button(raw_type, raw_a1, raw_a2)
+        return self._translate_button(name, raw_type, raw_a1, raw_a2)
 
-    @staticmethod
-    def _translate_button(raw_type, a1, a2):
+    def _translate_button(self, name, raw_type, a1, a2):
         """Translate Nordic button encoding to Sonix-compatible values."""
         if raw_type == BUTTON_MODE_MOUSE:
             return (BTN_TYPE_MOUSE, _NORDIC_MOUSE_TO_SONIX.get(a1, a1), a2)
@@ -456,23 +556,66 @@ class PulsarNordic(PulsarDevice):
         if raw_type == BUTTON_MODE_PROFILE_CHANGE:
             return (BTN_TYPE_PROFILE, a1, a2)
         if raw_type == BUTTON_MODE_CUSTOM:
-            return (BTN_TYPE_KEYBOARD, a1, a2)
+            ptr = (a1 << 8) | a2
+            expected = _shortcut_addr(name)
+            # Prefer the pointer in the slot; fall back to canonical address.
+            sc_addr = ptr if ptr >= SHORTCUT_BASE else expected
+            try:
+                blob = self._mem_read_range(sc_addr, SHORTCUT_SIZE)
+            except Exception:
+                blob = b''
+            mod, key = _parse_shortcut_blob(blob)
+            return (BTN_TYPE_KEYBOARD, mod, key)
         if raw_type == BUTTON_MODE_DISABLED:
-            return (BTN_TYPE_MOUSE, 0x00, 0x00)
+            return (BTN_TYPE_DISABLED, 0x00, 0x00)
         return (raw_type, a1, a2)
 
     def set_button(self, btn_id: int, btn_type: int, a1: int, a2: int,
                    profile: int) -> None:
+        """Write a button binding.
+
+        Callers pass Sonix-style (btn_type, a1, a2) from hid.py. Nordic
+        stores different mode bytes — without this mapping, keyboard
+        shortcuts (Sonix type 0x02) are written as DPI_CHANGE (Nordic 0x02)
+        and show up as dpi+/dpi(…) in the UI.
+
+        Keyboard shortcuts also need a 32-byte record at
+        SHORTCUT_BASE+32*index; the button slot only holds mode 0x05 plus
+        a pointer to that record.
+        """
         btn_names = {v: k for k, v in self.capabilities.buttons.items()}
         name = btn_names.get(btn_id)
         if name is None:
             raise ValueError(f"Unknown button ID 0x{btn_id:02x}")
         addr = BUTTON_ADDRS[name]
+
+        if btn_type == BTN_TYPE_MOUSE:
+            raw_type = BUTTON_MODE_MOUSE
+            a1 = _SONIX_MOUSE_TO_NORDIC.get(a1, a1)
+            a2 = 0x00
+        elif btn_type == BTN_TYPE_KEYBOARD:
+            sc_addr = _shortcut_addr(name)
+            blob = _build_shortcut_blob(a1, a2)
+            # Clear the whole shortcut slot then write the blob.
+            self._mem_write_bytes(sc_addr, blob + bytes(SHORTCUT_SIZE - len(blob)))
+            raw_type = BUTTON_MODE_CUSTOM
+            a1 = (sc_addr >> 8) & 0xff
+            a2 = sc_addr & 0xff
+        elif btn_type == BTN_TYPE_DPI:
+            raw_type = BUTTON_MODE_DPI_CHANGE
+        elif btn_type == BTN_TYPE_PROFILE:
+            raw_type = BUTTON_MODE_PROFILE_CHANGE
+        elif btn_type == BTN_TYPE_DISABLED:
+            raw_type = BUTTON_MODE_DISABLED
+            a1 = a2 = 0
+        else:
+            raw_type = btn_type
+
         self._mem_write({
-            addr: btn_type,
+            addr: raw_type,
             addr + 1: a1,
             addr + 2: a2,
-            addr + 3: self._checksum(btn_type + a1 + a2),
+            addr + 3: self._checksum(raw_type, a1, a2),
         })
 
     # ── Factory reset ────────────────────────────────────────────────────
