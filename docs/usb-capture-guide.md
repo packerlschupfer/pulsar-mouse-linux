@@ -7,13 +7,26 @@ Every driver in this project was built from these captures.
 
 ## What we need
 
-One `.pcapng` file containing at least:
+**Two files: a `.pcapng` capture and a screen recording of Fusion taken at the same
+time.** The capture alone gives us a list of writes — addresses and values with nothing
+to say what they mean. The video is what identifies them: we line up each write with
+the video frame at that moment and read straight off the UI which setting changed and
+to what. Settings that would otherwise stay guesses become certain, and a value we
+guess wrong gets written to someone's mouse.
 
-1. **A read of every setting** — open Pulsar Fusion, switch between tabs/profiles
-2. **A write of a few settings** — change something (DPI, polling rate, LED),
-   click Apply, then change it back
+The capture should contain:
 
-Label what you did and when (even rough timestamps help).
+1. **A read of every setting** — open Pulsar Fusion, switch between tabs and profiles
+2. **A sweep of each setting** — move every control through *all* of its positions, not
+   just one. A full sweep of a slider pins down how the value is encoded; a single
+   sample usually doesn't
+
+Any screen recorder works (OBS, Xbox Game Bar, ShareX). See
+[Recording your screen alongside](#recording-your-screen-alongside) for the two details
+that make a recording usable — it takes no extra effort if you know them up front.
+
+If you genuinely can't record, send the capture anyway and label what you did and
+roughly when; it's slower to decode but still useful.
 
 ## Option A: Wireshark on Windows (simplest)
 
@@ -152,9 +165,7 @@ settings to a device with an unverified driver.
 
 ## Recording your screen alongside
 
-If you can, record the Fusion window while you capture. It is what turns a list of
-writes into a register map: we line up each write with the video frame at the same
-moment and read straight off the UI which setting changed and to what value.
+Record the whole Fusion window, and keep Wireshark visible behind or beside it.
 
 Two things make the recording usable:
 
@@ -163,8 +174,11 @@ Two things make the recording usable:
 - **Pause a beat on each change.** Move one control, wait a second, move the next. Fast
   drags produce a burst of writes that can't be told apart.
 
-Sweeping a control through *all* of its positions is far more useful than setting it
-once — a full sweep of a slider pins the encoding, a single sample rarely does.
+- **Sweep, don't sample.** Every position of every control. This is the single biggest
+  difference between a capture we can half-decode and one we can finish.
+
+Don't worry about trimming or narrating the video — we only ever look at single frames
+at specific timestamps.
 
 ## Sending us the capture
 
