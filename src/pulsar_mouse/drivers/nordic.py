@@ -204,6 +204,11 @@ def _parse_shortcut_blob(blob: bytes) -> tuple[int, int]:
 # `step` is per-model (50 on the X2A Wireless, 10 on the X2 CrazyLight), so
 # the reachable maximum is 1024 * step.
 
+def _rot2(nibble: int) -> int:
+    """Rotate a 4-bit value left by 2.  Self-inverse."""
+    return ((nibble << 2) | (nibble >> 2)) & 0x0F
+
+
 def _dpi_to_raw(dpi: int, step: int = 50) -> bytes:
     hi = 256 * step
     if not (step <= dpi <= 4 * hi) or dpi % step:
@@ -211,14 +216,13 @@ def _dpi_to_raw(dpi: int, step: int = 50) -> bytes:
                          f"got {dpi}")
     quo = (dpi // step) - 1
     overflow, low = divmod(quo, 256)
-    index3 = (overflow << 2) | (overflow << 6)
-    return bytes([low, low, index3])
+    nib = _rot2(overflow)
+    return bytes([low, low, (nib << 4) | nib])
 
 
 def _raw_to_dpi(raw: bytes, step: int = 50) -> int:
-    low = raw[0] + 1
-    overflow = (raw[2] >> 2) & 0x03
-    return (low * step) + (overflow * 256 * step)
+    overflow = _rot2(raw[2] & 0x0F)
+    return ((overflow << 8) + raw[0] + 1) * step
 
 
 # ── Driver ───────────────────────────────────────────────────────────────────
@@ -270,6 +274,7 @@ class PulsarNordic(PulsarDevice):
     def __init__(self):
         self._dev = None
         self._mem = {}
+        self._profile = None   # active profile, 1-based; None until read
 
     # ── Connection lifecycle ─────────────────────────────────────────────
 
@@ -291,6 +296,11 @@ class PulsarNordic(PulsarDevice):
         usb.util.claim_interface(dev, iface)
         self._dev = dev
         self._mem_read_all()
+        if caps.num_profiles > 1:
+            try:
+                self.get_active_profile()
+            except Exception:
+                self._profile = None
 
     def close(self) -> None:
         if self._dev is None:
@@ -303,6 +313,7 @@ class PulsarNordic(PulsarDevice):
             pass
         self._dev = None
         self._mem = {}
+        self._profile = None
 
     # ── Low-level protocol ───────────────────────────────────────────────
 
@@ -332,6 +343,20 @@ class PulsarNordic(PulsarDevice):
         pkt = self._build_packet(cmd, **kwargs)
         self._send(pkt)
         return self._recv()
+
+    def _drain(self):
+        """Discard unsolicited replies.
+
+        A profile switch answers with the 0x0F echo *and* an 0x0A carrying the
+        profile count; leaving the extra report queued desynchronises every
+        later _command().
+        """
+        while True:
+            try:
+                self._dev.read(self._ENDPOINT_IN,
+                               self.capabilities.report_size, timeout=50)
+            except Exception:
+                return
 
     # ── Memory access ────────────────────────────────────────────────────
 
@@ -414,6 +439,33 @@ class PulsarNordic(PulsarDevice):
             return 'unknown'
         return f'{resp[6]}.{resp[7]:02d}'
 
+    # ── Active profile ───────────────────────────────────────────────────
+    # The memory map *is* the active profile: switching reloads all of it.
+    # The device numbers profiles from 0, the rest of the codebase from 1.
+
+    def get_active_profile(self) -> int:
+        resp = self._command(CMD_ACTIVE_PROFILE_GET)
+        self._profile = resp[6] + 1
+        return self._profile
+
+    def set_active_profile(self, profile: int) -> None:
+        count = self.capabilities.num_profiles
+        if not 1 <= profile <= count:
+            raise ValueError(f"Profile must be 1–{count}")
+        self._command(CMD_ACTIVE_PROFILE_SET, b5=0x01, b6=profile - 1)
+        self._drain()
+        self._profile = profile
+        self._mem_read_all()
+
+    def _ensure_profile(self, profile) -> None:
+        """Load `profile` if the cached memory map is a different one."""
+        if self.capabilities.num_profiles <= 1 or not profile:
+            return
+        if self._profile is None:
+            self.get_active_profile()
+        if profile != self._profile:
+            self.set_active_profile(profile)
+
     # ── Global settings ──────────────────────────────────────────────────
 
     def get_polling_rate(self) -> int:
@@ -456,6 +508,7 @@ class PulsarNordic(PulsarDevice):
     # ── Per-profile: DPI stages ──────────────────────────────────────────
 
     def get_dpi_stages(self, profile: int) -> dict:
+        self._ensure_profile(profile)
         step = self.capabilities.dpi_step
         count = self._mem.get(ADDR_DPI_STAGE_COUNT, 4)
         # The device stores the active stage 0-based; the rest of the
@@ -470,6 +523,7 @@ class PulsarNordic(PulsarDevice):
         return {'active': active, 'count': count, 'stages': stages}
 
     def set_dpi_stages(self, stages: list[int], active: int, profile: int) -> None:
+        self._ensure_profile(profile)
         caps = self.capabilities
         if not 1 <= len(stages) <= caps.max_dpi_stages:
             raise ValueError(f"Must have 1–{caps.max_dpi_stages} DPI stages")
@@ -496,9 +550,11 @@ class PulsarNordic(PulsarDevice):
             })
 
     def get_active_dpi_stage(self, profile: int) -> int:
+        self._ensure_profile(profile)
         return self._mem.get(ADDR_ACTIVE_DPI_STAGE, 0) + 1
 
     def set_active_dpi_stage(self, stage: int, profile: int) -> None:
+        self._ensure_profile(profile)
         max_stages = self.capabilities.max_dpi_stages
         if not 1 <= stage <= max_stages:
             raise ValueError(f"DPI stage must be 1–{max_stages}")
@@ -507,6 +563,7 @@ class PulsarNordic(PulsarDevice):
     # ── Per-profile: LOD ─────────────────────────────────────────────────
 
     def get_lod(self, profile: int) -> float:
+        self._ensure_profile(profile)
         code = self._mem.get(ADDR_LOD_MM, 0x01)
         for mm, val in self._LOD_CODES.items():
             if val == code:
@@ -514,6 +571,7 @@ class PulsarNordic(PulsarDevice):
         return 1
 
     def set_lod(self, mm: float, profile: int) -> None:
+        self._ensure_profile(profile)
         code = self._LOD_CODES.get(mm)
         if code is None:
             raise ValueError(f"LOD must be one of {sorted(self._LOD_CODES)}")
@@ -522,14 +580,17 @@ class PulsarNordic(PulsarDevice):
     # ── Per-profile: LED ─────────────────────────────────────────────────
 
     def get_brightness(self, profile: int) -> int:
+        self._ensure_profile(profile)
         return self._mem.get(ADDR_LED_BRIGHTNESS, 255)
 
     def set_brightness(self, value: int, profile: int) -> None:
+        self._ensure_profile(profile)
         if not 0 <= value <= 255:
             raise ValueError("Brightness must be 0–255")
         self._write_value(ADDR_LED_BRIGHTNESS, value)
 
     def get_led_effect(self, profile: int) -> str:
+        self._ensure_profile(profile)
         enabled = self._mem.get(ADDR_LED_ENABLED, 1)
         if not enabled:
             return 'off'
@@ -539,6 +600,7 @@ class PulsarNordic(PulsarDevice):
         return 'steady'
 
     def set_led_effect(self, effect: str, profile: int) -> None:
+        self._ensure_profile(profile)
         if effect == 'off':
             self._write_bool(ADDR_LED_ENABLED, False)
         elif effect == 'steady':
@@ -551,9 +613,11 @@ class PulsarNordic(PulsarDevice):
             raise ValueError("Effect must be 'off', 'steady', or 'breathe'")
 
     def get_breathe_speed(self, profile: int) -> int:
+        self._ensure_profile(profile)
         return self._mem.get(ADDR_LED_BREATHE_SPEED, 1)
 
     def set_breathe_speed(self, speed: int, profile: int) -> None:
+        self._ensure_profile(profile)
         lo, hi = self.capabilities.breathe_speed_range
         if not lo <= speed <= hi:
             raise ValueError(f"Breathe speed must be {lo}–{hi}")
@@ -562,6 +626,7 @@ class PulsarNordic(PulsarDevice):
     # ── Per-profile: stage colors ────────────────────────────────────────
 
     def get_stage_color(self, stage: int, profile: int) -> tuple[int, int, int]:
+        self._ensure_profile(profile)
         base = ADDR_LED_COLOR_BASE + (stage - 1) * LED_COLOR_SIZE
         r = self._mem.get(base, 0)
         g = self._mem.get(base + 1, 0)
@@ -570,6 +635,7 @@ class PulsarNordic(PulsarDevice):
 
     def set_stage_color(self, stage: int, r: int, g: int, b: int,
                         profile: int) -> None:
+        self._ensure_profile(profile)
         for val, name in [(r, 'R'), (g, 'G'), (b, 'B')]:
             if not 0 <= val <= 255:
                 raise ValueError(f"{name} must be 0–255")
@@ -584,6 +650,7 @@ class PulsarNordic(PulsarDevice):
     # ── Per-profile: button bindings ─────────────────────────────────────
 
     def get_button(self, btn_id: int, profile: int) -> tuple[int, int, int]:
+        self._ensure_profile(profile)
         btn_names = {v: k for k, v in self.capabilities.buttons.items()}
         name = btn_names.get(btn_id)
         if name is None:
@@ -630,6 +697,7 @@ class PulsarNordic(PulsarDevice):
         SHORTCUT_BASE+32*index; the button slot only holds mode 0x05 plus
         a pointer to that record.
         """
+        self._ensure_profile(profile)
         btn_names = {v: k for k, v in self.capabilities.buttons.items()}
         name = btn_names.get(btn_id)
         if name is None:

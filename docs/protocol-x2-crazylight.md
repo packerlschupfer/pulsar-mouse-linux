@@ -1,7 +1,11 @@
 # Pulsar X2 CrazyLight (X2 CL) — wireless dongle protocol
 
-Decoded from a USBPcap capture of Pulsar Fusion contributed by @iamtherobin in
+Decoded from two USBPcap captures of Pulsar Fusion, each with a matching screen
+recording, contributed by @iamtherobin in
 [issue #7](https://github.com/packerlschupfer/pulsar-mouse-linux/issues/7).
+Every register below was confirmed by extracting the video frame at the timestamp of
+each write (the video/capture clock offset is calibrated from Wireshark's on-screen
+packet counter).
 
 Firmware in the capture: `X2 CL Wireless · Mouse v3.05 · Dongle v2.25 · DRV V1.31`.
 
@@ -66,7 +70,9 @@ settings are stored as a `(value, 0x55 - value)` pair, and multi-byte records en
 | `0x04` | poll | battery — response byte 6 = percent (`0x5a` = 90 %), byte 7 = charging flag |
 | `0x07` | write | write `len` bytes at address; `08 07 00 <ah> <al> 02 <val> <0x55-val> …` |
 | `0x08` | read | read `len` bytes (max 10) at address; response echoes addr/len then returns data |
-| `0x0e` | poll | response payload `01` (unknown) |
+| `0x0a` | resp | profile count — sent unprompted after a profile switch, payload `04` |
+| `0x0e` | poll | active profile, 0-based |
+| `0x0f` | write | set active profile, 0-based, `len = 1` |
 | `0x12` | poll | firmware version — response `03 05` = mouse v3.05 |
 | `0x15` | poll | 10 bytes, unknown |
 | `0x17` | poll | 10 bytes, unknown |
@@ -113,7 +119,7 @@ Fusion UI in the screen recording contributed alongside it.
 
 | Addr | Setting | Encoding |
 |---|---|---|
-| `0x0000` | Polling rate | `0x01`=1000, `0x02`=500, `0x04`=250, `0x08`=125 Hz (period in ms); `0x10`=2 K, `0x20`=4 K, `0x40`=8 K. **Confirmed: 125, 2 K, 4 K, 8 K.** 250/500/1 K inferred |
+| `0x0000` | Polling rate | `0x01`=1000, `0x02`=500, `0x04`=250, `0x08`=125 Hz (period in ms); `0x10`=2 K, `0x20`=4 K, `0x40`=8 K. All seven confirmed |
 | `0x0002` | DPI stage count | `0x04` in the capture |
 | `0x0004` | Active DPI stage | 0-based (`0x02` = DPI 3) |
 | `0x0006` | unknown | `0x00` |
@@ -122,14 +128,14 @@ Fusion UI in the screen recording contributed alongside it.
 | `0x000c`–`0x002b` | 8 × DPI stage | 4 bytes each: `[x_lo, y_lo, hi, cksum]` |
 | `0x002c`–`0x004b` | 8 × DPI stage colour | 4 bytes each: `[R, G, B, cksum]` |
 | `0x004c` | LED effect | `0x01`=steady, `0x02`=breathing |
-| `0x004e` | LED brightness | `0x10`…`0xff`, 10 UI steps (step 1 = `0x10`, step 6 = `0x96`) |
+| `0x004e` | LED brightness | 10 UI steps: `10 1e 3c 5a 80 96 b4 d2 e6 ff` |
 | `0x0050` | LED breathing speed | UI 1…5, stored directly |
 | `0x0052` | LED on/off | `0x00`=off, `0x01`=on (Fusion's "OFF" radio writes here, not to `0x004c`) |
 | `0x0054` | LED colour | `[R, G, B, cksum]` |
 | `0x0060`–`0x008b` | Button assignments | 4 bytes each: `[type, code, modifier, cksum]` |
-| `0x00a9` | Debounce time | milliseconds (0, 3, 20 observed) |
+| `0x00a9` | Debounce time | milliseconds; 0–20 swept in the second capture |
 | `0x00ab` | Motion sync | `0`/`1` |
-| `0x00ad` | Auto sleep | value × 10 s (`0x06` = 1 min, `0x1e` = 5 min) |
+| `0x00ad` | Auto sleep | value × 10 s (`0x03` = 30 s, `0x06` = 1 min, `0x3c` = 10 min, `0xb4` = 30 min) |
 | `0x00af` | Angle snapping | `0`/`1` |
 | `0x00b1` | Ripple control | `0`/`1` |
 | `0x00b5` | Turbo mode | `0`/`1` |
@@ -137,38 +143,55 @@ Fusion UI in the screen recording contributed alongside it.
 | `0x00c4`–`0x00d7` | 4 × float32 `1.0f` + cksum | mouse sensitivity multipliers |
 | `0x00e1`–`0x00e8` | 8 bytes | looks like the pairing address / device serial |
 
+### Profiles
+
+The mouse holds **four onboard profiles**, and the memory map above is whichever one is
+active — switching reloads all of it. Fusion switches with command `0x0F` (0-based
+profile number, `len = 1`), gets an `0x0A` reply carrying the profile count (`04`), then
+re-reads the entire map. Command `0x0E` reports the active profile.
+
+Confirmed by watching `0x0000` change across switches — profile 1 was set to 1 kHz,
+profile 3 to 4 kHz, profile 4 to 8 kHz — with the debounce and auto-sleep values
+changing to match what the Fusion UI showed for each.
+
 ### DPI stage encoding
 
-The four configured stages in the capture were 400 / 800 / 1600 / 3200 DPI:
+The second capture sweeps DPI 3 through eight values, each read off the video:
 
 ```
-stage 1   27 27 00 07  →  (0x27+1) × 10                =   400
-stage 2   4f 4f 00 b7  →  (0x4f+1) × 10                =   800
-stage 3   9f 9f 00 17  →  (0x9f+1) × 10                =  1600
-stage 4   3f 3f 44 93  →  (0x3f+1) × 10 + 1 × 2560     =  3200
-stage 5   7f 7f 88 cf  →  (0x7f+1) × 10 + 2 × 2560     =  6400   (unused default)
-stage 6-8 37 37 22 c5  →  (0x37+1) × 10                =   560   (filler)
+27 27 00 07  →    400        ef ef 00 77  →   2400
+4f 4f 00 b7  →    800        3f 3f 44 93  →   3200
+9f 9f 00 17  →   1600        7f 7f 88 cf  →   6400
+                             77 77 33 34  →  32000
+                             17 17 66 c1  →  24000
 ```
 
-This is exactly the encoding `nordic.py` already implements, with the step changed
-from 50 to 10 DPI:
+A stage record is `[x_lo, y_lo, high, checksum]`. The `high` byte holds the same nibble
+twice (one per axis), and that nibble is the value's high bits **rotated left by 2
+within 4 bits** — a self-inverse operation:
 
 ```python
-dpi      = (raw[0] + 1) * step + ((raw[2] >> 2) & 0x03) * 256 * step
-raw[2]   = (overflow << 2) | (overflow << 6)
+rot2 = lambda n: ((n << 2) | (n >> 2)) & 0x0F
+dpi  = ((rot2(raw[2] & 0x0F) << 8) + raw[0] + 1) * step     # step = 10 here
 ```
 
-All five values round-trip byte-for-byte against the capture. Because the overflow
-field is 2 bits wide, this encoding tops out at `1024 × step` = **10240 DPI**, which
-is where the driver sets `dpi_max`. The sensor is specified higher, so the firmware
-most likely widens the field somewhere above 6400 — the capture never went there, so
-**a follow-up capture setting a DPI above 6400 is still needed** before raising the
-ceiling.
+The rotate is confirmed four independent ways: high 1 → nibble 4, 2 → 8, 12 → 3, 9 → 6.
+For high ≤ 3 this is identical to what `nordic.py` already computed, so the X2A Wireless
+is unaffected.
 
-The remaining gap is the polling-rate table: 125 Hz, 2 K, 4 K and 8 K were observed
-directly; 250 / 500 / 1 K are carried over from `nordic.py` (andrewrabert's tool) and
-have not been seen on this model.
+**Still unresolved above 6400 DPI.** The low byte stops being `n & 0xFF`: for 32000
+Fusion writes `77 77 33` where the rule predicts `7f 7f 33`, and for 24000 it writes
+`17 17 66` against a predicted `5f 5f 66`. The high nibbles are right in both cases —
+only the low byte drifts, and not by a constant. So the driver caps *writes* at
+**10240 DPI** (high ≤ 3, the verified range) while still decoding higher values to
+within a few percent (31920 for 32000, 23280 for 24000) rather than returning nonsense.
+
+Resolving it needs one more capture: DPI 1 stepped through the 6400–32000 range, say
+8000, 10000, 12800, 16000, 20000, 25600, 32000.
 
 ## Wired mode
 
-The wired PID `3710:3414` was not captured and is unmapped.
+Still unmapped. The wired capture in the second batch was taken on a USBPcap root hub
+the mouse was not attached to — it contains a webcam, an audio device and a card
+reader, and no `3710` traffic at all (no 17-byte reports with report ID `0x08`
+anywhere in its 116 k packets).

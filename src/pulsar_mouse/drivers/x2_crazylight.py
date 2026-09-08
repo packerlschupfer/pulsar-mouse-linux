@@ -22,6 +22,9 @@ Differences from the X2A Wireless (PulsarNordic):
   * Polling goes up to 8 kHz (0x10/0x20/0x40 for 2 K/4 K/8 K).
   * A third lift-off distance, 0.7 mm, stored as code 0x03.
   * A sixth button slot at 0x74, bound to DPI Loop by default.
+  * Four onboard profiles rather than one.  The memory map is whichever
+    profile is active, so reading or writing a different one switches first
+    (command 0x0F) and reloads the map — the same thing Fusion does.
 
 Status: UNTESTED on hardware.  Every register below was confirmed by matching
         each write in the capture against the Fusion UI frame at the same
@@ -29,13 +32,17 @@ Status: UNTESTED on hardware.  Every register below was confirmed by matching
 
 Known gaps (need a follow-up capture — see issue #7):
 
-  * DPI above 6400.  The three-byte stage encoding proves out to 6400 DPI,
-    and its 2-bit overflow field caps at 1024 * step = 10240 DPI, so
-    dpi_max is set there.  The sensor is specified higher, so the firmware
-    probably widens the field somewhere above 6400 — do not assume 10240 is
-    the hardware limit.
-  * Factory reset (command 0x09) was never issued by Fusion during the
+  * DPI above 6400.  Fusion's own dialog gives the range as 10–32000 and
+    the high-nibble encoding is understood (a 4-bit rotate left by 2), but
+    above 6400 the low byte stops being (n & 0xFF): Fusion writes
+    77 77 33 for 32000 where the rule predicts 7f 7f 33, and 17 17 66 for
+    24000 against a predicted 5f 5f 66.  Writes are capped at 10240 DPI —
+    the top of the verified range — and above that reads land within a few
+    percent instead of returning nonsense.
+  * Factory reset (command 0x09) was never issued by Fusion in either
     capture, so has_reset is False rather than guessing.
+  * The wired half of the device (PID 0x3414) is still unmapped: the wired
+    capture was taken on a root hub the mouse was not attached to.
 """
 
 from pulsar_mouse.base import DeviceCapabilities
@@ -50,11 +57,12 @@ class PulsarX2CrazyLight(PulsarNordic):
         vid_pid_pairs=[(0x3710, 0x5406)],
         interface_num=1,
         report_size=17,
-        num_profiles=1,
+        num_profiles=4,
         # Fusion showed a stage count of 4.  The memory map reserves eight
         # stage records (0x0C–0x2B) and eight colours (0x2C–0x4B), but only
         # four were ever in use, so stay with what the capture proves.
         max_dpi_stages=4,
+        # Command 0x0A answers a profile switch with the count: 0x04.
         dpi_min=10,
         dpi_max=10240,
         dpi_step=10,
