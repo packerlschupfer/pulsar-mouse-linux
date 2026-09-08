@@ -25,9 +25,47 @@ Label what you did and when (even rough timestamps help).
 
 ### 2. Find your mouse's USB bus
 
-1. Open Device Manager → Human Interface Devices
-2. Find entries mentioning "Pulsar" — note the USB bus number
-3. Or just try each USBPcap interface in Wireshark until you see traffic
+**This is the step that most often goes wrong.** USBPcap captures one *root hub* at a
+time, not one device — if you pick the wrong hub you get a large capture full of
+webcam, audio and card-reader traffic and none of your mouse, no matter what filter
+you set. A capture that "shows nothing" is almost always the wrong hub rather than a
+bad filter, so do not disable the filter and re-capture; change the interface.
+
+The reliable way is to let USBPcap list the devices on each hub:
+
+```
+"C:\Program Files\USBPcap\USBPcapCMD.exe"
+```
+
+It prints something like:
+
+```
+1 \\.\USBPcap1
+  \??\USB#ROOT_HUB30#4&2f9a0ee3&0&0#  Root Hub
+    [Port 3] Pulsar Gaming Mouse
+2 \\.\USBPcap2
+  \??\USB#ROOT_HUB30#5&1a2b3c4d&0&0#  Root Hub
+    [Port 1] USB Camera
+```
+
+Pick the `USBPcapN` that lists your mouse — here `USBPcap1`. Plug the mouse (or the
+2.4 GHz dongle) **directly into a motherboard port**, not through a hub or monitor, and
+re-run the command if you move it, since that can change the hub.
+
+If the mouse isn't listed under any hub, close Pulsar Fusion, unplug and replug the
+device, and run the command again.
+
+#### Sanity-check before the long capture
+
+Start the capture on your chosen interface, open Fusion, and confirm packets are
+arriving with this display filter:
+
+```
+usb.transfer_type == 0x02
+```
+
+If that stays empty while Fusion is clearly talking to the mouse, you are on the wrong
+hub — stop and try the next `USBPcapN`. Ten seconds here saves re-recording everything.
 
 ### 3. Capture
 
@@ -42,6 +80,10 @@ Label what you did and when (even rough timestamps help).
 9. Save as `.pcapng` (File → Save As)
 
 ### 4. Filter (optional, helps us)
+
+These are **display** filters — they only change what Wireshark shows you, and the
+saved file still holds everything. So an empty view means the wrong interface, never a
+reason to capture unfiltered.
 
 Display filter to see only HID feature reports:
 
@@ -107,6 +149,22 @@ sudo PYTHONPATH=src python3 -m pulsar_mouse.cli
 
 Only test **reading** until we confirm the protocol matches. Do not write
 settings to a device with an unverified driver.
+
+## Recording your screen alongside
+
+If you can, record the Fusion window while you capture. It is what turns a list of
+writes into a register map: we line up each write with the video frame at the same
+moment and read straight off the UI which setting changed and to what value.
+
+Two things make the recording usable:
+
+- **Keep the Wireshark packet counter visible.** It is how the video and capture clocks
+  get aligned, to about a tenth of a second.
+- **Pause a beat on each change.** Move one control, wait a second, move the next. Fast
+  drags produce a burst of writes that can't be told apart.
+
+Sweeping a control through *all* of its positions is far more useful than setting it
+once — a full sweep of a slider pins the encoding, a single sample rarely does.
 
 ## Sending us the capture
 
