@@ -7,7 +7,7 @@
 Linux configuration tool for **Pulsar gaming mice**.
 
 Plugin architecture — each mouse model has its own protocol driver.
-Currently supports the **Pulsar Xlite Wired**, **Pulsar X2 Wired**, **Pulsar X2H Wired Medium**, **Pulsar X2A Medium Wired**, **Pulsar Xlite v4**, **Pulsar Feinmann 8K / FO1**, and **Pulsar X2A Wireless / X2 V2 Mini** — see [Supported Mice](#supported-mice) below.
+Currently supports the **Pulsar Xlite Wired**, **Pulsar X2 Wired**, **Pulsar X2H Wired Medium**, **Pulsar X2A Medium Wired**, **Pulsar Xlite v4**, **Pulsar Feinmann 8K / FO1**, **Pulsar X2A Wireless / X2 V2 Mini**, and **Pulsar X2 CrazyLight** — see [Supported Mice](#supported-mice) below.
 
 Reverse-engineered from USB HID captures of Pulsar Fusion on Windows 11.
 Wireless (Nordic) protocol based on [python-pulsar-mouse-tool](https://github.com/andrewrabert/python-pulsar-mouse-tool) by andrewrabert.
@@ -47,6 +47,7 @@ Wireless (Nordic) protocol based on [python-pulsar-mouse-tool](https://github.co
 | Pulsar Xlite v4 Wireless | `xlite_v4_wireless` | `3710:5402` | Supported (1K wireless dongle, same Sonix protocol) |
 | Pulsar Feinmann 8K / FO1 | `feinmann8k` | `3710:5404` | Fully supported (wireless dongle, 8K Hz polling, 6 onboard profiles) |
 | Pulsar X2A Wireless / X2 V2 Mini | `nordic` | `3554:f507` `3554:f508` | Supported (Nordic chipset, battery status) |
+| Pulsar X2 CrazyLight Wireless | `x2_crazylight` | `3710:5406` | Untested (Nordic protocol under the Sonix VID, 8K Hz polling, 10 DPI step) |
 
 Want to add support for your mouse? See [Adding a new driver](#adding-a-new-driver) below.
 
@@ -334,6 +335,7 @@ Checksum: bytes[62:64] = LE uint16(sum(bytes[0:62])).
 - [@variasjon](https://github.com/variasjon) — Xlite v4 wireless dongle driver
 - [@mwsmws22](https://github.com/mwsmws22) — Nordic keyboard shortcut fix (shortcut-table writes, Xlite V3 button mapping)
 - [@Scout339](https://github.com/Scout339) — Logo design, wireless mouse testing
+- [@iamtherobin](https://github.com/iamtherobin) — Pulsar Fusion USB capture and screen recording that the X2 CrazyLight driver was decoded from
 - [andrewrabert](https://github.com/andrewrabert) — [python-pulsar-mouse-tool](https://github.com/andrewrabert/python-pulsar-mouse-tool), reference implementation for the Nordic wireless protocol
 
 ## Related Projects

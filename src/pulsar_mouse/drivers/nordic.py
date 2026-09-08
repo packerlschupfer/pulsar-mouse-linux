@@ -4,6 +4,11 @@ Pulsar Nordic chipset — protocol driver.
 Covers wireless and wired modes of Pulsar mice using the Nordic MCU
 (VID 0x3554).  Known compatible: X2A Wireless, X2 V2 Mini.
 
+The protocol is not tied to that VID: the X2 CrazyLight dongle ships under
+the Sonix VID 0x3710 but speaks this protocol — see drivers/x2_crazylight.py
+and docs/protocol-x2-crazylight.md, which is where most of the register map
+below was independently confirmed against a Pulsar Fusion capture.
+
 Protocol based on python-pulsar-mouse-tool by andrewrabert:
 https://github.com/andrewrabert/python-pulsar-mouse-tool
 
@@ -47,6 +52,7 @@ CMD_MEM_GET           = 0x08
 CMD_RESTORE           = 0x09
 CMD_ACTIVE_PROFILE_GET = 0x0E
 CMD_ACTIVE_PROFILE_SET = 0x0F
+CMD_FW_VERSION        = 0x12
 
 # ── Memory addresses ────────────────────────────────────────────────────────
 
@@ -82,13 +88,22 @@ BUTTON_ADDRS = {
 
 ADDR_DEBOUNCE         = 0xA9
 ADDR_MOTION_SYNC      = 0xAB
+# Fusion writes the auto-sleep timeout to 0xAD *and* 0xB7 (X2 CL capture),
+# always with the same value.  set_autosleep() mirrors that.
+ADDR_AUTOSLEEP_ALT    = 0xAD
 ADDR_ANGLE_SNAP       = 0xAF
 ADDR_RIPPLE_CONTROL   = 0xB1
+ADDR_TURBO_MODE       = 0xB5
 ADDR_AUTOSLEEP        = 0xB7
 
 # ── Encoding tables ─────────────────────────────────────────────────────────
 
-POLL_HZ_TO_VAL = {1000: 0x01, 500: 0x02, 250: 0x04, 125: 0x08}
+# Rates up to 1 kHz encode the report period in milliseconds; the high
+# rates use separate flag bits.  125 Hz, 2 K, 4 K and 8 K are confirmed from
+# a Pulsar Fusion capture of the X2 CrazyLight (issue #7); 250/500/1000 come
+# from andrewrabert's tool.
+POLL_HZ_TO_VAL = {1000: 0x01, 500: 0x02, 250: 0x04, 125: 0x08,
+                  2000: 0x10, 4000: 0x20, 8000: 0x40}
 POLL_VAL_TO_HZ = {v: k for k, v in POLL_HZ_TO_VAL.items()}
 
 LED_EFFECT_STEADY  = 0x01
@@ -127,9 +142,9 @@ from pulsar_mouse.hid import (BTN_TYPE_DISABLED, BTN_TYPE_MOUSE, BTN_TYPE_KEYBOA
                                BTN_TYPE_DPI, BTN_TYPE_PROFILE)
 
 
-def _shortcut_addr(btn_name: str) -> int:
+def _shortcut_addr(btn_name: str, addrs: dict = BUTTON_ADDRS) -> int:
     """Shortcut records are indexed by button slot order (0x60, 0x64, …)."""
-    btn_addr = BUTTON_ADDRS[btn_name]
+    btn_addr = addrs[btn_name]
     index = (btn_addr - ADDR_BUTTON_BASE) // BUTTON_SIZE
     return SHORTCUT_BASE + SHORTCUT_SIZE * index
 
@@ -183,21 +198,27 @@ def _parse_shortcut_blob(blob: bytes) -> tuple[int, int]:
     return (mod, key)
 
 
-# ── DPI encoding (50 DPI steps, 3 bytes per stage) ──────────────────────────
+# ── DPI encoding (3 bytes per stage) ────────────────────────────────────────
+# A stage is [lo, lo, high] + checksum, where dpi = (lo + 1) * step and the
+# high byte carries the 2-bit overflow in both nibbles: (n << 2) | (n << 6).
+# `step` is per-model (50 on the X2A Wireless, 10 on the X2 CrazyLight), so
+# the reachable maximum is 1024 * step.
 
-def _dpi_to_raw(dpi: int) -> bytes:
-    if not (50 <= dpi <= 26000) or dpi % 50:
-        raise ValueError(f"DPI must be 50–26000 in steps of 50, got {dpi}")
-    quo = (dpi // 50) - 1
-    factor12800, factor50 = divmod(quo, 256)
-    index3 = (factor12800 << 2) | (factor12800 << 6)
-    return bytes([factor50, factor50, index3])
+def _dpi_to_raw(dpi: int, step: int = 50) -> bytes:
+    hi = 256 * step
+    if not (step <= dpi <= 4 * hi) or dpi % step:
+        raise ValueError(f"DPI must be {step}–{4 * hi} in steps of {step}, "
+                         f"got {dpi}")
+    quo = (dpi // step) - 1
+    overflow, low = divmod(quo, 256)
+    index3 = (overflow << 2) | (overflow << 6)
+    return bytes([low, low, index3])
 
 
-def _raw_to_dpi(raw: bytes) -> int:
-    factor50 = raw[0] + 1
-    nib = (raw[2] >> 2) & 0x03
-    return (factor50 * 50) + (nib * 12800)
+def _raw_to_dpi(raw: bytes, step: int = 50) -> int:
+    low = raw[0] + 1
+    overflow = (raw[2] >> 2) & 0x03
+    return (low * step) + (overflow * 256 * step)
 
 
 # ── Driver ───────────────────────────────────────────────────────────────────
@@ -240,6 +261,11 @@ class PulsarNordic(PulsarDevice):
     )
 
     _ENDPOINT_IN = 0x82
+
+    # Per-model overrides.  Subclasses that share the protocol but differ in
+    # layout (extra buttons, a third LOD step) replace these.
+    _BUTTON_ADDRS: dict = BUTTON_ADDRS
+    _LOD_CODES: dict = {1: 0x01, 2: 0x02}   # LOD in mm -> stored code
 
     def __init__(self):
         self._dev = None
@@ -378,6 +404,16 @@ class PulsarNordic(PulsarDevice):
     def _write_bool(self, addr: int, enabled: bool):
         self._write_value(addr, 1 if enabled else 0)
 
+    # ── Device information ───────────────────────────────────────────────
+
+    def get_firmware_version(self) -> str:
+        """Query the mouse firmware version (command 0x12)."""
+        try:
+            resp = self._command(CMD_FW_VERSION)
+        except Exception:
+            return 'unknown'
+        return f'{resp[6]}.{resp[7]:02d}'
+
     # ── Global settings ──────────────────────────────────────────────────
 
     def get_polling_rate(self) -> int:
@@ -420,13 +456,16 @@ class PulsarNordic(PulsarDevice):
     # ── Per-profile: DPI stages ──────────────────────────────────────────
 
     def get_dpi_stages(self, profile: int) -> dict:
+        step = self.capabilities.dpi_step
         count = self._mem.get(ADDR_DPI_STAGE_COUNT, 4)
-        active = self._mem.get(ADDR_ACTIVE_DPI_STAGE, 0)
+        # The device stores the active stage 0-based; the rest of the
+        # codebase (CLI, GUI, base.export_profile) counts stages from 1.
+        active = self._mem.get(ADDR_ACTIVE_DPI_STAGE, 0) + 1
         stages = []
         for i in range(count):
             base = ADDR_DPI_BASE + i * DPI_STAGE_SIZE
             raw = bytes([self._mem.get(base + j, 0) for j in range(3)])
-            dpi = _raw_to_dpi(raw)
+            dpi = _raw_to_dpi(raw, step)
             stages.append((dpi, dpi))
         return {'active': active, 'count': count, 'stages': stages}
 
@@ -434,20 +473,20 @@ class PulsarNordic(PulsarDevice):
         caps = self.capabilities
         if not 1 <= len(stages) <= caps.max_dpi_stages:
             raise ValueError(f"Must have 1–{caps.max_dpi_stages} DPI stages")
-        if not 0 <= active < len(stages):
-            raise ValueError(f"Active stage must be 0–{len(stages) - 1}")
+        if not 1 <= active <= len(stages):
+            raise ValueError(f"Active stage must be 1–{len(stages)}")
 
         # Write stage count
         self._write_value(ADDR_DPI_STAGE_COUNT, len(stages))
 
-        # Write active stage
-        self._write_value(ADDR_ACTIVE_DPI_STAGE, active)
+        # Write active stage (stored 0-based)
+        self._write_value(ADDR_ACTIVE_DPI_STAGE, active - 1)
 
         # Write each DPI stage
         for i, dpi in enumerate(stages):
             if not caps.dpi_min <= dpi <= caps.dpi_max:
                 raise ValueError(f"DPI {dpi} out of range {caps.dpi_min}–{caps.dpi_max}")
-            raw = _dpi_to_raw(dpi)
+            raw = _dpi_to_raw(dpi, caps.dpi_step)
             base = ADDR_DPI_BASE + i * DPI_STAGE_SIZE
             self._mem_write({
                 base: raw[0],
@@ -457,20 +496,28 @@ class PulsarNordic(PulsarDevice):
             })
 
     def get_active_dpi_stage(self, profile: int) -> int:
-        return self._mem.get(ADDR_ACTIVE_DPI_STAGE, 0)
+        return self._mem.get(ADDR_ACTIVE_DPI_STAGE, 0) + 1
 
     def set_active_dpi_stage(self, stage: int, profile: int) -> None:
-        self._write_value(ADDR_ACTIVE_DPI_STAGE, stage)
+        max_stages = self.capabilities.max_dpi_stages
+        if not 1 <= stage <= max_stages:
+            raise ValueError(f"DPI stage must be 1–{max_stages}")
+        self._write_value(ADDR_ACTIVE_DPI_STAGE, stage - 1)
 
     # ── Per-profile: LOD ─────────────────────────────────────────────────
 
-    def get_lod(self, profile: int) -> int:
-        return self._mem.get(ADDR_LOD_MM, 1)
+    def get_lod(self, profile: int) -> float:
+        code = self._mem.get(ADDR_LOD_MM, 0x01)
+        for mm, val in self._LOD_CODES.items():
+            if val == code:
+                return mm
+        return 1
 
-    def set_lod(self, mm: int, profile: int) -> None:
-        if mm not in self.capabilities.lod_values:
-            raise ValueError(f"LOD must be one of {self.capabilities.lod_values}")
-        self._write_value(ADDR_LOD_MM, mm)
+    def set_lod(self, mm: float, profile: int) -> None:
+        code = self._LOD_CODES.get(mm)
+        if code is None:
+            raise ValueError(f"LOD must be one of {sorted(self._LOD_CODES)}")
+        self._write_value(ADDR_LOD_MM, code)
 
     # ── Per-profile: LED ─────────────────────────────────────────────────
 
@@ -515,7 +562,7 @@ class PulsarNordic(PulsarDevice):
     # ── Per-profile: stage colors ────────────────────────────────────────
 
     def get_stage_color(self, stage: int, profile: int) -> tuple[int, int, int]:
-        base = ADDR_LED_COLOR_BASE + stage * LED_COLOR_SIZE
+        base = ADDR_LED_COLOR_BASE + (stage - 1) * LED_COLOR_SIZE
         r = self._mem.get(base, 0)
         g = self._mem.get(base + 1, 0)
         b = self._mem.get(base + 2, 0)
@@ -526,7 +573,7 @@ class PulsarNordic(PulsarDevice):
         for val, name in [(r, 'R'), (g, 'G'), (b, 'B')]:
             if not 0 <= val <= 255:
                 raise ValueError(f"{name} must be 0–255")
-        base = ADDR_LED_COLOR_BASE + stage * LED_COLOR_SIZE
+        base = ADDR_LED_COLOR_BASE + (stage - 1) * LED_COLOR_SIZE
         self._mem_write({
             base: r,
             base + 1: g,
@@ -541,7 +588,7 @@ class PulsarNordic(PulsarDevice):
         name = btn_names.get(btn_id)
         if name is None:
             raise ValueError(f"Unknown button ID 0x{btn_id:02x}")
-        addr = BUTTON_ADDRS[name]
+        addr = self._BUTTON_ADDRS[name]
         raw_type = self._mem.get(addr, 0)
         raw_a1 = self._mem.get(addr + 1, 0)
         raw_a2 = self._mem.get(addr + 2, 0)
@@ -557,7 +604,7 @@ class PulsarNordic(PulsarDevice):
             return (BTN_TYPE_PROFILE, a1, a2)
         if raw_type == BUTTON_MODE_CUSTOM:
             ptr = (a1 << 8) | a2
-            expected = _shortcut_addr(name)
+            expected = _shortcut_addr(name, self._BUTTON_ADDRS)
             # Prefer the pointer in the slot; fall back to canonical address.
             sc_addr = ptr if ptr >= SHORTCUT_BASE else expected
             try:
@@ -587,14 +634,14 @@ class PulsarNordic(PulsarDevice):
         name = btn_names.get(btn_id)
         if name is None:
             raise ValueError(f"Unknown button ID 0x{btn_id:02x}")
-        addr = BUTTON_ADDRS[name]
+        addr = self._BUTTON_ADDRS[name]
 
         if btn_type == BTN_TYPE_MOUSE:
             raw_type = BUTTON_MODE_MOUSE
             a1 = _SONIX_MOUSE_TO_NORDIC.get(a1, a1)
             a2 = 0x00
         elif btn_type == BTN_TYPE_KEYBOARD:
-            sc_addr = _shortcut_addr(name)
+            sc_addr = _shortcut_addr(name, self._BUTTON_ADDRS)
             blob = _build_shortcut_blob(a1, a2)
             # Clear the whole shortcut slot then write the blob.
             self._mem_write_bytes(sc_addr, blob + bytes(SHORTCUT_SIZE - len(blob)))
@@ -638,3 +685,19 @@ class PulsarNordic(PulsarDevice):
     def get_autosleep(self) -> int:
         """Return auto-sleep timeout in seconds."""
         return self._mem.get(ADDR_AUTOSLEEP, 0) * 10
+
+    def set_autosleep(self, seconds: int) -> None:
+        """Set the auto-sleep timeout.  Stored in units of 10 s."""
+        if seconds % 10 or not 0 <= seconds <= 2550:
+            raise ValueError("Auto-sleep must be 0–2550 s in steps of 10")
+        units = seconds // 10
+        self._write_value(ADDR_AUTOSLEEP_ALT, units)
+        self._write_value(ADDR_AUTOSLEEP, units)
+
+    # ── Nordic-specific: turbo mode ──────────────────────────────────────
+
+    def get_turbo_mode(self) -> bool:
+        return bool(self._mem.get(ADDR_TURBO_MODE, 0))
+
+    def set_turbo_mode(self, enabled: bool) -> None:
+        self._write_bool(ADDR_TURBO_MODE, enabled)
