@@ -48,6 +48,7 @@ Wireless (Nordic) protocol based on [python-pulsar-mouse-tool](https://github.co
 | Pulsar Feinmann 8K / FO1 | `feinmann8k` | `3710:5404` | Fully supported (wireless dongle, 8K Hz polling, 6 onboard profiles) |
 | Pulsar X2A Wireless / X2 V2 Mini | `nordic` | `3554:f507` `3554:f508` | Supported (Nordic chipset, battery status) |
 | Pulsar X2 CrazyLight Wireless | `x2_crazylight` | `3710:5406` | Untested (Nordic protocol under the Sonix VID, 8K Hz polling, 10 DPI step) |
+| Pulsar X2 CrazyLight Wired | `x2_crazylight_wired` | `3710:3414` | Untested (same protocol as the dongle, 1K Hz max) |
 
 Want to add support for your mouse? See [Adding a new driver](#adding-a-new-driver) below.
 
@@ -335,7 +336,7 @@ Checksum: bytes[62:64] = LE uint16(sum(bytes[0:62])).
 - [@variasjon](https://github.com/variasjon) — Xlite v4 wireless dongle driver
 - [@mwsmws22](https://github.com/mwsmws22) — Nordic keyboard shortcut fix (shortcut-table writes, Xlite V3 button mapping)
 - [@Scout339](https://github.com/Scout339) — Logo design, wireless mouse testing
-- [@iamtherobin](https://github.com/iamtherobin) — Pulsar Fusion USB capture and screen recording that the X2 CrazyLight driver was decoded from
+- [@iamtherobin](https://github.com/iamtherobin) — Pulsar Fusion USB captures and screen recordings that the X2 CrazyLight drivers (dongle and wired) were decoded from
 - [andrewrabert](https://github.com/andrewrabert) — [python-pulsar-mouse-tool](https://github.com/andrewrabert/python-pulsar-mouse-tool), reference implementation for the Nordic wireless protocol
 
 ## Related Projects

@@ -24,7 +24,7 @@ Firmware in the capture: `X2 CL Wireless · Mouse v3.05 · Dongle v2.25 · DRV V
 
 | | |
 |---|---|
-| VID:PID | `3710:5406` (2.4 GHz dongle) |
+| VID:PID | `3710:5406` (2.4 GHz dongle), `3710:3414` (wired) |
 | Interface | **1** (report descriptor 266 bytes, IN endpoint `0x82`) |
 | Report ID | `0x08` |
 | Report size | **17 bytes** (report ID + 16) |
@@ -70,7 +70,7 @@ settings are stored as a `(value, 0x55 - value)` pair, and multi-byte records en
 | `0x04` | poll | battery — response byte 6 = percent (`0x5a` = 90 %), byte 7 = charging flag |
 | `0x07` | write | write `len` bytes at address; `08 07 00 <ah> <al> 02 <val> <0x55-val> …` |
 | `0x08` | read | read `len` bytes (max 10) at address; response echoes addr/len then returns data |
-| `0x0a` | resp | profile count — sent unprompted after a profile switch, payload `04` |
+| `0x0a` | resp | **unsolicited** — always follows a profile switch with payload `04` (the profile count), but also arrives on its own mid-session with payload `0x40`. Never a reply to anything the host sent, so a command must match the reply's command byte rather than taking whatever lands next |
 | `0x0e` | poll | active profile, 0-based |
 | `0x0f` | write | set active profile, 0-based, `len = 1` |
 | `0x12` | poll | firmware version — response `03 05` = mouse v3.05 |
@@ -156,42 +156,58 @@ changing to match what the Fusion UI showed for each.
 
 ### DPI stage encoding
 
-The second capture sweeps DPI 3 through eight values, each read off the video:
+Fourteen (bytes → DPI) pairs across three captures, every one read off the matching
+video:
 
 ```
-27 27 00 07  →    400        ef ef 00 77  →   2400
-4f 4f 00 b7  →    800        3f 3f 44 93  →   3200
-9f 9f 00 17  →   1600        7f 7f 88 cf  →   6400
-                             77 77 33 34  →  32000
-                             17 17 66 c1  →  24000
+27 27 00 →   400     3f 3f 44 →  3200     37 37 22 → 12800     17 17 66 → 24000
+4f 4f 00 →   800     7f 7f 88 →  6400     77 77 22 → 16000     37 37 66 → 25600
+9f 9f 00 →  1600     1f 1f cc →  8000     c7 c7 22 → 20000     77 77 33 → 32000
+ef ef 00 →  2400     e7 e7 cc → 10000
 ```
 
-A stage record is `[x_lo, y_lo, high, checksum]`. The `high` byte holds the same nibble
-twice (one per axis), and that nibble is the value's high bits **rotated left by 2
-within 4 bits** — a self-inverse operation:
+A stage record is `[x_lo, y_lo, high, checksum]`. The `high` byte carries the same
+nibble twice, one per axis. Rotate that nibble left by 2 — a self-inverse operation —
+and it splits into **`[mode:2][page:2]`**:
 
 ```python
 rot2 = lambda n: ((n << 2) | (n >> 2)) & 0x0F
-dpi  = ((rot2(raw[2] & 0x0F) << 8) + raw[0] + 1) * step     # step = 10 here
+high = rot2(raw[2] & 0x0F)
+mode, page = high >> 2, high & 3
+dpi  = (raw[0] + BASE[mode] + 256 * page) * STEP[mode]
 ```
 
-The rotate is confirmed four independent ways: high 1 → nibble 4, 2 → 8, 12 → 3, 9 → 6.
-For high ≤ 3 this is identical to what `nordic.py` already computed, so the X2A Wireless
-is unaffected.
+`page` extends the 8-bit low byte to 10 bits. `mode` selects the DPI granularity, which
+is how the range reaches 32000 without widening the field:
 
-**Still unresolved above 6400 DPI.** The low byte stops being `n & 0xFF`: for 32000
-Fusion writes `77 77 33` where the rule predicts `7f 7f 33`, and for 24000 it writes
-`17 17 66` against a predicted `5f 5f 66`. The high nibbles are right in both cases —
-only the low byte drifts, and not by a constant. So the driver caps *writes* at
-**10240 DPI** (high ≤ 3, the verified range) while still decoding higher values to
-within a few percent (31920 for 32000, 23280 for 24000) rather than returning nonsense.
+| mode | step | base | used for | encoded range |
+|---|---|---|---|---|
+| 0 | 10 | 1 | ≤ 10240 | 10 – 10240 |
+| 2 | 50 | 201 | ≤ 25600 | 10050 – 35600 |
+| 3 | 100 | 201 | above | 20100 – 122400 |
 
-Resolving it needs one more capture: DPI 1 stepped through the 6400–32000 range, say
-8000, 10000, 12800, 16000, 20000, 25600, 32000.
+All fourteen samples decode exactly, and re-encode to the same bytes Fusion wrote.
+Mode 1 has never been observed. The mode boundaries are Fusion's choice, not
+representational limits — mode 2 could express 32000 but Fusion switches to mode 3
+above 25600, so the driver follows the same thresholds.
+
+For `mode = 0, page ≤ 3` this is identical to the single-mode formula `nordic.py`
+already used, so the X2A Wireless is unaffected — devices that only ever use the finest
+granularity declare just that one mode.
 
 ## Wired mode
 
-Still unmapped. The wired capture in the second batch was taken on a USBPcap root hub
-the mouse was not attached to — it contains a webcam, an audio device and a card
-reader, and no `3710` traffic at all (no 17-byte reports with report ID `0x08`
-anywhere in its 116 k packets).
+**Identical protocol.** The third capture caught both devices on one hub — `3710:3414`
+(wired, `bcdDevice 0x0305`, matching the "Mouse v3.05" Fusion reports) and `3710:5406`
+(the dongle) — and Fusion drives the wired PID with exactly the same commands on the
+same interface: `wValue 0x0208`, `wIndex 1`, 17-byte reports, IN endpoint `0x82`. Same
+register map, same four profiles, and the DPI sweep produced byte-for-byte the same
+stage records as over the dongle, which independently confirms the encoding above on a
+second PID.
+
+One difference: **wired polling tops out at 1 kHz.** Fusion offers only 125/250/500/1K
+there, against 125 Hz–8 K over the dongle. Battery reads still answer, but the mouse is
+charging on the cable and Fusion shows a charging icon instead of a percentage.
+
+`drivers/x2_crazylight_wired.py` is therefore the dongle driver with the PID and the
+polling list narrowed.

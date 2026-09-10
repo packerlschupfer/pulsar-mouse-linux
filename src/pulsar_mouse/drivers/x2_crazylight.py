@@ -30,19 +30,12 @@ Status: UNTESTED on hardware.  Every register below was confirmed by matching
         each write in the capture against the Fusion UI frame at the same
         timestamp, but nothing has been written back to a real device yet.
 
-Known gaps (need a follow-up capture — see issue #7):
+The DPI encoding is fully resolved: fourteen (bytes -> DPI) pairs across two
+captures all decode exactly.  See docs/protocol-x2-crazylight.md.
 
-  * DPI above 6400.  Fusion's own dialog gives the range as 10–32000 and
-    the high-nibble encoding is understood (a 4-bit rotate left by 2), but
-    above 6400 the low byte stops being (n & 0xFF): Fusion writes
-    77 77 33 for 32000 where the rule predicts 7f 7f 33, and 17 17 66 for
-    24000 against a predicted 5f 5f 66.  Writes are capped at 10240 DPI —
-    the top of the verified range — and above that reads land within a few
-    percent instead of returning nonsense.
-  * Factory reset (command 0x09) was never issued by Fusion in either
-    capture, so has_reset is False rather than guessing.
-  * The wired half of the device (PID 0x3414) is still unmapped: the wired
-    capture was taken on a root hub the mouse was not attached to.
+Remaining unknown: factory reset.  Fusion never issued command 0x09 in any
+of the three captures, so has_reset is False rather than guessing at a
+destructive command.
 """
 
 from pulsar_mouse.base import DeviceCapabilities
@@ -64,7 +57,7 @@ class PulsarX2CrazyLight(PulsarNordic):
         max_dpi_stages=4,
         # Command 0x0A answers a profile switch with the count: 0x04.
         dpi_min=10,
-        dpi_max=10240,
+        dpi_max=32000,
         dpi_step=10,
         buttons={
             'left':   0x01,
@@ -109,6 +102,16 @@ class PulsarX2CrazyLight(PulsarNordic):
         'thumb1': 0x70,
         'dpi':    0x74,
     }
+
+    # DPI granularity changes with the range, and the stage record's mode
+    # field says which is in use: 10 DPI steps to 10240, then 50 to 25600,
+    # then 100.  Values that don't land on the step for their range are
+    # snapped to it — the device has nothing finer to offer up there.
+    _DPI_MODES = (
+        (0, 1, 1, 10240),      # steps of  10 DPI
+        (2, 5, 201, 25600),    # steps of  50 DPI
+        (3, 10, 201, None),    # steps of 100 DPI, to Fusion's 32000 ceiling
+    )
 
     # 0.7 mm is stored as 0x03 — it was added after 1 mm and 2 mm, so the
     # codes are not in physical order.

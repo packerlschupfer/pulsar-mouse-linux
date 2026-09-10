@@ -199,30 +199,55 @@ def _parse_shortcut_blob(blob: bytes) -> tuple[int, int]:
 
 
 # ── DPI encoding (3 bytes per stage) ────────────────────────────────────────
-# A stage is [lo, lo, high] + checksum, where dpi = (lo + 1) * step and the
-# high byte carries the 2-bit overflow in both nibbles: (n << 2) | (n << 6).
-# `step` is per-model (50 on the X2A Wireless, 10 on the X2 CrazyLight), so
-# the reachable maximum is 1024 * step.
+# A stage is [x_lo, y_lo, high] + checksum.  `high` carries the same nibble
+# twice, one per axis.  Rotating that nibble left by 2 yields a byte split
+# into [mode:2][page:2]:
+#
+#     dpi = (lo + base[mode] + 256 * page) * step[mode]
+#
+# `page` extends the 8-bit `lo` to 10 bits.  `mode` selects the DPI
+# granularity, which is how the range reaches past 1024 * finest_step
+# without widening the field — the X2 CrazyLight steps by 10 DPI up to
+# 10240, then by 50 to 25600, then by 100.  Devices we have only ever seen
+# use the finest mode declare just that one, which reproduces the original
+# single-mode formula exactly.
+#
+# Each _DPI_MODES entry is (mode, step multiple of dpi_step, base, highest
+# DPI encoded in this mode).  A None limit means "everything above".
+DPI_MODES_SINGLE = ((0, 1, 1, None),)
+
 
 def _rot2(nibble: int) -> int:
     """Rotate a 4-bit value left by 2.  Self-inverse."""
     return ((nibble << 2) | (nibble >> 2)) & 0x0F
 
 
-def _dpi_to_raw(dpi: int, step: int = 50) -> bytes:
-    hi = 256 * step
-    if not (step <= dpi <= 4 * hi) or dpi % step:
-        raise ValueError(f"DPI must be {step}–{4 * hi} in steps of {step}, "
-                         f"got {dpi}")
-    quo = (dpi // step) - 1
-    overflow, low = divmod(quo, 256)
-    nib = _rot2(overflow)
+def _dpi_to_raw(dpi: int, step: int = 50, modes=DPI_MODES_SINGLE) -> bytes:
+    for mode, mult, base, limit in modes:
+        if limit is None or dpi <= limit:
+            break
+    unit = step * mult
+    # Snap to what this mode can express: above the finest mode the device
+    # simply has no finer granularity to offer.
+    index = round(dpi / unit) - base
+    if not 0 <= index <= 1023:
+        raise ValueError(f"DPI {dpi} is out of range for this device")
+    page, low = divmod(index, 256)
+    nib = _rot2((mode << 2) | page)
     return bytes([low, low, (nib << 4) | nib])
 
 
-def _raw_to_dpi(raw: bytes, step: int = 50) -> int:
-    overflow = _rot2(raw[2] & 0x0F)
-    return ((overflow << 8) + raw[0] + 1) * step
+def _raw_to_dpi(raw: bytes, step: int = 50, modes=DPI_MODES_SINGLE) -> int:
+    high = _rot2(raw[2] & 0x0F)
+    mode, page = high >> 2, high & 0x03
+    for m, mult, base, _limit in modes:
+        if m == mode:
+            break
+    else:
+        # Unknown mode: fall back to the finest one rather than inventing a
+        # number.  Flagged here because it means the map is incomplete.
+        _m, mult, base, _l = modes[0]
+    return (raw[0] + base + 256 * page) * step * mult
 
 
 # ── Driver ───────────────────────────────────────────────────────────────────
@@ -270,6 +295,7 @@ class PulsarNordic(PulsarDevice):
     # layout (extra buttons, a third LOD step) replace these.
     _BUTTON_ADDRS: dict = BUTTON_ADDRS
     _LOD_CODES: dict = {1: 0x01, 2: 0x02}   # LOD in mm -> stored code
+    _DPI_MODES: tuple = DPI_MODES_SINGLE    # see the DPI encoding notes
 
     def __init__(self):
         self._dev = None
@@ -339,10 +365,20 @@ class PulsarNordic(PulsarDevice):
         return bytes(self._dev.read(self._ENDPOINT_IN,
                                     self.capabilities.report_size, timeout=2000))
 
+    # Unsolicited reports do arrive: 0x0A follows every profile switch, and
+    # also turns up on its own mid-session.  Taking whatever lands next would
+    # hand one command another's reply and desync everything after it.
+    _MAX_STALE_REPLIES = 4
+
     def _command(self, cmd, **kwargs):
         pkt = self._build_packet(cmd, **kwargs)
         self._send(pkt)
-        return self._recv()
+        resp = self._recv()
+        for _ in range(self._MAX_STALE_REPLIES):
+            if len(resp) > 1 and resp[1] == cmd:
+                break
+            resp = self._recv()
+        return resp
 
     def _drain(self):
         """Discard unsolicited replies.
@@ -518,7 +554,7 @@ class PulsarNordic(PulsarDevice):
         for i in range(count):
             base = ADDR_DPI_BASE + i * DPI_STAGE_SIZE
             raw = bytes([self._mem.get(base + j, 0) for j in range(3)])
-            dpi = _raw_to_dpi(raw, step)
+            dpi = _raw_to_dpi(raw, step, self._DPI_MODES)
             stages.append((dpi, dpi))
         return {'active': active, 'count': count, 'stages': stages}
 
@@ -540,7 +576,7 @@ class PulsarNordic(PulsarDevice):
         for i, dpi in enumerate(stages):
             if not caps.dpi_min <= dpi <= caps.dpi_max:
                 raise ValueError(f"DPI {dpi} out of range {caps.dpi_min}–{caps.dpi_max}")
-            raw = _dpi_to_raw(dpi, caps.dpi_step)
+            raw = _dpi_to_raw(dpi, caps.dpi_step, self._DPI_MODES)
             base = ADDR_DPI_BASE + i * DPI_STAGE_SIZE
             self._mem_write({
                 base: raw[0],
