@@ -125,7 +125,7 @@ Fusion UI in the screen recording contributed alongside it.
 | `0x0006` | unknown | `0x00` |
 | `0x0008` | unknown | `0x00` |
 | `0x000a` | Lift-off distance | `0x01`=1 mm, `0x02`=2 mm, `0x03`=0.7 mm |
-| `0x000c`–`0x002b` | 8 × DPI stage | 4 bytes each: `[x_lo, y_lo, hi, cksum]` |
+| `0x000c`–`0x002b` | 8 × DPI stage | 4 bytes each: `[x_lo, y_lo, mode/page, cksum]`. Six are usable — slots 7 and 8 repeat slot 6's defaults |
 | `0x002c`–`0x004b` | 8 × DPI stage colour | 4 bytes each: `[R, G, B, cksum]` |
 | `0x004c` | LED effect | `0x01`=steady, `0x02`=breathing |
 | `0x004e` | LED brightness | 10 UI steps: `10 1e 3c 5a 80 96 b4 d2 e6 ff` |
@@ -146,7 +146,16 @@ Fusion UI in the screen recording contributed alongside it.
 ### Profiles
 
 The mouse holds **four onboard profiles**, and the memory map above is whichever one is
-active — switching reloads all of it. Fusion switches with command `0x0F` (0-based
+active — switching reloads all of it. Everything in the register table is therefore
+per-profile, including the settings most drivers treat as device-wide: polling rate,
+debounce, angle snapping, ripple control and motion sync all sit at `0x0000`–`0x00B1`,
+inside that window. A live readout found profile 1 at 1 kHz and profile 4 at 8 kHz on
+the same mouse.
+
+Two consequences for a driver: the profile-less getters in `PulsarDevice` describe
+whichever profile is loaded (hence the `per_profile_globals` capability flag), and
+simply *reading* the device walks through every profile, so it must put the mouse back
+on the one the user had selected before closing. Fusion switches with command `0x0F` (0-based
 profile number, `len = 1`), gets an `0x0A` reply carrying the profile count (`04`), then
 re-reads the entire map. Command `0x0E` reports the active profile.
 
@@ -194,6 +203,23 @@ above 25600, so the driver follows the same thresholds.
 For `mode = 0, page ≤ 3` this is identical to the single-mode formula `nordic.py`
 already used, so the X2A Wireless is unaffected — devices that only ever use the finest
 granularity declare just that one mode.
+
+## Confirmed on hardware
+
+@iamtherobin ran the driver against a real X2 CrazyLight on 2026-09-10: it reads
+firmware, battery, all four profiles, DPI stages and colours, LOD, LED, buttons and the
+per-profile tunables, and picks up changes made from Pulsar's own web configurator.
+Two things that readout corrected:
+
+- **Six DPI stages, not four.** Profiles configured with six read back correctly, and
+  slots 5 and 6 carry real factory defaults (6400 orange, 12800 magenta `#F20AEA`) —
+  which re-confirms the mode encoding, since slot 6's `37 37 22` is exactly the 12800
+  that mode 2 predicts.
+- **Nothing has been written to a device yet.** Reads are proven; writes are not.
+
+Claiming interface 1 takes the device away from anything else using it — Pulsar's
+WebHID configurator at `bbb.pulsar.gg` drops its connection while the CLI runs. That is
+expected, and it reconnects afterwards.
 
 ## Wired mode
 
