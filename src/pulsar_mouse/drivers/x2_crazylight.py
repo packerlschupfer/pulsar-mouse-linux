@@ -51,10 +51,12 @@ class PulsarX2CrazyLight(PulsarNordic):
         interface_num=1,
         report_size=17,
         num_profiles=4,
-        # Fusion showed a stage count of 4.  The memory map reserves eight
-        # stage records (0x0C–0x2B) and eight colours (0x2C–0x4B), but only
-        # four were ever in use, so stay with what the capture proves.
-        max_dpi_stages=4,
+        # A live readout found profiles configured with six stages, with
+        # distinct factory defaults through slot 6 (6400 orange, 12800
+        # magenta).  The map reserves eight records (0x0C–0x2B) and eight
+        # colours (0x2C–0x4B), but slots 7 and 8 just repeat slot 6, so six
+        # is the real maximum.
+        max_dpi_stages=6,
         # Command 0x0A answers a profile switch with the count: 0x04.
         dpi_min=10,
         dpi_max=32000,
@@ -80,6 +82,10 @@ class PulsarX2CrazyLight(PulsarNordic):
         debounce_range=(0, 20),
         has_stage_colors=True,
         has_reset=False,
+        # Polling rate, debounce, angle snap, ripple control and motion
+        # sync all live at 0x00-0xB1, inside the per-profile window: the
+        # captures show profile 1 at 1 kHz, 3 at 4 kHz and 4 at 8 kHz.
+        per_profile_globals=True,
         button_labels={
             'left': 'Left Click',
             'right': 'Right Click',

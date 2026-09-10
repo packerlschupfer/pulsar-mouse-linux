@@ -301,6 +301,7 @@ class PulsarNordic(PulsarDevice):
         self._dev = None
         self._mem = {}
         self._profile = None   # active profile, 1-based; None until read
+        self._entry_profile = None   # what it was when we opened it
 
     # ── Connection lifecycle ─────────────────────────────────────────────
 
@@ -324,13 +325,24 @@ class PulsarNordic(PulsarDevice):
         self._mem_read_all()
         if caps.num_profiles > 1:
             try:
-                self.get_active_profile()
+                self._entry_profile = self.get_active_profile()
             except Exception:
                 self._profile = None
 
     def close(self) -> None:
         if self._dev is None:
             return
+        # Simply *reading* a multi-profile device walks through every profile,
+        # because the memory map is whichever one is loaded.  Put the mouse
+        # back on the profile the user actually had selected rather than
+        # leaving it on the last one we happened to read.
+        if self._entry_profile and self._profile != self._entry_profile:
+            try:
+                self._command(CMD_ACTIVE_PROFILE_SET, b5=0x01,
+                              b6=self._entry_profile - 1)
+                self._drain()
+            except Exception:
+                pass
         iface = self.capabilities.interface_num
         usb.util.release_interface(self._dev, iface)
         try:
@@ -340,6 +352,7 @@ class PulsarNordic(PulsarDevice):
         self._dev = None
         self._mem = {}
         self._profile = None
+        self._entry_profile = None
 
     # ── Low-level protocol ───────────────────────────────────────────────
 

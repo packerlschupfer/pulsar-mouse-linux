@@ -47,6 +47,29 @@ def print_global(device: PulsarDevice):
             print(f"  Battery:          {pwr['battery_percent']}%{mv}{charging}")
         except Exception as e:
             print(f"  Battery:          error ({e})")
+    if not caps.per_profile_globals:
+        print_tunables(device)
+
+    if hasattr(device, 'get_power_saving_timeout'):
+        try:
+            print(f"  Power saving:     {device.get_power_saving_timeout()} s")
+        except Exception as e:
+            print(f"  Power saving:     error ({e})")
+    if hasattr(device, 'get_low_power_threshold'):
+        try:
+            print(f"  Low power mode:   {device.get_low_power_threshold()}%")
+        except Exception as e:
+            print(f"  Low power mode:   error ({e})")
+
+
+def print_tunables(device: PulsarDevice):
+    """Print the settings whose getters take no profile argument.
+
+    On a device with per_profile_globals these live inside the per-profile
+    memory window, so they describe whichever profile is currently loaded
+    rather than the device as a whole.
+    """
+    caps = device.capabilities
     try:
         print(f"  Polling rate:     {device.get_polling_rate()} Hz")
     except Exception as e:
@@ -71,16 +94,6 @@ def print_global(device: PulsarDevice):
             print(f"  Motion sync:      {_on_off(device.get_motion_sync())}")
         except Exception as e:
             print(f"  Motion sync:      error ({e})")
-    if hasattr(device, 'get_power_saving_timeout'):
-        try:
-            print(f"  Power saving:     {device.get_power_saving_timeout()} s")
-        except Exception as e:
-            print(f"  Power saving:     error ({e})")
-    if hasattr(device, 'get_low_power_threshold'):
-        try:
-            print(f"  Low power mode:   {device.get_low_power_threshold()}%")
-        except Exception as e:
-            print(f"  Low power mode:   error ({e})")
 
 
 def print_profile(device: PulsarDevice, profile: int):
@@ -118,6 +131,10 @@ def print_profile(device: PulsarDevice, profile: int):
                 print(f"  LED:              {effect}  brightness={bright}/{caps.brightness_range[1]}")
         except Exception as e:
             print(f"  LED:              error ({e})")
+    if caps.per_profile_globals:
+        # get_dpi_stages() above has already switched the device to this
+        # profile, so the profile-less getters now read the right one.
+        print_tunables(device)
     try:
         print(f"  Buttons:")
         for name, bid in caps.buttons.items():

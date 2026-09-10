@@ -50,6 +50,13 @@ class DeviceCapabilities:
     has_stage_colors: bool      = True
     has_reset: bool             = True
 
+    # True when polling rate / debounce / angle snap / ripple / motion sync
+    # are stored per profile rather than once for the device.  The getters
+    # and setters for those take no profile argument — they act on whichever
+    # profile is currently loaded — so the CLI shows them per profile
+    # instead of under a "Global" heading that would be a lie.
+    per_profile_globals: bool   = False
+
     # Labels for GUI display of buttons (optional override)
     button_labels: dict[str, str] = field(default_factory=dict)
 
