@@ -301,7 +301,7 @@ class PulsarNordic(PulsarDevice):
         self._dev = None
         self._mem = {}
         self._profile = None   # active profile, 1-based; None until read
-        self._entry_profile = None   # what it was when we opened it
+        self._home_profile = None    # the profile to leave the mouse on
 
     # ── Connection lifecycle ─────────────────────────────────────────────
 
@@ -325,21 +325,21 @@ class PulsarNordic(PulsarDevice):
         self._mem_read_all()
         if caps.num_profiles > 1:
             try:
-                self._entry_profile = self.get_active_profile()
+                self._home_profile = self.get_active_profile()
             except Exception:
                 self._profile = None
 
     def close(self) -> None:
         if self._dev is None:
             return
-        # Simply *reading* a multi-profile device walks through every profile,
-        # because the memory map is whichever one is loaded.  Put the mouse
-        # back on the profile the user actually had selected rather than
-        # leaving it on the last one we happened to read.
-        if self._entry_profile and self._profile != self._entry_profile:
+        # Reading or editing another profile has to switch the mouse to it,
+        # because the memory map is whichever one is loaded.  Undo those
+        # incidental switches — but never one the caller asked for with
+        # set_active_profile(), which moves _home_profile along with it.
+        if self._home_profile and self._profile != self._home_profile:
             try:
                 self._command(CMD_ACTIVE_PROFILE_SET, b5=0x01,
-                              b6=self._entry_profile - 1)
+                              b6=self._home_profile - 1)
                 self._drain()
             except Exception:
                 pass
@@ -352,7 +352,7 @@ class PulsarNordic(PulsarDevice):
         self._dev = None
         self._mem = {}
         self._profile = None
-        self._entry_profile = None
+        self._home_profile = None
 
     # ── Low-level protocol ───────────────────────────────────────────────
 
@@ -498,9 +498,17 @@ class PulsarNordic(PulsarDevice):
         return self._profile
 
     def set_active_profile(self, profile: int) -> None:
+        """Make `profile` the one the mouse uses — and keep it there."""
         count = self.capabilities.num_profiles
         if not 1 <= profile <= count:
             raise ValueError(f"Profile must be 1–{count}")
+        self._home_profile = profile
+        if profile != self._profile:
+            self._switch_to(profile)
+
+    def _switch_to(self, profile: int) -> None:
+        """Load `profile` into the memory window.  Doesn't change which
+        profile close() leaves the mouse on — see set_active_profile()."""
         self._command(CMD_ACTIVE_PROFILE_SET, b5=0x01, b6=profile - 1)
         self._drain()
         self._profile = profile
@@ -513,45 +521,67 @@ class PulsarNordic(PulsarDevice):
         if self._profile is None:
             self.get_active_profile()
         if profile != self._profile:
-            self.set_active_profile(profile)
+            self._switch_to(profile)
+
+    def _tunable_profile(self, profile) -> None:
+        """Load the profile a profile-less setting should act on.
+
+        PulsarDevice's polling/debounce/snap/ripple/motion accessors take no
+        profile, and the contract elsewhere in the codebase is that they
+        follow the *active* profile.  On devices where they're stored per
+        profile (per_profile_globals) they also accept an explicit
+        `profile`.  Either way, don't just use whatever happens to be
+        cached: a read of another profile may have left that loaded.
+        """
+        self._ensure_profile(profile or self._home_profile)
 
     # ── Global settings ──────────────────────────────────────────────────
 
-    def get_polling_rate(self) -> int:
+    def get_polling_rate(self, profile=None) -> int:
+        self._tunable_profile(profile)
         val = self._mem.get(ADDR_POLLING_RATE, 0x01)
         return POLL_VAL_TO_HZ.get(val, 1000)
 
-    def set_polling_rate(self, hz: int) -> None:
+    def set_polling_rate(self, hz: int, profile=None) -> None:
         val = POLL_HZ_TO_VAL.get(hz)
         if val is None:
             raise ValueError(f"Polling rate must be one of {sorted(POLL_HZ_TO_VAL)}")
+        self._tunable_profile(profile)
         self._write_value(ADDR_POLLING_RATE, val)
 
-    def get_debounce(self) -> int:
+    def get_debounce(self, profile=None) -> int:
+        self._tunable_profile(profile)
         return self._mem.get(ADDR_DEBOUNCE, 0)
 
-    def set_debounce(self, ms: int) -> None:
+    def set_debounce(self, ms: int, profile=None) -> None:
         lo, hi = self.capabilities.debounce_range
         if not lo <= ms <= hi:
             raise ValueError(f"Debounce must be {lo}–{hi} ms")
+        self._tunable_profile(profile)
         self._write_value(ADDR_DEBOUNCE, ms)
 
-    def get_angle_snap(self) -> bool:
+    def get_angle_snap(self, profile=None) -> bool:
+        self._tunable_profile(profile)
         return bool(self._mem.get(ADDR_ANGLE_SNAP, 0))
 
-    def set_angle_snap(self, enabled: bool) -> None:
+    def set_angle_snap(self, enabled: bool, profile=None) -> None:
+        self._tunable_profile(profile)
         self._write_bool(ADDR_ANGLE_SNAP, enabled)
 
-    def get_ripple_control(self) -> bool:
+    def get_ripple_control(self, profile=None) -> bool:
+        self._tunable_profile(profile)
         return bool(self._mem.get(ADDR_RIPPLE_CONTROL, 0))
 
-    def set_ripple_control(self, enabled: bool) -> None:
+    def set_ripple_control(self, enabled: bool, profile=None) -> None:
+        self._tunable_profile(profile)
         self._write_bool(ADDR_RIPPLE_CONTROL, enabled)
 
-    def get_motion_sync(self) -> bool:
+    def get_motion_sync(self, profile=None) -> bool:
+        self._tunable_profile(profile)
         return bool(self._mem.get(ADDR_MOTION_SYNC, 0))
 
-    def set_motion_sync(self, enabled: bool) -> None:
+    def set_motion_sync(self, enabled: bool, profile=None) -> None:
+        self._tunable_profile(profile)
         self._write_bool(ADDR_MOTION_SYNC, enabled)
 
     # ── Per-profile: DPI stages ──────────────────────────────────────────
@@ -799,22 +829,26 @@ class PulsarNordic(PulsarDevice):
             'battery_mv': struct.unpack('>H', bytes(resp[8:10]))[0],
         }
 
-    def get_autosleep(self) -> int:
+    def get_autosleep(self, profile=None) -> int:
         """Return auto-sleep timeout in seconds."""
+        self._tunable_profile(profile)
         return self._mem.get(ADDR_AUTOSLEEP, 0) * 10
 
-    def set_autosleep(self, seconds: int) -> None:
+    def set_autosleep(self, seconds: int, profile=None) -> None:
         """Set the auto-sleep timeout.  Stored in units of 10 s."""
         if seconds % 10 or not 0 <= seconds <= 2550:
             raise ValueError("Auto-sleep must be 0–2550 s in steps of 10")
+        self._tunable_profile(profile)
         units = seconds // 10
         self._write_value(ADDR_AUTOSLEEP_ALT, units)
         self._write_value(ADDR_AUTOSLEEP, units)
 
     # ── Nordic-specific: turbo mode ──────────────────────────────────────
 
-    def get_turbo_mode(self) -> bool:
+    def get_turbo_mode(self, profile=None) -> bool:
+        self._tunable_profile(profile)
         return bool(self._mem.get(ADDR_TURBO_MODE, 0))
 
-    def set_turbo_mode(self, enabled: bool) -> None:
+    def set_turbo_mode(self, enabled: bool, profile=None) -> None:
+        self._tunable_profile(profile)
         self._write_bool(ADDR_TURBO_MODE, enabled)

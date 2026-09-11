@@ -62,7 +62,7 @@ def print_global(device: PulsarDevice):
             print(f"  Low power mode:   error ({e})")
 
 
-def print_tunables(device: PulsarDevice):
+def print_tunables(device: PulsarDevice, profile=None):
     """Print the settings whose getters take no profile argument.
 
     On a device with per_profile_globals these live inside the per-profile
@@ -70,28 +70,30 @@ def print_tunables(device: PulsarDevice):
     rather than the device as a whole.
     """
     caps = device.capabilities
+    # Only drivers with per_profile_globals accept a profile here.
+    kw = {'profile': profile} if profile is not None else {}
     try:
-        print(f"  Polling rate:     {device.get_polling_rate()} Hz")
+        print(f"  Polling rate:     {device.get_polling_rate(**kw)} Hz")
     except Exception as e:
         print(f"  Polling rate:     error ({e})")
     if caps.has_debounce:
         try:
-            print(f"  Debounce:         {device.get_debounce()} ms")
+            print(f"  Debounce:         {device.get_debounce(**kw)} ms")
         except Exception as e:
             print(f"  Debounce:         error ({e})")
     if caps.has_angle_snap:
         try:
-            print(f"  Angle snap:       {_on_off(device.get_angle_snap())}")
+            print(f"  Angle snap:       {_on_off(device.get_angle_snap(**kw))}")
         except Exception as e:
             print(f"  Angle snap:       error ({e})")
     if caps.has_ripple_control:
         try:
-            print(f"  Ripple control:   {_on_off(device.get_ripple_control())}")
+            print(f"  Ripple control:   {_on_off(device.get_ripple_control(**kw))}")
         except Exception as e:
             print(f"  Ripple control:   error ({e})")
     if caps.has_motion_sync:
         try:
-            print(f"  Motion sync:      {_on_off(device.get_motion_sync())}")
+            print(f"  Motion sync:      {_on_off(device.get_motion_sync(**kw))}")
         except Exception as e:
             print(f"  Motion sync:      error ({e})")
 
@@ -132,9 +134,7 @@ def print_profile(device: PulsarDevice, profile: int):
         except Exception as e:
             print(f"  LED:              error ({e})")
     if caps.per_profile_globals:
-        # get_dpi_stages() above has already switched the device to this
-        # profile, so the profile-less getters now read the right one.
-        print_tunables(device)
+        print_tunables(device, profile)
     try:
         print(f"  Buttons:")
         for name, bid in caps.buttons.items():

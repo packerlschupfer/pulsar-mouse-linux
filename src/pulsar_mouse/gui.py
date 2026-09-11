@@ -2082,10 +2082,39 @@ X-GNOME-Autostart-enabled=true
         if not self._open_dev():
             return
         try:
+            self._sync_profile_from_device()
             self._read_and_populate_global()
             self._do_reload_profile_inner()
         finally:
             self._close_dev()
+
+    def _sync_profile_from_device(self):
+        """Put the profile selector on the profile the mouse is using.
+
+        It always started on profile 1, so the Home page showed profile 1's
+        DPI next to the active profile's polling rate, and - since selecting
+        a profile here switches the mouse to it - the window and the mouse
+        disagreed about which profile was live until the first click.
+        Runs on every full reload, so the refresh button also picks up a
+        change made with the mouse's own profile button.
+        """
+        if self._profile_combo is None:
+            return
+        try:
+            active = self._device.get_active_profile()
+        except Exception:
+            return   # NotImplementedError on drivers without it: keep as is
+        if not 1 <= active <= self._caps.num_profiles or active == self._profile:
+            return
+        self._profile = active
+        GLib.idle_add(self._set_profile_combo, active)
+
+    def _set_profile_combo(self, profile):
+        self._building = True
+        try:
+            self._profile_combo.set_selected(profile - 1)
+        finally:
+            self._building = False
 
     def _do_reload_profile(self):
         if not self._open_dev():
@@ -2185,22 +2214,27 @@ X-GNOME-Autostart-enabled=true
             return
         caps = self._caps
         device = self._device
+        p = s['profile']
+        # Where these five are stored per profile, say which one.  Relying
+        # on "whichever profile is loaded" wrote them into the wrong profile
+        # whenever the mouse's own profile button had moved it since the
+        # window last looked.
+        kw = {'profile': p} if caps.per_profile_globals else {}
         try:
-            device.set_polling_rate(s['poll_hz'])
+            device.set_polling_rate(s['poll_hz'], **kw)
             if 'debounce' in s:
-                device.set_debounce(s['debounce'])
+                device.set_debounce(s['debounce'], **kw)
             if 'angle' in s:
-                device.set_angle_snap(s['angle'])
+                device.set_angle_snap(s['angle'], **kw)
             if 'ripple' in s:
-                device.set_ripple_control(s['ripple'])
+                device.set_ripple_control(s['ripple'], **kw)
             if 'motion' in s:
-                device.set_motion_sync(s['motion'])
+                device.set_motion_sync(s['motion'], **kw)
             if 'power_saving' in s:
                 device.set_power_saving_timeout(s['power_saving'])
             if 'low_power' in s:
                 device.set_low_power_threshold(s['low_power'])
 
-            p = s['profile']
             if 'lod' in s:
                 device.set_lod(s['lod'], p)
             if 'brightness' in s:
