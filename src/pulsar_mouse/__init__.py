@@ -23,6 +23,11 @@ def scan_devices() -> list[PulsarDevice]:
             if dev is not None:
                 found.append(cls())
                 break
+    # A mouse plugged in by cable usually still has its dongle attached, and
+    # the dongle then has nothing to relay to — commands sent through it
+    # time out.  Put anything declared wireless after everything else so the
+    # cable wins.  Stable sort: drivers that don't declare keep their order.
+    found.sort(key=lambda d: d.capabilities.wireless is True)
     return found
 
 

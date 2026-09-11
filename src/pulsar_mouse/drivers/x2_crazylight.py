@@ -86,6 +86,7 @@ class PulsarX2CrazyLight(PulsarNordic):
         # sync all live at 0x00-0xB1, inside the per-profile window: the
         # captures show profile 1 at 1 kHz, 3 at 4 kHz and 4 at 8 kHz.
         per_profile_globals=True,
+        wireless=True,
         button_labels={
             'left': 'Left Click',
             'right': 'Right Click',

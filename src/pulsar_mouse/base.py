@@ -57,6 +57,14 @@ class DeviceCapabilities:
     # instead of under a "Global" heading that would be a lie.
     per_profile_globals: bool   = False
 
+    # How the device reaches the host.  None means "not declared", and the
+    # GUI falls back to its old guess: only wireless drivers implemented
+    # get_power().  That guess broke once a wired mouse could report its
+    # battery while charging, so drivers that know should say.  Also used
+    # to prefer a cabled mouse over its own idle dongle when both are
+    # plugged in.
+    wireless: Optional[bool]    = None
+
     # Labels for GUI display of buttons (optional override)
     button_labels: dict[str, str] = field(default_factory=dict)
 

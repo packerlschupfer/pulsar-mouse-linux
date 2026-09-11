@@ -257,15 +257,23 @@ jobs:
             cp "$f" "${SITE}/pulsar_mouse/drivers/"
           done
 
-          # Desktop file + icon
+          # Desktop file + icon.  The PNG at the AppDir root is what the
+          # AppImage itself is shown with; the SVG under usr/share is what
+          # the GUI draws on its Home page (see _logo_image in gui.py).
           cp data/pulsar-mouse.desktop "${APPDIR}/pulsar-mouse.desktop"
           cp data/pulsar-mouse.png "${APPDIR}/pulsar-mouse.png"
+          mkdir -p "${APPDIR}/usr/share/icons/hicolor/scalable/apps"
+          cp data/pulsar-mouse.svg \
+            "${APPDIR}/usr/share/icons/hicolor/scalable/apps/pulsar-mouse.svg"
 
           # AppRun — uses system python3, bundles only the app + pyusb
           cat > "${APPDIR}/AppRun" << 'APPRUN'
           #!/bin/bash
           HERE="$(dirname "$(readlink -f "$0")")"
           export PYTHONPATH="${HERE}/usr/lib/pulsar-mouse${PYTHONPATH:+:${PYTHONPATH}}"
+          # The AppImage runtime normally sets this; set it anyway so the
+          # GUI can find bundled data when AppRun is launched directly.
+          export APPDIR="${APPDIR:-$HERE}"
 
           if [ "$1" = "--cli" ]; then
               shift

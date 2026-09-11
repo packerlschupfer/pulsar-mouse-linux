@@ -28,6 +28,22 @@ gi.require_version('Dbusmenu', '0.4')
 from gi.repository import Gtk, Adw, GLib, Gio, Gdk, Dbusmenu
 
 from pulsar_mouse import find_device, scan_devices, __version__
+
+
+def _is_wireless(device) -> bool:
+    """Whether the device talks to the host over RF.
+
+    Drivers can declare it (DeviceCapabilities.wireless).  Otherwise fall
+    back to the original signal - only wireless drivers implemented
+    get_power() - which stopped holding once a wired mouse could report its
+    battery while charging.  Battery and "is wireless" are separate
+    questions now: gate battery rows on get_power(), and connection type
+    and RF signal quality on this.
+    """
+    declared = device.capabilities.wireless
+    if declared is not None:
+        return declared
+    return hasattr(device, 'get_power')
 from pulsar_mouse.base import PulsarDevice, DeviceCapabilities
 from pulsar_mouse.drivers import discover_all
 from pulsar_mouse.hid import (
@@ -376,11 +392,11 @@ class PulsarMouseApp(Adw.Application):
         # Gated on get_power (not find_hidraw): find_hidraw has a base-class
         # default (returns None) so hasattr() on it is true for every
         # driver, wired or wireless - it doesn't actually indicate this
-        # device can report signal strength. get_power only exists on
-        # wireless drivers, and RF signal quality is meaningless for a
-        # wired connection anyway.
+        # device can report signal strength.  RF signal quality is
+        # meaningless for a wired connection, so this follows
+        # _is_wireless() rather than battery support.
         self._conn_item = None
-        if hasattr(device, 'get_power'):
+        if _is_wireless(device):
             conn_item = Dbusmenu.Menuitem.new()
             conn_item.property_set(Dbusmenu.MENUITEM_PROP_LABEL, 'Signal: —')
             try:
@@ -974,11 +990,23 @@ class MainWindow(Adw.ApplicationWindow):
 
     @staticmethod
     def _logo_image(size=96):
+        # The themed icon works wherever a package installed it (.deb, .rpm,
+        # Nix).  A source checkout and the AppImage have no system icon, so
+        # look for the file itself — the repo keeps it in data/, and the
+        # AppImage ships it under its own hicolor tree.  Without the AppImage
+        # path the Home page showed GTK's missing-image "?" there.
         icon = Gtk.Image.new_from_icon_name('pulsar-mouse')
-        svg = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__)))), 'data', 'pulsar-mouse.svg')
-        if os.path.isfile(svg):
-            icon = Gtk.Image.new_from_file(svg)
+        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))))
+        candidates = [os.path.join(repo_root, 'data', 'pulsar-mouse.svg')]
+        if os.environ.get('APPDIR'):
+            candidates.append(os.path.join(
+                os.environ['APPDIR'], 'usr', 'share', 'icons', 'hicolor',
+                'scalable', 'apps', 'pulsar-mouse.svg'))
+        for svg in candidates:
+            if os.path.isfile(svg):
+                icon = Gtk.Image.new_from_file(svg)
+                break
         icon.set_pixel_size(size)
         icon.set_halign(Gtk.Align.CENTER)
         return icon
@@ -993,7 +1021,7 @@ class MainWindow(Adw.ApplicationWindow):
         # get_power only exists on wireless drivers - unlike find_hidraw,
         # which has a base-class default (returns None) that makes
         # hasattr() on it true for every driver, wired or wireless.
-        is_wireless = hasattr(device, 'get_power')
+        is_wireless = _is_wireless(device)
 
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         box.set_valign(Gtk.Align.START)
@@ -1059,10 +1087,10 @@ class MainWindow(Adw.ApplicationWindow):
             Gtk.Image.new_from_icon_name('zoom-in-symbolic'))
         status_group.add(self._home_dpi_row)
 
-        # Battery and RF signal quality are both meaningless for a wired
-        # mouse, so both rows are gated on is_wireless (mirrored in the
-        # tray's _build_tray() for its own Battery/Connection Quality menu
-        # items).
+        # RF signal quality only means something over the air, so it is
+        # gated on is_wireless.  Battery is not: a wireless mouse on its
+        # charging cable still reports it, so that row follows get_power().
+        # (Mirrored in the tray's _build_tray().)
         self._home_signal_row = None
         if is_wireless:
             self._home_signal_row = Adw.ActionRow()
@@ -1074,7 +1102,7 @@ class MainWindow(Adw.ApplicationWindow):
 
         self._home_battery_row = None
         self._home_battery_icon = None
-        if is_wireless:
+        if hasattr(device, 'get_power'):
             self._home_battery_row = Adw.ActionRow()
             self._home_battery_row.set_title('Battery')
             self._home_battery_row.set_subtitle('—')
