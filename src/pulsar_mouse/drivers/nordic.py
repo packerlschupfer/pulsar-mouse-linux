@@ -81,9 +81,11 @@ BUTTON_ADDRS = {
     'left':    0x60,
     'right':   0x64,
     'wheel':   0x68,
-    # Xlite V3: physical top = 0x70, bottom = 0x6C (andrewrabert FORWARD/BACK).
-    'thumb1':  0x70,   # side top / front
-    'thumb2':  0x6C,   # side bottom / back
+    'thumb2':  0x6C,   # left side bottom / back (backward)
+    'thumb1':  0x70,   # left side top / front (forward)
+    'dpi':     0x74,   # DPI button
+    'thumb4':  0x78,   # right side back (backward)
+    'thumb3':  0x7C,   # right side front (forward)
 }
 
 ADDR_DEBOUNCE         = 0xA9
@@ -273,8 +275,11 @@ class PulsarNordic(PulsarDevice):
             'left':    0x01,
             'right':   0x02,
             'wheel':   0x03,
-            'thumb1':  0x04,   # side front (forward)
-            'thumb2':  0x05,   # side back  (backward)
+            'thumb1':  0x04,   # left side front (forward)
+            'thumb2':  0x05,   # left side back  (backward)
+            'thumb3':  0x06,   # right side front (forward)
+            'thumb4':  0x07,   # right side back  (backward)
+            'dpi':     0x0b,   # DPI button
         },
         polling_rates=[125, 250, 500, 1000],
         lod_values=[1, 2],
@@ -285,7 +290,9 @@ class PulsarNordic(PulsarDevice):
         button_labels={
             'left': 'Left Click', 'right': 'Right Click',
             'wheel': 'Wheel Click',
-            'thumb1': 'Side Top (front)', 'thumb2': 'Side Bottom (back)',
+            'thumb1': 'Thumb 1 (forward)', 'thumb2': 'Thumb 2 (back)',
+            'thumb3': 'Thumb 3 (forward)', 'thumb4': 'Thumb 4 (back)',
+            'dpi': 'DPI Button',
         },
     )
 
