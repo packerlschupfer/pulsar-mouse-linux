@@ -48,7 +48,7 @@ from pulsar_mouse.base import PulsarDevice, DeviceCapabilities
 from pulsar_mouse.drivers import discover_all
 from pulsar_mouse.hid import (
     describe_button, parse_button_function,
-    MOUSE_ACTIONS, SCROLL_ACTIONS, DPI_ACTIONS, PROFILE_ACTIONS,
+    MOUSE_ACTIONS, MOUSE_ACTION_ALIASES, SCROLL_ACTIONS, DPI_ACTIONS, PROFILE_ACTIONS,
     MEDIA_CODES, HID_MODS, HID_KEYS, XCLICK_ALIASES,
 )
 
@@ -2526,6 +2526,7 @@ class RemapButtonDialog(Adw.Window):
 
     def _preselect(self, spec: str):
         spec = (spec or '').strip().lower()
+        spec = MOUSE_ACTION_ALIASES.get(spec, spec)
         if not spec or spec == '–' or spec == 'disabled':
             self._category_row.set_selected(self._CATEGORIES.index('Disabled'))
             self._sub_row.set_visible(False)
