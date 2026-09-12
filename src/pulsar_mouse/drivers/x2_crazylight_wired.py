@@ -32,7 +32,6 @@ Status: UNTESTED on hardware, like the dongle driver.
 from dataclasses import replace
 
 from pulsar_mouse.base import DeviceCapabilities
-from pulsar_mouse.drivers.nordic import ADDR_POLLING_RATE, POLL_VAL_TO_HZ
 from pulsar_mouse.drivers.x2_crazylight import PulsarX2CrazyLight
 
 
@@ -49,17 +48,13 @@ class PulsarX2CrazyLightWired(PulsarX2CrazyLight):
 
     _WIRED_MAX_HZ = 1000
 
-    def _stored_polling_rate(self, profile=None) -> int:
-        self._tunable_profile(profile)
-        return POLL_VAL_TO_HZ.get(self._mem.get(ADDR_POLLING_RATE, 0x01), 1000)
-
     def get_polling_rate(self, profile=None) -> int:
         # What the mouse runs at on the cable, not what the profile stores
         # for the dongle.  Also keeps the value inside polling_rates, which
         # the GUI's dropdown can't represent otherwise.
-        return min(self._stored_polling_rate(profile), self._WIRED_MAX_HZ)
+        return min(self.get_stored_polling_rate(profile), self._WIRED_MAX_HZ)
 
     def set_polling_rate(self, hz: int, profile=None) -> None:
-        if hz == self._WIRED_MAX_HZ and self._stored_polling_rate(profile) > hz:
+        if hz == self._WIRED_MAX_HZ and self.get_stored_polling_rate(profile) > hz:
             return   # already effectively 1 kHz here; keep the dongle's rate
         super().set_polling_rate(hz, profile)

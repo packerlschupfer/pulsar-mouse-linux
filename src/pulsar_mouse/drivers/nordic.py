@@ -537,10 +537,20 @@ class PulsarNordic(PulsarDevice):
 
     # ── Global settings ──────────────────────────────────────────────────
 
-    def get_polling_rate(self, profile=None) -> int:
+    def get_stored_polling_rate(self, profile=None) -> int:
+        """The rate held in the profile, whatever the link can carry.
+
+        A driver whose connection caps the rate reports the capped figure
+        from get_polling_rate(), so anything that saves a value and writes it
+        back later has to read this one instead — otherwise it quietly
+        rewrites the profile down to the cap.
+        """
         self._tunable_profile(profile)
         val = self._mem.get(ADDR_POLLING_RATE, 0x01)
         return POLL_VAL_TO_HZ.get(val, 1000)
+
+    def get_polling_rate(self, profile=None) -> int:
+        return self.get_stored_polling_rate(profile)
 
     def set_polling_rate(self, hz: int, profile=None) -> None:
         val = POLL_HZ_TO_VAL.get(hz)

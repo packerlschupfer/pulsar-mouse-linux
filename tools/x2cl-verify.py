@@ -20,6 +20,17 @@ from pulsar_mouse import find_device
 results = []
 
 
+def stored_poll(device, profile):
+    """The rate the profile holds, not the one this link can carry.
+
+    Over the cable get_polling_rate() reports at most 1 kHz however high the
+    profile is set.  Saving that and writing it back at the end is what left
+    a tester's 4 kHz profile sitting at 1 kHz after a wired run.
+    """
+    getter = getattr(device, 'get_stored_polling_rate', device.get_polling_rate)
+    return getter(profile=profile)
+
+
 def check(name, ok, detail=''):
     results.append((name, ok))
     print(f"  {'PASS' if ok else 'FAIL'}  {name}{f'  — {detail}' if detail else ''}")
@@ -45,7 +56,8 @@ def main() -> int:
             'active': d.get_active_profile(),
             'fw': d.get_firmware_version(),
             'profiles': {p: {'lod': d.get_lod(p),
-                             'poll': d.get_polling_rate(profile=p),
+                             'poll': stored_poll(d, p),
+                             'live': d.get_polling_rate(profile=p),
                              'dpi': d.get_dpi_stages(p)}
                          for p in range(1, n + 1)},
         }
@@ -56,7 +68,9 @@ def main() -> int:
           f" they need restoring by hand:")
     for p, v in orig['profiles'].items():
         stages = [dx for dx, _ in v['dpi']['stages'][:v['dpi']['count']]]
-        print(f"  profile {p}: LOD {v['lod']} mm, {v['poll']} Hz, "
+        rate = (f"{v['poll']} Hz" if v['poll'] == v['live']
+                else f"{v['live']} Hz here, stores {v['poll']} Hz")
+        print(f"  profile {p}: LOD {v['lod']} mm, {rate}, "
               f"stage {v['dpi']['active']} of {stages}")
     print()
 
@@ -96,7 +110,7 @@ def main() -> int:
         poll = orig['profiles'][other]['poll']
         target = next(hz for hz in caps.polling_rates if hz != poll)
         session(device, lambda d: d.set_polling_rate(target, profile=other))
-        seen = session(device, lambda d: {p: d.get_polling_rate(profile=p) for p in range(1, n + 1)})
+        seen = session(device, lambda d: {p: stored_poll(d, p) for p in range(1, n + 1)})
         check(f'polling {target} Hz lands on profile {other}', seen[other] == target,
               f'read {seen[other]}')
         leaked = [p for p in seen if p != other and seen[p] != orig['profiles'][p]['poll']]
