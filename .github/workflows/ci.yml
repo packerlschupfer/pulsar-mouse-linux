@@ -50,6 +50,11 @@ jobs:
           print(f'X2A caps: {PulsarX2A.capabilities.name}')
           "
 
+      - name: Driver consistency check
+        env:
+          PYTHONPATH: src
+        run: python3 tools/check-drivers.py
+
       - name: Import check (GUI — no display needed)
         run: |
           python3 -c "

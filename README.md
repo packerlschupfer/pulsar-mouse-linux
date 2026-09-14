@@ -264,6 +264,7 @@ Each Pulsar mouse model uses a different USB protocol. To add support for a new 
    ```
    The entry-point name must match the module name; otherwise a pip install registers the driver twice
 6. Add udev rules for the new VID/PID in `udev/50-pulsar-mouse.rules`
+7. Run `PYTHONPATH=src python3 tools/check-drivers.py`. CI runs the same checks, which catch mistakes that still compile and import, such as a second driver class in one module, a missing udev rule, or a DPI range the encoder can't express
 
 The CLI and GUI will automatically detect the new driver and adapt their UI.
 

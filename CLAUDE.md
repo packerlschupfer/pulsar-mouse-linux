@@ -40,7 +40,11 @@ pulsar-mouse
 pulsar-mouse-gui
 ```
 
-No unit tests. CI (.github/workflows/ci.yml) runs `py_compile` and import validation on Ubuntu 24.04.
+No unit tests. CI (.github/workflows/ci.yml) runs `py_compile`, import validation, and `tools/check-drivers.py` on Ubuntu 24.04. That script checks discovery and packaging consistency: one driver class per module, entry-point names equal module names, unique VID:PIDs with udev rules. For Nordic-family drivers it also round-trips the whole DPI range through the encoder and sends a command to a stub device. Run it before pushing driver changes:
+
+```bash
+PYTHONPATH=src python3 tools/check-drivers.py
+```
 
 ## Release Process
 
@@ -66,6 +70,7 @@ Tag with `vX.Y.Z` and push. GitHub Actions (release.yml) builds a `pulsar-mouse-
 4. Implement `find_hidraw()` and `parse_hidraw_event()` if the device emits DPI events
 5. Register in `pyproject.toml` under `[project.entry-points."pulsar_mouse.drivers"]`, with the entry-point name equal to the module name — a mismatch registers the class twice on pip installs
 6. Add udev rules in `udev/50-pulsar-mouse.rules`
+7. Run `PYTHONPATH=src python3 tools/check-drivers.py`. It fails CI on anything the steps above got wrong in a way that still imports
 
 ### Adding a New Setting to an Existing Driver
 
