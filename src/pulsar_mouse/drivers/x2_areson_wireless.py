@@ -12,6 +12,10 @@ remapping, battery, and the GUI. Over the cable: readout of all four
 profiles, DPI writes including 16000, the same tunables and LOD, LED settings
 and readback, and button remapping. While cabled, the red charging indicator
 overrides the configured RGB effect, though the settings are still stored.
+
+The cable connection is PulsarX2AresonWired in ``x2_areson_wired``.  It has
+to be a separate module: built-in driver discovery keys drivers by module
+name, so a second driver class here would silently replace this one.
 """
 
 from dataclasses import replace
@@ -20,7 +24,6 @@ import time
 import usb.core
 
 from pulsar_mouse.drivers.x2_crazylight import PulsarX2CrazyLight
-from pulsar_mouse.drivers.x2_crazylight_wired import PulsarX2CrazyLightWired
 from pulsar_mouse.drivers.nordic import (
     CMD_MEM_GET,
     CMD_POWER,
@@ -140,18 +143,4 @@ class PulsarX2AresonWireless(_AresonMixin, PulsarX2CrazyLight):
             'thumb1': 'Forward',
             'thumb2': 'Back',
         },
-    )
-
-class PulsarX2AresonWired(_AresonMixin, PulsarX2CrazyLightWired):
-    """Driver for the Areson X2 Wireless mouse over USB cable."""
-
-    capabilities = replace(
-        PulsarX2CrazyLightWired.capabilities,
-        name='Pulsar X2 Wireless (Areson cable)',
-        vid_pid_pairs=[(0x25A7, 0xFA7B)],
-        dpi_min=50,
-        dpi_max=26000,
-        dpi_step=50,
-        buttons=PulsarX2AresonWireless.capabilities.buttons,
-        button_labels=PulsarX2AresonWireless.capabilities.button_labels,
     )

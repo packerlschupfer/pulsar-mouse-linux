@@ -253,7 +253,7 @@ Then add the `bar` or `battery` widget from Noctalia's widget editor.
 
 Each Pulsar mouse model uses a different USB protocol. To add support for a new model:
 
-1. Create `src/pulsar_mouse/drivers/yourmodel.py`
+1. Create `src/pulsar_mouse/drivers/yourmodel.py` — **one driver class per module**. Built-in discovery, which the `.deb` and AppImage rely on, keys drivers by module name, so a second class in the same file silently replaces the first. If the mouse shows up under different PIDs on the cable and the dongle, give each connection its own module (see `x2_crazylight.py` / `x2_crazylight_wired.py`)
 2. Subclass `PulsarDevice` from `pulsar_mouse.base`
 3. Define `capabilities` as a class variable (a `DeviceCapabilities` dataclass)
 4. Implement the protocol methods (`open`, `close`, `get/set_polling_rate`, `get/set_dpi_stages`, etc.)
@@ -262,6 +262,7 @@ Each Pulsar mouse model uses a different USB protocol. To add support for a new 
    [project.entry-points."pulsar_mouse.drivers"]
    yourmodel = "pulsar_mouse.drivers.yourmodel:YourClass"
    ```
+   The entry-point name must match the module name; otherwise a pip install registers the driver twice
 6. Add udev rules for the new VID/PID in `udev/50-pulsar-mouse.rules`
 
 The CLI and GUI will automatically detect the new driver and adapt their UI.

@@ -60,11 +60,11 @@ Tag with `vX.Y.Z` and push. GitHub Actions (release.yml) builds a `pulsar-mouse-
 
 ### Adding a New Mouse Model
 
-1. Create `src/pulsar_mouse/drivers/newmodel.py`
+1. Create `src/pulsar_mouse/drivers/newmodel.py` — exactly one `PulsarDevice` class per module. `_discover_builtin()` keys drivers by module name, so a second class silently replaces the first, and the .deb/AppImage have no entry points to fall back on. A mouse with separate cable and dongle PIDs needs two modules (`x2_crazylight.py` / `x2_crazylight_wired.py`)
 2. Define a class inheriting `PulsarDevice` with `capabilities` as a class variable
 3. Implement `open()`, `close()`, and all required/applicable methods
 4. Implement `find_hidraw()` and `parse_hidraw_event()` if the device emits DPI events
-5. Register in `pyproject.toml` under `[project.entry-points."pulsar_mouse.drivers"]`
+5. Register in `pyproject.toml` under `[project.entry-points."pulsar_mouse.drivers"]`, with the entry-point name equal to the module name — a mismatch registers the class twice on pip installs
 6. Add udev rules in `udev/50-pulsar-mouse.rules`
 
 ### Adding a New Setting to an Existing Driver
