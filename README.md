@@ -49,6 +49,8 @@ Wireless (Nordic) protocol based on [python-pulsar-mouse-tool](https://github.co
 | Pulsar X2A Wireless / X2 V2 Mini | `nordic` | `3554:f507` `3554:f508` | Supported (Nordic chipset, battery status) |
 | Pulsar X2 CrazyLight Wireless | `x2_crazylight` | `3710:5406` | Reads confirmed on hardware, writes untested (Nordic protocol under the Sonix VID, 8K Hz polling, 4 profiles) |
 | Pulsar X2 CrazyLight Wired | `x2_crazylight_wired` | `3710:3414` | Reads confirmed on hardware, writes untested (same protocol as the dongle, 1K Hz max) |
+| Pulsar X2 Wireless (Areson dongle) | `x2_areson_wireless` | `25a7:fa7c` | Reads and writes confirmed on hardware (Nordic layout; GUI and button remapping tested) |
+| Pulsar X2 Wireless (Areson cable) | `x2_areson_wired` | `25a7:fa7b` | Reads and writes confirmed on hardware (Nordic layout; 1K Hz max; GUI tested; charging LED overrides RGB effects while cabled) |
 
 Want to add support for your mouse? See [Adding a new driver](#adding-a-new-driver) below.
 

@@ -26,6 +26,8 @@ feinmann8k = "pulsar_mouse.drivers.feinmann8k:PulsarFeinmann8K"
 nordic = "pulsar_mouse.drivers.nordic:PulsarNordic"
 x2_crazylight = "pulsar_mouse.drivers.x2_crazylight:PulsarX2CrazyLight"
 x2_crazylight_wired = "pulsar_mouse.drivers.x2_crazylight_wired:PulsarX2CrazyLightWired"
+x2_areson_wireless = "pulsar_mouse.drivers.x2_areson:PulsarX2AresonWireless"
+x2_areson_wired = "pulsar_mouse.drivers.x2_areson:PulsarX2AresonWired"
 
 [tool.setuptools.packages.find]
 where = ["src"]

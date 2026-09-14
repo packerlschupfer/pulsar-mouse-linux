@@ -47,6 +47,12 @@ KERNEL=="hidraw*", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="3414", MODE="0660
 SUBSYSTEM=="usb", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="5406", MODE="0660", TAG+="uaccess"
 KERNEL=="hidraw*", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="5406", MODE="0660", TAG+="uaccess"
 
+# Pulsar X2 Wireless (Areson IDs): wired and 2.4 GHz dongle
+SUBSYSTEM=="usb", ATTRS{idVendor}=="25a7", ATTRS{idProduct}=="fa7b", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="25a7", ATTRS{idProduct}=="fa7c", MODE="0660", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="25a7", ATTRS{idProduct}=="fa7b", MODE="0660", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="25a7", ATTRS{idProduct}=="fa7c", MODE="0660", TAG+="uaccess"
+
 # Pulsar Nordic chipset — X2A Wireless, X2 V2 Mini (VID 0x3554)
 SUBSYSTEM=="usb", ATTRS{idVendor}=="3554", ATTRS{idProduct}=="f507", MODE="0660", TAG+="uaccess"
 SUBSYSTEM=="usb", ATTRS{idVendor}=="3554", ATTRS{idProduct}=="f508", MODE="0660", TAG+="uaccess"
