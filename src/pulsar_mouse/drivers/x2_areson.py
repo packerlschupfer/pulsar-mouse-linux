@@ -4,9 +4,14 @@ This model uses the Nordic 17-byte protocol and memory layout shared by the
 X2 CrazyLight driver. The wired and dongle modes use different PIDs; the
 wired class keeps the link at its 1 kHz limit.
 
-Reads and writes were confirmed on the supplied hardware, primarily through
-the dongle. Button remapping and LED effects were also tested through the
-dongle; the wired mode was tested for detection and readout.
+Reads and writes were confirmed on the physical mouse over both connections
+(PR #10). Through the dongle: all four profiles, DPI stages and colours
+(including 16000 DPI), polling rate, debounce, angle snap, ripple control,
+motion sync, LOD, LED effects, brightness and breathing speed, button
+remapping, battery, and the GUI. Over the cable: readout of all four
+profiles, DPI writes including 16000, the same tunables and LOD, LED settings
+and readback, and button remapping. While cabled, the red charging indicator
+overrides the configured RGB effect, though the settings are still stored.
 """
 
 from dataclasses import replace

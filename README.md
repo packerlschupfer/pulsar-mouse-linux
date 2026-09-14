@@ -339,6 +339,7 @@ Checksum: bytes[62:64] = LE uint16(sum(bytes[0:62])).
 - [@mwsmws22](https://github.com/mwsmws22) — Nordic keyboard shortcut fix (shortcut-table writes, Xlite V3 button mapping)
 - [@Scout339](https://github.com/Scout339) — Logo design, wireless mouse testing
 - [@iamtherobin](https://github.com/iamtherobin) — Pulsar Fusion USB captures and screen recordings that the X2 CrazyLight drivers (dongle and wired) were decoded from
+- [@dbergPROTAKT](https://github.com/dbergPROTAKT) — Pulsar X2 Wireless (Areson IDs) driver, with hardware testing over both the dongle and the cable
 - [andrewrabert](https://github.com/andrewrabert) — [python-pulsar-mouse-tool](https://github.com/andrewrabert/python-pulsar-mouse-tool), reference implementation for the Nordic wireless protocol
 
 ## Related Projects
