@@ -223,13 +223,22 @@ def _rot2(nibble: int) -> int:
 
 
 def _dpi_to_raw(dpi: int, step: int = 50, modes=DPI_MODES_SINGLE) -> bytes:
-    for mode, mult, base, limit in modes:
-        if limit is None or dpi <= limit:
-            break
-    unit = step * mult
+    def pick(value):
+        for mode, mult, base, limit in modes:
+            if limit is None or value <= limit:
+                return mode, mult, base
+        return modes[-1][:3]
+
+    mode, mult, base = pick(dpi)
     # Snap to what this mode can express: above the finest mode the device
-    # simply has no finer granularity to offer.
-    index = round(dpi / unit) - base
+    # simply has no finer granularity to offer.  Snapping can land back on a
+    # finer mode's limit (25610 -> 25600), and that value belongs to the finer
+    # mode, so choose again.  A given DPI then always encodes to one byte form,
+    # the one Fusion writes.
+    snapped = round(dpi / (step * mult)) * step * mult
+    if snapped != dpi:
+        mode, mult, base = pick(snapped)
+    index = round(snapped / (step * mult)) - base
     if not 0 <= index <= 1023:
         raise ValueError(f"DPI {dpi} is out of range for this device")
     page, low = divmod(index, 256)
