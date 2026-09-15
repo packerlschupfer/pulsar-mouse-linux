@@ -129,6 +129,9 @@ class PulsarX2AresonWireless(_AresonMixin, PulsarX2CrazyLight):
         dpi_min=50,
         dpi_max=26000,
         dpi_step=50,
+        # Inherited from the X2 CrazyLight, but not seen on this model.
+        has_turbo=False,
+        power_saving_range=None,
         buttons={
             'left': 0x01,
             'right': 0x02,

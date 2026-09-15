@@ -65,6 +65,16 @@ class DeviceCapabilities:
     # plugged in.
     wireless: Optional[bool]    = None
 
+    # Pulsar Fusion's "Turbo Mode" toggle on Nordic-family mice.  Only set it
+    # where the register has been seen in a capture of that model.
+    has_turbo: bool             = False
+
+    # (min, max, step) in seconds for get/set_power_saving_timeout(), which
+    # the CLI and GUI use for their power-saving / auto-sleep control.  None
+    # hides the control even if the driver has the methods, e.g. a subclass
+    # inheriting them for a model where they're unverified.
+    power_saving_range: Optional[tuple[int, int, int]] = (30, 900, 30)
+
     # Labels for GUI display of buttons (optional override)
     button_labels: dict[str, str] = field(default_factory=dict)
 

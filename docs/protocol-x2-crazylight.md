@@ -135,7 +135,7 @@ Fusion UI in the screen recording contributed alongside it.
 | `0x0060`–`0x008b` | Button assignments | 4 bytes each: `[type, code, modifier, cksum]` |
 | `0x00a9` | Debounce time | milliseconds; 0–20 swept in the second capture |
 | `0x00ab` | Motion sync | `0`/`1` |
-| `0x00ad` | Auto sleep | value × 10 s (`0x03` = 30 s, `0x06` = 1 min, `0x3c` = 10 min, `0xb4` = 30 min) |
+| `0x00ad` | Auto sleep | value × 10 s (`0x01` = 10 s, `0x03` = 30 s, `0x06` = 1 min, `0x1e` = 5 min, `0x3c` = 10 min, `0xb4` = 30 min; 10 s–30 min seen across the captures) |
 | `0x00af` | Angle snapping | `0`/`1` |
 | `0x00b1` | Ripple control | `0`/`1` |
 | `0x00b5` | Turbo mode | `0`/`1` |

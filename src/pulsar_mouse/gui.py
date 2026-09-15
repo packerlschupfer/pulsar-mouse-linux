@@ -30,6 +30,16 @@ from gi.repository import Gtk, Adw, GLib, Gio, Gdk, Dbusmenu
 from pulsar_mouse import find_device, scan_devices, __version__
 
 
+def _power_saving_supported(device) -> bool:
+    """Whether to show the power-saving / auto-sleep control for this mouse."""
+    return (hasattr(device, 'set_power_saving_timeout')
+            and device.capabilities.power_saving_range is not None)
+
+
+def _describe_seconds(seconds: int) -> str:
+    return f'{seconds // 60} min' if seconds >= 60 and seconds % 60 == 0 else f'{seconds} sec'
+
+
 def _is_wireless(device) -> bool:
     """Whether the device talks to the host over RF.
 
@@ -1174,6 +1184,12 @@ class MainWindow(Adw.ApplicationWindow):
                 'lowest possible latency')
             global_group.add(self._motion_row)
 
+        self._turbo_row = None
+        if caps.has_turbo:
+            self._turbo_row = Adw.SwitchRow()
+            self._turbo_row.set_title('Turbo Mode')
+            global_group.add(self._turbo_row)
+
         # LOD lives here (not on the Customize tab with the rest of
         # "Profile Settings") to match Fusion's own Performance tab, which
         # groups Lift-off Distance with DPI/polling rate rather than LED.
@@ -1598,16 +1614,18 @@ X-GNOME-Autostart-enabled=true
         self._low_power_row = None
         groups = []
 
-        if hasattr(device, 'set_power_saving_timeout') or hasattr(device, 'set_low_power_threshold'):
+        if _power_saving_supported(device) or hasattr(device, 'set_low_power_threshold'):
             power_group = Adw.PreferencesGroup()
             power_group.set_title('Power Management')
             power_group.set_description('Wireless power-saving behaviour')
 
-            if hasattr(device, 'set_power_saving_timeout'):
+            if _power_saving_supported(device):
+                lo, hi, step = device.capabilities.power_saving_range
                 row, self._power_saving_row = self._make_slider_row(
                     'Wireless Power Saving',
-                    'Inactivity before the mouse sleeps (30 sec – 15 min)',
-                    30, 900, 30, snap=True,
+                    f'Inactivity before the mouse sleeps '
+                    f'({_describe_seconds(lo)} – {_describe_seconds(hi)})',
+                    lo, hi, step, snap=True,
                     format_value=lambda v: f'{int(v) // 60}:{int(v) % 60:02d}')
                 power_group.add(row)
 
@@ -1998,6 +2016,8 @@ X-GNOME-Autostart-enabled=true
             s['ripple'] = self._ripple_row.get_active()
         if self._motion_row:
             s['motion'] = self._motion_row.get_active()
+        if self._turbo_row:
+            s['turbo'] = self._turbo_row.get_active()
         if self._power_saving_row:
             s['power_saving'] = int(self._power_saving_row.get_value())
         if self._low_power_row:
@@ -2072,11 +2092,12 @@ X-GNOME-Autostart-enabled=true
         ripple = self._read_field(device.get_ripple_control) if caps.has_ripple_control else None
         motion = self._read_field(device.get_motion_sync) if caps.has_motion_sync else None
         power_saving = (self._read_field(device.get_power_saving_timeout)
-                        if hasattr(device, 'get_power_saving_timeout') else None)
+                        if _power_saving_supported(device) else None)
+        turbo = self._read_field(device.get_turbo_mode) if caps.has_turbo else None
         low_power = (self._read_field(device.get_low_power_threshold)
                     if hasattr(device, 'get_low_power_threshold') else None)
         GLib.idle_add(self._populate_global, poll_hz, debounce, angle, ripple, motion,
-                      power_saving, low_power)
+                      power_saving, low_power, turbo)
 
     def _do_reload(self):
         if not self._open_dev():
@@ -2230,8 +2251,10 @@ X-GNOME-Autostart-enabled=true
                 device.set_ripple_control(s['ripple'], **kw)
             if 'motion' in s:
                 device.set_motion_sync(s['motion'], **kw)
+            if 'turbo' in s:
+                device.set_turbo_mode(s['turbo'], **kw)
             if 'power_saving' in s:
-                device.set_power_saving_timeout(s['power_saving'])
+                device.set_power_saving_timeout(s['power_saving'], **kw)
             if 'low_power' in s:
                 device.set_low_power_threshold(s['low_power'])
 
@@ -2290,7 +2313,7 @@ X-GNOME-Autostart-enabled=true
     # ── UI population helpers ────────────────────────────────────────────
 
     def _populate_global(self, poll_hz, debounce, angle, ripple, motion,
-                         power_saving=None, low_power=None):
+                         power_saving=None, low_power=None, turbo=None):
         # try/finally, not a plain trailing assignment: anything raising in
         # between used to leave self._building stuck True forever, and
         # every change handler in this window (_on_profile_changed,
@@ -2323,6 +2346,8 @@ X-GNOME-Autostart-enabled=true
                 self._ripple_row.set_active(ripple)
             if self._motion_row and motion is not None:
                 self._motion_row.set_active(motion)
+            if self._turbo_row and turbo is not None:
+                self._turbo_row.set_active(turbo)
             if self._power_saving_row and power_saving is not None:
                 self._power_saving_row.set_value(power_saving)
             if self._low_power_row and low_power is not None:

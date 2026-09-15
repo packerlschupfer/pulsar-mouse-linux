@@ -27,6 +27,12 @@ def _parse_bool(s, name):
     raise ValueError(f"--{name}: expected on or off, got '{s}'")
 
 
+def _has_power_saving(device) -> bool:
+    """True when the power-saving control applies to this mouse."""
+    return (hasattr(device, 'get_power_saving_timeout')
+            and device.capabilities.power_saving_range is not None)
+
+
 def print_global(device: PulsarDevice):
     caps = device.capabilities
     try:
@@ -50,11 +56,6 @@ def print_global(device: PulsarDevice):
     if not caps.per_profile_globals:
         print_tunables(device)
 
-    if hasattr(device, 'get_power_saving_timeout'):
-        try:
-            print(f"  Power saving:     {device.get_power_saving_timeout()} s")
-        except Exception as e:
-            print(f"  Power saving:     error ({e})")
     if hasattr(device, 'get_low_power_threshold'):
         try:
             print(f"  Low power mode:   {device.get_low_power_threshold()}%")
@@ -96,6 +97,16 @@ def print_tunables(device: PulsarDevice, profile=None):
             print(f"  Motion sync:      {_on_off(device.get_motion_sync(**kw))}")
         except Exception as e:
             print(f"  Motion sync:      error ({e})")
+    if caps.has_turbo:
+        try:
+            print(f"  Turbo mode:       {_on_off(device.get_turbo_mode(**kw))}")
+        except Exception as e:
+            print(f"  Turbo mode:       error ({e})")
+    if _has_power_saving(device):
+        try:
+            print(f"  Power saving:     {device.get_power_saving_timeout(**kw)} s")
+        except Exception as e:
+            print(f"  Power saving:     error ({e})")
 
 
 def print_profile(device: PulsarDevice, profile: int):
@@ -232,8 +243,10 @@ Examples:
     g.add_argument('--angle-snap', metavar='on|off')
     g.add_argument('--ripple', metavar='on|off')
     g.add_argument('--motion-sync', metavar='on|off')
+    g.add_argument('--turbo', metavar='on|off', help='Turbo Mode')
     g.add_argument('--power-saving', type=int, metavar='SECONDS',
-                   help='Wireless power-saving timeout (30-900 seconds)')
+                   help='Power-saving / auto-sleep timeout in seconds '
+                        '(the range depends on the mouse)')
     g.add_argument('--low-power', type=int, metavar='PERCENT',
                    help='Low power mode battery threshold (0-100)')
 
@@ -281,7 +294,7 @@ def main():
     # checked separately rather than folded into the `is not None` list.
     write_ops = args.reset or any(x is not None for x in [
         args.poll, args.debounce,
-        args.angle_snap, args.ripple, args.motion_sync,
+        args.angle_snap, args.ripple, args.motion_sync, args.turbo,
         args.power_saving, args.low_power, args.active_profile,
         args.lod, args.dpi, args.active_stage,
         args.brightness, args.brightness_percent, args.led, args.breathe_speed,
@@ -368,6 +381,8 @@ def main():
                 status['ripple_control'] = device.get_ripple_control()
             if caps.has_motion_sync:
                 status['motion_sync'] = device.get_motion_sync()
+            if caps.has_turbo:
+                status['turbo_mode'] = device.get_turbo_mode()
             if caps.lod_values:
                 lod_val = device.get_lod(profile)
                 if caps.lod_step is not None:
@@ -384,9 +399,11 @@ def main():
             # (30-900s, 0-100%) match that page's sliders and feinmann8k.py's
             # own set_power_saving_timeout() validation - there's no
             # discoverable capability constant for them to read instead.
-            if hasattr(device, 'get_power_saving_timeout'):
+            if _has_power_saving(device):
+                lo, hi, step = caps.power_saving_range
                 status['power_saving'] = {
-                    'value': device.get_power_saving_timeout(), 'min': 30, 'max': 900,
+                    'value': device.get_power_saving_timeout(),
+                    'min': lo, 'max': hi, 'step': step,
                 }
             if hasattr(device, 'get_low_power_threshold'):
                 status['low_power'] = {
@@ -469,7 +486,16 @@ def main():
                 device.set_motion_sync(v)
                 print(f"Motion sync: {_on_off(v)}")
 
+            if args.turbo is not None:
+                if not caps.has_turbo:
+                    sys.exit(f"Error: Turbo Mode is not supported on {caps.name}")
+                v = _parse_bool(args.turbo, 'turbo')
+                device.set_turbo_mode(v)
+                print(f"Turbo mode: {_on_off(v)}")
+
             if args.power_saving is not None:
+                if not _has_power_saving(device):
+                    sys.exit(f"Error: power saving is not supported on {caps.name}")
                 device.set_power_saving_timeout(args.power_saving)
                 print(f"Power saving timeout set to {args.power_saving} s")
 

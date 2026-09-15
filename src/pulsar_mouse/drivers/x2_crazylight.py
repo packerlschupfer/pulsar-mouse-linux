@@ -87,6 +87,10 @@ class PulsarX2CrazyLight(PulsarNordic):
         # captures show profile 1 at 1 kHz, 3 at 4 kHz and 4 at 8 kHz.
         per_profile_globals=True,
         wireless=True,
+        # Both seen in the Fusion captures: Turbo Mode at 0xB5, and Auto
+        # Sleep at 0xAD/0xB7 in 10 s units, set anywhere from 10 s to 30 min.
+        has_turbo=True,
+        power_saving_range=(10, 1800, 10),
         button_labels={
             'left': 'Left Click',
             'right': 'Right Click',
@@ -119,6 +123,25 @@ class PulsarX2CrazyLight(PulsarNordic):
         (2, 5, 201, 25600),    # steps of  50 DPI
         (3, 10, 201, None),    # steps of 100 DPI, to Fusion's 32000 ceiling
     )
+
+    # Auto Sleep, as Pulsar Fusion calls it, exposed through the same
+    # power-saving API the Feinmann driver uses, so the CLI and GUI pick it up.
+
+    def get_power_saving_timeout(self, profile=None) -> int:
+        return self.get_autosleep(profile)
+
+    def set_power_saving_timeout(self, seconds: int, profile=None) -> None:
+        lo, hi, step = self.capabilities.power_saving_range
+        stored = self.get_autosleep(profile)
+        # The trap the wired polling rate fell into: a stored value outside the
+        # exposed range comes back clamped in the GUI, and writing that clamp
+        # would silently replace it.  Leave it unless a different value was
+        # actually chosen.
+        if not lo <= stored <= hi and seconds == min(max(stored, lo), hi):
+            return
+        if not lo <= seconds <= hi or (seconds - lo) % step:
+            raise ValueError(f"Power saving must be {lo}–{hi} s in steps of {step}")
+        self.set_autosleep(seconds, profile)
 
     # 0.7 mm is stored as 0x03 — it was added after 1 mm and 2 mm, so the
     # codes are not in physical order.
