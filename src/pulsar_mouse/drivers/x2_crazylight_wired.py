@@ -26,7 +26,8 @@ Any lower rate is written as asked — that one is a real change.
 Battery reads (command 0x04) still answer, but the mouse is charging while
 wired and Fusion shows a charging icon in place of a percentage.
 
-Status: UNTESTED on hardware, like the dongle driver.
+Status: reads and writes are confirmed on hardware, same run as the dongle
+        driver (see x2_crazylight.py).
 """
 
 from dataclasses import replace

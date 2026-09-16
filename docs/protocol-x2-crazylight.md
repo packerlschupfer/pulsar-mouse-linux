@@ -209,13 +209,24 @@ granularity declare just that one mode.
 @iamtherobin ran the driver against a real X2 CrazyLight on 2026-09-10: it reads
 firmware, battery, all four profiles, DPI stages and colours, LOD, LED, buttons and the
 per-profile tunables, and picks up changes made from Pulsar's own web configurator.
-Two things that readout corrected:
+That readout corrected one thing:
 
 - **Six DPI stages, not four.** Profiles configured with six read back correctly, and
   slots 5 and 6 carry real factory defaults (6400 orange, 12800 magenta `#F20AEA`) —
   which re-confirms the mode encoding, since slot 6's `37 37 22` is exactly the 12800
   that mode 2 predicts.
-- **Nothing has been written to a device yet.** Reads are proven; writes are not.
+
+On 2026-09-15 he ran the extended `tools/x2cl-verify.py`, which writes as well as
+reads: profile switching, LOD, DPI (including the coarse range), polling rate, active
+stage, debounce, angle snapping, ripple control, motion sync, Turbo Mode, Auto Sleep,
+LED effect, brightness and breathing speed, a stage colour, and a button remap all
+round-tripped, on the dongle and on the cable. Every other profile stayed byte for byte
+unchanged, and the mouse was restored byte for byte afterwards. **Every register in this
+document is now confirmed on hardware in both directions.**
+
+He also confirmed that Fusion's "Mouse Parameters" section (sensitivity, pointer
+precision, scrolling speed, double-click speed) drives Windows' own pointer settings
+rather than anything stored on the mouse.
 
 Claiming interface 1 takes the device away from anything else using it — Pulsar's
 WebHID configurator at `bbb.pulsar.gg` drops its connection while the CLI runs. That is

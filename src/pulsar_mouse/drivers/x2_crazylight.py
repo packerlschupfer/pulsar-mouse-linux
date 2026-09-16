@@ -26,9 +26,10 @@ Differences from the X2A Wireless (PulsarNordic):
     profile is active, so reading or writing a different one switches first
     (command 0x0F) and reloads the map — the same thing Fusion does.
 
-Status: UNTESTED on hardware.  Every register below was confirmed by matching
-        each write in the capture against the Fusion UI frame at the same
-        timestamp, but nothing has been written back to a real device yet.
+Status: reads and writes are confirmed on hardware.  @iamtherobin ran
+        tools/x2cl-verify.py against a real X2 CrazyLight on 2026-09-15 and every
+        setting in this driver round-tripped, over both the cable and the
+        dongle, with the mouse restored byte for byte afterwards.
 
 The DPI encoding is fully resolved: fourteen (bytes -> DPI) pairs across two
 captures all decode exactly.  See docs/protocol-x2-crazylight.md.

@@ -7,7 +7,7 @@
 Linux configuration tool for **Pulsar gaming mice**.
 
 Plugin architecture — each mouse model has its own protocol driver.
-Currently supports the **Pulsar Xlite Wired**, **Pulsar X2 Wired**, **Pulsar X2H Wired Medium**, **Pulsar X2A Medium Wired**, **Pulsar Xlite v4**, **Pulsar Feinmann 8K / FO1**, **Pulsar X2A Wireless / X2 V2 Mini**, and **Pulsar X2 CrazyLight** — see [Supported Mice](#supported-mice) below.
+Currently supports the **Pulsar Xlite Wired**, **Pulsar X2 Wired**, **Pulsar X2H Wired Medium**, **Pulsar X2A Medium Wired**, **Pulsar Xlite v4**, **Pulsar Feinmann 8K / FO1**, **Pulsar X2A Wireless / X2 V2 Mini**, **Pulsar X2 CrazyLight**, and **Pulsar X2 Wireless (Areson)** — see [Supported Mice](#supported-mice) below.
 
 Reverse-engineered from USB HID captures of Pulsar Fusion on Windows 11.
 Wireless (Nordic) protocol based on [python-pulsar-mouse-tool](https://github.com/andrewrabert/python-pulsar-mouse-tool) by andrewrabert.
@@ -47,8 +47,8 @@ Wireless (Nordic) protocol based on [python-pulsar-mouse-tool](https://github.co
 | Pulsar Xlite v4 Wireless | `xlite_v4_wireless` | `3710:5402` | Supported (1K wireless dongle, same Sonix protocol) |
 | Pulsar Feinmann 8K / FO1 | `feinmann8k` | `3710:5404` | Fully supported (wireless dongle, 8K Hz polling, 6 onboard profiles) |
 | Pulsar X2A Wireless / X2 V2 Mini | `nordic` | `3554:f507` `3554:f508` | Supported (Nordic chipset, battery status) |
-| Pulsar X2 CrazyLight Wireless | `x2_crazylight` | `3710:5406` | Reads confirmed on hardware, writes untested (Nordic protocol under the Sonix VID, 8K Hz polling, 4 profiles) |
-| Pulsar X2 CrazyLight Wired | `x2_crazylight_wired` | `3710:3414` | Reads confirmed on hardware, writes untested (same protocol as the dongle, 1K Hz max) |
+| Pulsar X2 CrazyLight Wireless | `x2_crazylight` | `3710:5406` | Fully supported, reads and writes confirmed on hardware (Nordic protocol under the Sonix VID, 8K Hz polling, 4 profiles) |
+| Pulsar X2 CrazyLight Wired | `x2_crazylight_wired` | `3710:3414` | Fully supported, reads and writes confirmed on hardware (same protocol as the dongle, 1K Hz max) |
 | Pulsar X2 Wireless (Areson dongle) | `x2_areson_wireless` | `25a7:fa7c` | Reads and writes confirmed on hardware (Nordic layout; GUI and button remapping tested) |
 | Pulsar X2 Wireless (Areson cable) | `x2_areson_wired` | `25a7:fa7b` | Reads and writes confirmed on hardware (Nordic layout; 1K Hz max; GUI tested; charging LED overrides RGB effects while cabled) |
 
