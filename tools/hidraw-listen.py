@@ -77,17 +77,75 @@ def discover(vids=PULSAR_VIDS):
         if vid not in vids:
             continue
         interface = None
-        for chunk in os.path.realpath(os.path.dirname(uevent)).split('/'):
+        device_dir = os.path.realpath(os.path.dirname(uevent))
+        for chunk in device_dir.split('/'):
             if ':1.' in chunk:                             # usb interface node, e.g. 3-2:1.1
                 interface = chunk.rsplit('.', 1)[1]
+        busnum = devnum = None
+        probe = device_dir
+        while probe != '/':                                # walk up to the USB device itself
+            try:
+                busnum = int(open(os.path.join(probe, 'busnum')).read())
+                devnum = int(open(os.path.join(probe, 'devnum')).read())
+                break
+            except (OSError, ValueError):
+                probe = os.path.dirname(probe)
         found.append({
             'node': '/dev/' + uevent.split('/')[4],
             'vid': vid, 'pid': pid,
             'interface': interface,
+            'busnum': busnum, 'devnum': devnum,
             'phys': info.get('HID_PHYS', ''),
             'name': info.get('HID_NAME', ''),
         })
     return found
+
+
+def holders(busnum, devnum):
+    """Processes with this USB device open, found by matching open file
+    descriptors rather than guessing from command lines."""
+    if busnum is None or devnum is None:
+        return []
+    target = f'/dev/bus/usb/{busnum:03d}/{devnum:03d}'
+    out = []
+    for entry in glob.glob('/proc/[0-9]*/fd/*'):
+        try:
+            if os.readlink(entry) != target:
+                continue
+        except OSError:
+            continue
+        pid = entry.split('/')[2]
+        try:
+            cmd = open(f'/proc/{pid}/cmdline', 'rb').read().replace(b'\0', b' ').decode(
+                'utf-8', 'replace').strip()
+        except OSError:
+            cmd = '?'
+        if (pid, cmd) not in out:
+            out.append((pid, cmd))
+    return out
+
+
+def warn_missing_config_interface(nodes):
+    """The reports we're after arrive on the config interface, whose HID_PHYS
+    ends in /input1.  If a device is missing that node, something has claimed
+    the interface over libusb, which removes the node until it lets go — and
+    then this script cannot see anything worth seeing."""
+    warned = False
+    for (vid, pid) in sorted({(n['vid'], n['pid']) for n in nodes}):
+        same = [n for n in nodes if (n['vid'], n['pid']) == (vid, pid)]
+        if any(n['phys'].endswith('/input1') for n in same):
+            continue
+        warned = True
+        print(f"\n  !!  {vid:04x}:{pid:04x} has no hidraw node for its config interface "
+              f"(only interface {', '.join(str(n['interface']) for n in same)}).")
+        print("      That is the interface these reports arrive on, so this run would")
+        print("      tell you nothing. Something has it claimed over USB.")
+        for pid_, cmd in holders(same[0].get('busnum'), same[0].get('devnum')):
+            print(f"      Holding it now: pid {pid_}  {cmd[:70]}")
+        print("      The pulsar-mouse app keeps running in the tray after you close its")
+        print("      window, and grabs the mouse every time it polls the battery. Quit it")
+        print("      (pkill -f pulsar-mouse), or unplug and replug the device, then re-run.")
+    return warned
 
 
 def collect(fds, seconds, on_report):
@@ -153,6 +211,9 @@ def main(argv=None):
         picked = '   <- the driver would listen here' if n['phys'].endswith('/input1') else ''
         print(f"  {n['node']}  {n['vid']:04x}:{n['pid']:04x}  interface {n['interface']}"
               f"  {n['name']}{picked}")
+
+    if warn_missing_config_interface(nodes):
+        print()
 
     fds = {}
     for n in nodes:
