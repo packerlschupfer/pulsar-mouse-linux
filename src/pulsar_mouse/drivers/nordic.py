@@ -35,6 +35,7 @@ Status: UNTESTED — protocol assumed compatible with X2A Wireless based on
 """
 
 import ctypes
+import glob
 import struct
 from typing import Optional
 
@@ -53,6 +54,14 @@ CMD_RESTORE           = 0x09
 CMD_ACTIVE_PROFILE_GET = 0x0E
 CMD_ACTIVE_PROFILE_SET = 0x0F
 CMD_FW_VERSION        = 0x12
+
+# The mouse sends this one unprompted when something changed on the device
+# itself.  Byte 6 says what.  The report carries no new value — four presses
+# of the DPI button across 400/800/1600/3200 produced four identical reports
+# (issue #7) — so a listener has to read the setting back.
+CMD_EVENT             = 0x0A
+EVENT_DPI_CHANGED     = 0x01
+EVENT_PROFILE_CHANGED = 0x04
 
 # ── Memory addresses ────────────────────────────────────────────────────────
 
@@ -287,6 +296,9 @@ class PulsarNordic(PulsarDevice):
         },
         polling_rates=[125, 250, 500, 1000],
         lod_values=[1, 2],
+        # Nothing arrived on the config interface while a tester carried an
+        # X2 CrazyLight away from its dongle, and nothing arrives on a timer.
+        reports_signal_quality=False,
         has_breathe_speed=True,
         breathe_speed_range=(1, 5),
         debounce_range=(0, 30),
@@ -847,6 +859,51 @@ class PulsarNordic(PulsarDevice):
             'power_connected': bool(resp[7]),
             'battery_mv': struct.unpack('>H', bytes(resp[8:10]))[0],
         }
+
+    # ── Unprompted reports ───────────────────────────────────────────────
+
+    def find_hidraw(self) -> Optional[str]:
+        """The config interface's hidraw node, where the mouse's own events
+        arrive.  Matched on VID *and* PID: with a cabled mouse and its dongle
+        both plugged in, four Pulsar devices' nodes are present at once, and
+        matching the VID alone picks whichever sorts first.
+
+        The node disappears while anything claims that interface over USB,
+        this driver included, so a listener has to cope with it coming and
+        going rather than opening it once.
+        """
+        wanted = {(vid, pid) for vid, pid in self.capabilities.vid_pid_pairs}
+        for path in sorted(glob.glob('/sys/class/hidraw/hidraw*/device/uevent')):
+            try:
+                info = dict(line.split('=', 1)
+                            for line in open(path).read().splitlines() if '=' in line)
+            except OSError:
+                continue
+            parts = info.get('HID_ID', '').split(':')
+            if len(parts) != 3:
+                continue
+            try:
+                ids = (int(parts[1], 16), int(parts[2], 16))
+            except ValueError:
+                continue
+            if ids in wanted and info.get('HID_PHYS', '').endswith('/input1'):
+                return '/dev/' + path.split('/')[4]
+        return None
+
+    def parse_hidraw_event(self, data: bytes) -> Optional[dict]:
+        if (len(data) != self.capabilities.report_size or data[0] != 0x08
+                or data[1] != CMD_EVENT):
+            return None
+        if ((0x55 - sum(data[:16])) & 0xFF) != data[16]:
+            return None
+        kind = data[6]
+        if kind == EVENT_DPI_CHANGED:
+            return {'dpi_changed': True}
+        if kind == EVENT_PROFILE_CHANGED:
+            return {'profile_changed': True}
+        # 0x40 turns up on its own every few minutes, meaning unknown; ignored
+        # rather than guessed at.
+        return None
 
     def get_autosleep(self, profile=None) -> int:
         """Return auto-sleep timeout in seconds."""

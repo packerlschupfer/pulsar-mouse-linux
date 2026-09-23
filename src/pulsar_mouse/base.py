@@ -75,6 +75,13 @@ class DeviceCapabilities:
     # inheriting them for a model where they're unverified.
     power_saving_range: Optional[tuple[int, int, int]] = (30, 900, 30)
 
+    # Whether the mouse pushes a wireless signal-quality reading.  The
+    # Feinmann does, about once a second.  The Nordic family does not: a
+    # listening run on an X2 CrazyLight dongle, including carrying the mouse
+    # away from it, produced nothing (issue #7).  False hides the GUI's
+    # Connection Quality row rather than leaving it showing "—" forever.
+    reports_signal_quality: bool = True
+
     # Labels for GUI display of buttons (optional override)
     button_labels: dict[str, str] = field(default_factory=dict)
 
@@ -224,7 +231,18 @@ class PulsarDevice(ABC):
         return None
 
     def parse_hidraw_event(self, data: bytes) -> Optional[dict]:
-        """Parse a hidraw event. Return {'dpi': int, 'stage': int} or None."""
+        """Parse an unprompted report from the mouse, or None to ignore it.
+
+        Recognised keys:
+
+          {'dpi': int, 'stage': int}   the DPI changed, and the report said
+                                       what to
+          {'signal_percent': int}      wireless signal quality, 0-100
+          {'dpi_changed': True}        the DPI changed, but the report didn't
+                                       say what to, so the listener has to
+                                       read it back
+          {'profile_changed': True}    likewise for the active profile
+        """
         return None
 
     # ── Profile import / export ─────────────────────────────────────────────

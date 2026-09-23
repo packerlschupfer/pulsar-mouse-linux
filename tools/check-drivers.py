@@ -150,6 +150,19 @@ def check_nordic_dispatch(cls):
     return []
 
 
+def check_nordic_signal_quality(cls):
+    """No Nordic device has ever sent an unprompted signal-quality report.
+
+    A driver that inherits its capabilities picks this up for free; one that
+    builds a fresh DeviceCapabilities silently takes the True default and the
+    GUI then shows a Signal row that can only ever read "--".
+    """
+    if cls.capabilities.reports_signal_quality:
+        return ['declares reports_signal_quality=True, but the family has no '
+                'signal channel']
+    return []
+
+
 def per_driver(classes, check):
     lines = []
     for cls in classes:
@@ -174,6 +187,8 @@ def main() -> int:
         ('USB IDs are unique and have udev rules', check_usb_ids(modules, udev_text)),
         ('Nordic: every DPI in range encodes and reads back', per_driver(nordic, check_nordic_dpi)),
         ('Nordic: every driver can send a command', per_driver(nordic, check_nordic_dispatch)),
+        ('Nordic: no driver claims a signal-quality channel',
+         per_driver(nordic, check_nordic_signal_quality)),
     ]
     for title, problems in results:
         print(f'{"PASS" if not problems else "FAIL"}  {title}')

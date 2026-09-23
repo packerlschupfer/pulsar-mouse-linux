@@ -70,7 +70,7 @@ settings are stored as a `(value, 0x55 - value)` pair, and multi-byte records en
 | `0x04` | poll | battery — response byte 6 = percent (`0x5a` = 90 %), byte 7 = charging flag |
 | `0x07` | write | write `len` bytes at address; `08 07 00 <ah> <al> 02 <val> <0x55-val> …` |
 | `0x08` | read | read `len` bytes (max 10) at address; response echoes addr/len then returns data |
-| `0x0a` | resp | **unsolicited** — always follows a profile switch with payload `04` (the profile count), but also arrives on its own mid-session with payload `0x40`. Never a reply to anything the host sent, so a command must match the reply's command byte rather than taking whatever lands next |
+| `0x0a` | event | **unsolicited** — byte 6 is an event code, not a payload length: `01` when the DPI button is pressed, `04` after a profile switch, `40` for something still unidentified. Never a reply to anything the host sent, so a command must match the reply's command byte rather than taking whatever lands next |
 | `0x0e` | poll | active profile, 0-based |
 | `0x0f` | write | set active profile, 0-based, `len = 1` |
 | `0x12` | poll | firmware version — response `03 05` = mouse v3.05 |
@@ -156,7 +156,7 @@ Two consequences for a driver: the profile-less getters in `PulsarDevice` descri
 whichever profile is loaded (hence the `per_profile_globals` capability flag), and
 simply *reading* the device walks through every profile, so it must put the mouse back
 on the one the user had selected before closing. Fusion switches with command `0x0F` (0-based
-profile number, `len = 1`), gets an `0x0A` reply carrying the profile count (`04`), then
+profile number, `len = 1`), gets an `0x0A` event with code `04`, then
 re-reads the entire map. Command `0x0E` reports the active profile.
 
 Confirmed by watching `0x0000` change across switches — profile 1 was set to 1 kHz,
@@ -203,6 +203,36 @@ above 25600, so the driver follows the same thresholds.
 For `mode = 0, page ≤ 3` this is identical to the single-mode formula `nordic.py`
 already used, so the X2A Wireless is unaffected — devices that only ever use the finest
 granularity declare just that one mode.
+
+## Unprompted reports
+
+Everything above is a reply the host asked for. The mouse also talks on its own,
+on the interrupt IN endpoint of the config interface (the hidraw node whose
+`HID_PHYS` ends `/input1`), in the same 17-byte framing with command `0x0A`:
+
+| Bytes | Seen | Meaning |
+|---|---|---|
+| `08 0a 00 00 00 0a 01 …` | 4 of 4 DPI-button presses, over the cable | the DPI stage changed |
+| `08 0a 00 00 00 0a 04 …` | after every profile switch | the active profile changed |
+| `08 0a 00 00 00 0a 40 …` | spontaneously, mid-session | unidentified; ignored |
+
+Note what the DPI event does *not* contain: any hint of the new value. Unlike the
+Sonix families, which report `dpi` and `stage` outright, this one only says that
+something changed — a driver has to read the stage back with `0x0E` + `0x08`. That
+read claims the config interface, which makes the kernel drop its hidraw node, so a
+listener has to reopen the node rather than treat the first read error as the end.
+
+### There is no signal-quality channel
+
+A tester carried an X2 CrazyLight out of its dongle's range and back with a
+listener running on every node the mouse exposes. The config interface produced
+exactly one report in the whole session, during the idle baseline, and nothing at
+all while the link degraded. Nothing arrives on a timer either. The
+`reports_signal_quality=False` capability exists so the GUI omits a Connection
+Quality row that could only ever read `--`.
+
+Still open: the captures that confirmed the DPI event were taken over the cable.
+Whether the dongle relays it is untested.
 
 ## Confirmed on hardware
 

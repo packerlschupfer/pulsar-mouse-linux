@@ -88,6 +88,9 @@ class PulsarX2CrazyLight(PulsarNordic):
         # captures show profile 1 at 1 kHz, 3 at 4 kHz and 4 at 8 kHz.
         per_profile_globals=True,
         wireless=True,
+        # No signal-quality channel: a tester walking an X2 CrazyLight out of
+        # the dongle's range produced nothing at all on the config interface.
+        reports_signal_quality=False,
         # Both seen in the Fusion captures: Turbo Mode at 0xB5, and Auto
         # Sleep at 0xAD/0xB7 in 10 s units, set anywhere from 10 s to 30 min.
         has_turbo=True,

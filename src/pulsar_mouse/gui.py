@@ -406,7 +406,7 @@ class PulsarMouseApp(Adw.Application):
         # meaningless for a wired connection, so this follows
         # _is_wireless() rather than battery support.
         self._conn_item = None
-        if _is_wireless(device):
+        if _is_wireless(device) and caps.reports_signal_quality:
             conn_item = Dbusmenu.Menuitem.new()
             conn_item.property_set(Dbusmenu.MENUITEM_PROP_LABEL, 'Signal: —')
             try:
@@ -603,33 +603,82 @@ class PulsarMouseApp(Adw.Application):
         device = self._device
         if device is None:
             return
-        path = device.find_hidraw()
-        if not path:
-            return
-        try:
-            fd = os.open(path, os.O_RDONLY)
-        except OSError:
-            return
+        if not device.find_hidraw():
+            return          # this driver reports nothing; no thread needed
         last_signal_update = 0.0
-        try:
-            while True:
-                data = os.read(fd, 256)
-                if not data:
-                    break
-                event = device.parse_hidraw_event(data)
-                if not event:
-                    continue
-                if 'dpi' in event:
-                    GLib.idle_add(self._update_tray_label, event['dpi'], None)
-                elif 'signal_percent' in event:
-                    now = time.monotonic()
-                    if now - last_signal_update >= _SIGNAL_UPDATE_INTERVAL:
-                        last_signal_update = now
-                        GLib.idle_add(self._set_conn_quality_label, event['signal_percent'])
-        except OSError:
-            pass
-        finally:
-            os.close(fd)
+        # The node disappears whenever anything claims that USB interface -
+        # our own battery polls, and the read a 'dpi_changed' event asks for -
+        # so reopen it instead of giving up on the first error.
+        while True:
+            path = device.find_hidraw()
+            if not path:
+                time.sleep(2.0)
+                continue
+            try:
+                fd = os.open(path, os.O_RDONLY)
+            except OSError:
+                time.sleep(2.0)
+                continue
+            try:
+                while True:
+                    data = os.read(fd, 256)
+                    if not data:
+                        break
+                    event = device.parse_hidraw_event(data)
+                    if not event:
+                        continue
+                    if 'dpi' in event:
+                        GLib.idle_add(self._update_tray_label, event['dpi'], None)
+                    elif 'dpi_changed' in event:
+                        self._refresh_dpi_after_event()
+                    elif 'signal_percent' in event:
+                        now = time.monotonic()
+                        if now - last_signal_update >= _SIGNAL_UPDATE_INTERVAL:
+                            last_signal_update = now
+                            GLib.idle_add(self._set_conn_quality_label,
+                                          event['signal_percent'])
+            except OSError:
+                pass        # interface claimed elsewhere; wait and reopen
+            finally:
+                os.close(fd)
+            time.sleep(1.0)
+
+    def _refresh_dpi_after_event(self):
+        """Read the DPI back after the mouse reports its button was pressed.
+
+        Some mice send the new value; the Nordic family only says that
+        something changed, so it has to be read - which claims the USB
+        interface and takes the listener's hidraw node away until it's
+        released, hence the reopen loop in _hidraw_listener().
+        """
+        def _read():
+            device = self._device
+            if device is None:
+                return
+            try:
+                with _USB_LOCK:
+                    device.open()
+                    try:
+                        try:
+                            profile = device.get_active_profile()
+                        except Exception:
+                            profile = 1     # single-profile, or can't be asked
+                        info = device.get_dpi_stages(profile)
+                        stages, active = info['stages'], info['active']
+                        dpi = stages[active - 1][0] if 1 <= active <= len(stages) else None
+                    finally:
+                        device.close()
+            except Exception:
+                return
+            if dpi is None:
+                return
+            GLib.idle_add(self._update_tray_label, dpi, None)
+            window = self._win
+            row = getattr(window, '_home_dpi_row', None) if window else None
+            if row is not None:
+                GLib.idle_add(row.set_subtitle, f'{dpi} DPI')
+
+        threading.Thread(target=_read, daemon=True).start()
 
     def _update_tray_label(self, dpi=None, hz=None, initial=False):
         if not hasattr(self, '_cur_dpi'):
@@ -1102,7 +1151,7 @@ class MainWindow(Adw.ApplicationWindow):
         # charging cable still reports it, so that row follows get_power().
         # (Mirrored in the tray's _build_tray().)
         self._home_signal_row = None
-        if is_wireless:
+        if is_wireless and caps.reports_signal_quality:
             self._home_signal_row = Adw.ActionRow()
             self._home_signal_row.set_title('Connection Quality')
             self._home_signal_row.set_subtitle('—')
@@ -1716,6 +1765,9 @@ X-GNOME-Autostart-enabled=true
         # not find_hidraw, for the same reason as _home_signal_row's
         # construction above: find_hidraw's base-class default makes
         # hasattr() on it true for every driver, wired or wireless.
+        # The row is also absent on a wireless device whose family has no
+        # signal channel at all (capabilities.reports_signal_quality), and
+        # then this thread has nothing to do and exits immediately.
         #
         # This thread owns its fd exclusively, start to finish - opens
         # it, and is the only thing that ever closes it. Shutdown is
@@ -2924,33 +2976,63 @@ class InputTestDialog(Adw.Window):
         device = self._device
         if device is None:
             return
-        path = device.find_hidraw()
-        if not path:
-            return
-        try:
-            fd = os.open(path, os.O_RDONLY)
-        except OSError:
-            return
-        try:
-            while not self._dpi_stop:
-                ready, _w, _x = select.select([fd], [], [], 1.0)
-                if not ready:
-                    continue  # timeout - just a chance to re-check the stop flag
-                data = os.read(fd, 256)
-                if not data:
-                    break
-                event = device.parse_hidraw_event(data)
-                if event and 'dpi' in event:
-                    GLib.idle_add(self._on_dpi_event, event['dpi'], event['stage'])
-        except OSError:
-            pass
-        finally:
-            os.close(fd)
+        if not device.find_hidraw():
+            return          # this driver reports nothing; no thread needed
+        # Reopen rather than give up on the first error, like the tray's
+        # PulsarMouseApp._hidraw_listener: this node goes away whenever
+        # anything claims that USB interface, and on a mouse that only says
+        # "DPI changed" the tray reacts by reading the new value - so the
+        # user pressing DPI once, here, used to kill this dialog's own
+        # listener and silently stop the rest of the test.
+        while not self._dpi_stop:
+            path = device.find_hidraw()
+            if not path:
+                self._sleep_unless_stopped(2.0)
+                continue
+            try:
+                fd = os.open(path, os.O_RDONLY)
+            except OSError:
+                self._sleep_unless_stopped(2.0)
+                continue
+            try:
+                while not self._dpi_stop:
+                    ready, _w, _x = select.select([fd], [], [], 1.0)
+                    if not ready:
+                        continue  # timeout - a chance to re-check the stop flag
+                    data = os.read(fd, 256)
+                    if not data:
+                        break
+                    event = device.parse_hidraw_event(data)
+                    if not event:
+                        continue
+                    if 'dpi' in event:
+                        GLib.idle_add(self._on_dpi_event, event['dpi'], event['stage'])
+                    elif 'dpi_changed' in event:
+                        GLib.idle_add(self._on_dpi_event, None, None)
+            except OSError:
+                pass        # interface claimed elsewhere; wait and reopen
+            finally:
+                os.close(fd)
+            self._sleep_unless_stopped(1.0)
+
+    def _sleep_unless_stopped(self, seconds):
+        """Sleep, but keep _dpi_stop as responsive as select()'s timeout."""
+        deadline = time.monotonic() + seconds
+        while not self._dpi_stop and time.monotonic() < deadline:
+            time.sleep(0.1)
 
     def _on_dpi_event(self, dpi, stage):
         self._active_btn = 'dpi'
         self._drawing.queue_draw()
-        self._log(f'DPI:     Stage {stage} → {dpi} DPI')
+        if dpi is None:
+            # The Nordic family reports only that the button was pressed.
+            # Reading the value back is the tray's job (see
+            # PulsarMouseApp._refresh_dpi_after_event) - doing it from here
+            # would claim the config interface and take this dialog's own
+            # hidraw node away in the middle of a button test.
+            self._log('DPI:     button pressed')
+        else:
+            self._log(f'DPI:     Stage {stage} → {dpi} DPI')
         self._dpi_hide_seq += 1
         seq = self._dpi_hide_seq
         GLib.timeout_add(500, self._clear_dpi, seq)
