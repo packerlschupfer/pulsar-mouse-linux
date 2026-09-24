@@ -90,8 +90,12 @@ BUTTON_ADDRS = {
     'left':    0x60,
     'right':   0x64,
     'wheel':   0x68,
+    # Xlite V3: physical top = 0x70, bottom = 0x6C (andrewrabert FORWARD/BACK).
     'thumb2':  0x6C,   # left side bottom / back (backward)
     'thumb1':  0x70,   # left side top / front (forward)
+    # 0x74-0x7C read off a Pulsar X2A Wireless by @macieqzz.  0x74 is
+    # corroborated independently: a Fusion capture of an X2 CrazyLight has
+    # 02 01 (a DPI-type action) in that slot - different model, same table.
     'dpi':     0x74,   # DPI button
     'thumb4':  0x78,   # right side back (backward)
     'thumb3':  0x7C,   # right side front (forward)
