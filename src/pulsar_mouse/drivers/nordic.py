@@ -328,6 +328,8 @@ class PulsarNordic(PulsarDevice):
 
     def open(self) -> None:
         caps = self.capabilities
+        if self._dev is not None:
+            return          # already open; claiming twice would be EBUSY
         dev = None
         for vid, pid in caps.vid_pid_pairs:
             dev = usb.core.find(idVendor=vid, idProduct=pid)
@@ -343,12 +345,28 @@ class PulsarNordic(PulsarDevice):
             dev.detach_kernel_driver(iface)
         usb.util.claim_interface(dev, iface)
         self._dev = dev
-        self._mem_read_all()
-        if caps.num_profiles > 1:
+        # Everything past the claim has to hand the interface back if it
+        # throws.  A timeout in the initial read used to propagate with the
+        # claim still held and self._dev still set, so every later open()
+        # re-found the device, claimed a second time, and failed with EBUSY
+        # ("Resource busy") for the rest of the process's life - reported
+        # from the GUI as closing the window to tray and reopening it.
+        try:
+            self._mem_read_all()
+            if caps.num_profiles > 1:
+                try:
+                    self._home_profile = self.get_active_profile()
+                except Exception:
+                    self._profile = None
+        except Exception:
+            self._dev = None
+            self._mem = {}
+            usb.util.release_interface(dev, iface)
             try:
-                self._home_profile = self.get_active_profile()
+                dev.attach_kernel_driver(iface)
             except Exception:
-                self._profile = None
+                pass
+            raise
 
     def close(self) -> None:
         if self._dev is None:

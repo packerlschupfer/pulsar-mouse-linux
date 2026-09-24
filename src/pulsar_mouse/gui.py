@@ -40,6 +40,21 @@ def _describe_seconds(seconds: int) -> str:
     return f'{seconds // 60} min' if seconds >= 60 and seconds % 60 == 0 else f'{seconds} sec'
 
 
+def _reports_events(device) -> bool:
+    """Does this driver implement hidraw event reporting at all?
+
+    Asks whether find_hidraw() is overridden, not whether it currently
+    returns a path.  Calling it is the wrong test at startup: claiming the
+    config interface makes the kernel drop its hidraw node, and on the Nordic
+    family that interface is the one carrying the events - so the tray's own
+    first read reliably hides the node for as long as it runs.  A listener
+    that called find_hidraw() once and gave up on None therefore lost the
+    race and never started, which showed up as DPI-button presses doing
+    nothing until the window was reloaded by hand.
+    """
+    return type(device).find_hidraw is not PulsarDevice.find_hidraw
+
+
 def _is_wireless(device) -> bool:
     """Whether the device talks to the host over RF.
 
@@ -420,14 +435,16 @@ class PulsarMouseApp(Adw.Application):
         sep1.property_set(Dbusmenu.MENUITEM_PROP_TYPE, Dbusmenu.CLIENT_TYPES_SEPARATOR)
         root.child_append(sep1)
 
+        # Populated from the device in _rebuild_dpi_menu(), once the first
+        # read comes back.  It used to be a fixed 400/800/1200/1600/3200 list
+        # against profile 1: on a per-profile mouse that both named the wrong
+        # profile and offered DPI values the profile didn't have, and picking
+        # one of those overwrote a configured stage (see _select_dpi_stage).
         dpi_root = Dbusmenu.Menuitem.new()
-        dpi_root.property_set(Dbusmenu.MENUITEM_PROP_LABEL, 'Quick DPI (profile 1)')
-        for dv in (400, 800, 1200, 1600, 3200):
-            sub = Dbusmenu.Menuitem.new()
-            sub.property_set(Dbusmenu.MENUITEM_PROP_LABEL, f'{dv} DPI')
-            sub.connect('item-activated', lambda _i, _t, d=dv: self._set_dpi(d))
-            dpi_root.child_append(sub)
+        dpi_root.property_set(Dbusmenu.MENUITEM_PROP_LABEL, 'Quick DPI')
         root.child_append(dpi_root)
+        self._dpi_root = dpi_root
+        self._dpi_items = []
 
         poll_root = Dbusmenu.Menuitem.new()
         poll_root.property_set(Dbusmenu.MENUITEM_PROP_LABEL, 'Polling Rate')
@@ -491,7 +508,14 @@ class PulsarMouseApp(Adw.Application):
                     # this thread never lets go of.
                     try:
                         hz = device.get_polling_rate()
-                        dpi_info = device.get_dpi_stages(profile=1)
+                        # The active profile, not profile 1: on a mouse whose
+                        # stages are per-profile, reading 1 while the user sits
+                        # on 2 reports a DPI they aren't using.
+                        try:
+                            profile = device.get_active_profile()
+                        except Exception:
+                            profile = 1     # single-profile, or can't be asked
+                        dpi_info = device.get_dpi_stages(profile)
                         pwr = None
                         if hasattr(device, 'get_power'):
                             # Guarded separately from hz/dpi_info above - a
@@ -507,6 +531,8 @@ class PulsarMouseApp(Adw.Application):
                         device.close()
                 dpi = dpi_info['stages'][dpi_info['active'] - 1][0]
                 GLib.idle_add(self._update_tray_label, dpi, hz, True)
+                GLib.idle_add(self._rebuild_dpi_menu, dpi_info['stages'],
+                              dpi_info['active'], profile)
                 if pwr is not None:
                     GLib.idle_add(self._set_battery_label, pwr)
             except Exception:
@@ -603,7 +629,7 @@ class PulsarMouseApp(Adw.Application):
         device = self._device
         if device is None:
             return
-        if not device.find_hidraw():
+        if not _reports_events(device):
             return          # this driver reports nothing; no thread needed
         last_signal_update = 0.0
         # The node disappears whenever anything claims that USB interface -
@@ -629,8 +655,8 @@ class PulsarMouseApp(Adw.Application):
                         continue
                     if 'dpi' in event:
                         GLib.idle_add(self._update_tray_label, event['dpi'], None)
-                    elif 'dpi_changed' in event:
-                        self._refresh_dpi_after_event()
+                    elif 'dpi_changed' in event or 'profile_changed' in event:
+                        self._refresh_after_device_event()
                     elif 'signal_percent' in event:
                         now = time.monotonic()
                         if now - last_signal_update >= _SIGNAL_UPDATE_INTERVAL:
@@ -643,13 +669,18 @@ class PulsarMouseApp(Adw.Application):
                 os.close(fd)
             time.sleep(1.0)
 
-    def _refresh_dpi_after_event(self):
-        """Read the DPI back after the mouse reports its button was pressed.
+    def _refresh_after_device_event(self):
+        """Re-read what the mouse just changed by itself.
 
-        Some mice send the new value; the Nordic family only says that
-        something changed, so it has to be read - which claims the USB
-        interface and takes the listener's hidraw node away until it's
+        Some mice send the new DPI value outright; the Nordic family only
+        says that something changed, so it has to be read - which claims the
+        USB interface and takes the listener's hidraw node away until it's
         released, hence the reopen loop in _hidraw_listener().
+
+        Handles the profile-changed event too, and for the same reason: the
+        stages, the active one and the profile number all come from the same
+        read, so a button press on the mouse updates the tray label, the
+        Quick DPI submenu and the Home page together.
         """
         def _read():
             device = self._device
@@ -670,6 +701,7 @@ class PulsarMouseApp(Adw.Application):
                         device.close()
             except Exception:
                 return
+            GLib.idle_add(self._rebuild_dpi_menu, stages, active, profile)
             if dpi is None:
                 return
             GLib.idle_add(self._update_tray_label, dpi, None)
@@ -716,7 +748,39 @@ class PulsarMouseApp(Adw.Application):
             self._sni.set_label('', '')
         return False
 
-    def _set_dpi(self, dpi_val: int):
+    def _rebuild_dpi_menu(self, stages, active, profile):
+        """Rebuild Quick DPI from the stages this profile actually has.
+
+        Radio items, one per configured stage, so the submenu also shows
+        which stage is live.  Selecting one only moves the active stage -
+        it never writes a DPI value, which is what made the old fixed list
+        destructive: a value the profile didn't have was written over
+        whichever stage happened to be active.
+        """
+        root = getattr(self, '_dpi_root', None)
+        if root is None:
+            return
+        for item in self._dpi_items:
+            root.child_delete(item)
+        self._dpi_items = []
+        root.property_set(Dbusmenu.MENUITEM_PROP_LABEL,
+                          f'Quick DPI (profile {profile})')
+        for i, (dpi_x, _dpi_y) in enumerate(stages, start=1):
+            sub = Dbusmenu.Menuitem.new()
+            sub.property_set(Dbusmenu.MENUITEM_PROP_LABEL, f'{dpi_x} DPI')
+            sub.property_set(Dbusmenu.MENUITEM_PROP_TOGGLE_TYPE,
+                             Dbusmenu.MENUITEM_TOGGLE_RADIO)
+            sub.property_set_int(
+                Dbusmenu.MENUITEM_PROP_TOGGLE_STATE,
+                Dbusmenu.MENUITEM_TOGGLE_STATE_CHECKED if i == active
+                else Dbusmenu.MENUITEM_TOGGLE_STATE_UNCHECKED)
+            sub.connect('item-activated',
+                        lambda _i, _t, st=i, pr=profile, d=dpi_x:
+                        self._select_dpi_stage(st, pr, d))
+            root.child_append(sub)
+            self._dpi_items.append(sub)
+
+    def _select_dpi_stage(self, stage: int, profile: int, dpi: int):
         device = self._device
 
         def _write():
@@ -725,26 +789,26 @@ class PulsarMouseApp(Adw.Application):
             try:
                 with _USB_LOCK:
                     device.open()
-                    # device.close() must run even if a getter/setter above
-                    # raises - see _read_initial_state's comment on this
-                    # same pattern; without it this leaks the device handle
-                    # and every later _open_dev() call fails "Resource busy".
+                    # device.close() must run even if the setter raises -
+                    # see _read_initial_state's comment on this same
+                    # pattern; without it this leaks the device handle and
+                    # every later _open_dev() call fails "Resource busy".
                     try:
-                        info = device.get_dpi_stages(profile=1)
-                        for i, (dx, _dy) in enumerate(info['stages']):
-                            if dx == dpi_val:
-                                device.set_active_dpi_stage(i + 1, profile=1)
-                                break
-                        else:
-                            stages = [dx for dx, _dy in info['stages']]
-                            stages[info['active'] - 1] = dpi_val
-                            device.set_dpi_stages(stages, info['active'], profile=1)
+                        device.set_active_dpi_stage(stage, profile)
                     finally:
                         device.close()
-                GLib.idle_add(self._update_tray_label, dpi_val, None)
             except Exception:
-                pass
+                return
+            GLib.idle_add(self._update_tray_label, dpi, None)
+            GLib.idle_add(self._mark_active_dpi_item, stage)
         threading.Thread(target=_write, daemon=True).start()
+
+    def _mark_active_dpi_item(self, stage):
+        for i, item in enumerate(self._dpi_items, start=1):
+            item.property_set_int(
+                Dbusmenu.MENUITEM_PROP_TOGGLE_STATE,
+                Dbusmenu.MENUITEM_TOGGLE_STATE_CHECKED if i == stage
+                else Dbusmenu.MENUITEM_TOGGLE_STATE_UNCHECKED)
 
     def _set_poll(self, hz: int):
         device = self._device
@@ -1781,8 +1845,16 @@ X-GNOME-Autostart-enabled=true
         device = self._device
         if device is None or self._home_signal_row is None:
             return
-        path = device.find_hidraw()
-        if not path:
+        if not _reports_events(device):
+            return
+        # Waits for the node rather than giving up if it isn't there yet -
+        # see _reports_events() for what takes it away at startup.
+        path = None
+        while not self._home_hidraw_stop and path is None:
+            path = device.find_hidraw()
+            if path is None:
+                time.sleep(1.0)
+        if path is None:
             return
         try:
             fd = os.open(path, os.O_RDONLY)
@@ -2976,7 +3048,7 @@ class InputTestDialog(Adw.Window):
         device = self._device
         if device is None:
             return
-        if not device.find_hidraw():
+        if not _reports_events(device):
             return          # this driver reports nothing; no thread needed
         # Reopen rather than give up on the first error, like the tray's
         # PulsarMouseApp._hidraw_listener: this node goes away whenever
@@ -3027,7 +3099,7 @@ class InputTestDialog(Adw.Window):
         if dpi is None:
             # The Nordic family reports only that the button was pressed.
             # Reading the value back is the tray's job (see
-            # PulsarMouseApp._refresh_dpi_after_event) - doing it from here
+            # PulsarMouseApp._refresh_after_device_event) - doing it from here
             # would claim the config interface and take this dialog's own
             # hidraw node away in the middle of a button test.
             self._log('DPI:     button pressed')
