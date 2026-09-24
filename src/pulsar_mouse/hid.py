@@ -25,6 +25,13 @@ MOUSE_ACTIONS = {
 }
 MOUSE_ACTION_NAMES = {v: k for k, v in MOUSE_ACTIONS.items()}
 
+MOUSE_ACTION_ALIASES = {
+    'thumb1': 'forward',
+    'thumb2': 'backward',
+    'thumb3': 'forward',
+    'thumb4': 'backward',
+}
+
 # ── DPI actions (type 0x09) ─────────────────────────────────────────────────
 
 DPI_ACTIONS = {'dpi+': 0x01, 'dpi-': 0x02, 'dpiloop': 0x03}
@@ -144,6 +151,7 @@ def parse_button_function(spec: str) -> tuple[int, int, int]:
       disabled
     """
     s = spec.strip().lower()
+    s = MOUSE_ACTION_ALIASES.get(s, s)
 
     if s == 'disabled':
         return (BTN_TYPE_DISABLED, 0x00, 0x00)
