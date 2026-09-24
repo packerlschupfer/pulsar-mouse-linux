@@ -656,7 +656,8 @@ class PulsarMouseApp(Adw.Application):
                     if 'dpi' in event:
                         GLib.idle_add(self._update_tray_label, event['dpi'], None)
                     elif 'dpi_changed' in event or 'profile_changed' in event:
-                        self._refresh_after_device_event()
+                        self._refresh_after_device_event(
+                            profile_changed='profile_changed' in event)
                     elif 'signal_percent' in event:
                         now = time.monotonic()
                         if now - last_signal_update >= _SIGNAL_UPDATE_INTERVAL:
@@ -669,7 +670,7 @@ class PulsarMouseApp(Adw.Application):
                 os.close(fd)
             time.sleep(1.0)
 
-    def _refresh_after_device_event(self):
+    def _refresh_after_device_event(self, profile_changed=False):
         """Re-read what the mouse just changed by itself.
 
         Some mice send the new DPI value outright; the Nordic family only
@@ -681,6 +682,11 @@ class PulsarMouseApp(Adw.Application):
         stages, the active one and the profile number all come from the same
         read, so a button press on the mouse updates the tray label, the
         Quick DPI submenu and the Home page together.
+
+        What the open window does with it depends on which event arrived.  A
+        DPI press moves one row (_set_active_stage_from_device); a profile
+        switch invalidates the whole page, so it only gets announced
+        (_announce_profile_change) - see those two for the reasoning.
         """
         def _read():
             device = self._device
@@ -702,15 +708,38 @@ class PulsarMouseApp(Adw.Application):
             except Exception:
                 return
             GLib.idle_add(self._rebuild_dpi_menu, stages, active, profile)
+            # Everything touching the window goes through one idle_add: this
+            # runs on a worker thread, and whether a window is still live is
+            # a GTK question (get_windows()), not an attribute read.
+            GLib.idle_add(self._apply_event_to_window, profile, active,
+                          dpi, profile_changed)
             if dpi is None:
                 return
             GLib.idle_add(self._update_tray_label, dpi, None)
-            window = self._win
-            row = getattr(window, '_home_dpi_row', None) if window else None
-            if row is not None:
-                GLib.idle_add(row.set_subtitle, f'{dpi} DPI')
 
         threading.Thread(target=_read, daemon=True).start()
+
+    def _apply_event_to_window(self, profile, active, dpi, profile_changed):
+        """Hand a device-initiated change to the open window, if there is one.
+
+        Runs on the main thread.  get_windows() rather than the window's own
+        in_destruction()/get_visible() for the reason _on_activate() gives:
+        those read False on an already-closed window, and the closed-to-tray
+        case is exactly the one this has to get right.
+        """
+        if not self.get_windows():
+            return False
+        window = self._win
+        if window is None:
+            return False
+        if profile_changed:
+            window._announce_profile_change(profile)
+        else:
+            window._set_active_stage_from_device(profile, active)
+        row = getattr(window, '_home_dpi_row', None)
+        if row is not None and dpi is not None:
+            row.set_subtitle(f'{dpi} DPI')
+        return False
 
     def _update_tray_label(self, dpi=None, hz=None, initial=False):
         if not hasattr(self, '_cur_dpi'):
@@ -1067,6 +1096,7 @@ class MainWindow(Adw.ApplicationWindow):
         # visible), same as the single-page layout this replaced.
         self._banner = Adw.Banner()
         self._banner.set_revealed(False)
+        self._banner.connect('button-clicked', self._on_banner_reload)
         content_box.append(self._banner)
 
         self._view_stack = Adw.ViewStack()
@@ -2554,8 +2584,54 @@ X-GNOME-Autostart-enabled=true
                 t, a1, a2 = bind
                 self._btn_rows[btn_id].set_subtitle(self._device.describe_button(t, a1, a2))
 
+    def _set_active_stage_from_device(self, profile, active):
+        """Follow a DPI-button press, for that one field only.
+
+        The event says exactly one thing changed - which stage is selected -
+        so only that row moves.  Repopulating the page would discard whatever
+        the user is part-way through editing, to no purpose: nothing else on
+        it is affected by the press.
+
+        Skipped unless the page is showing the profile the press applies to.
+        Selecting a profile here switches the mouse to it, so the two
+        normally agree; they don't between a profile switch made on the mouse
+        and the reload that follows it, and moving this row then would show a
+        stage belonging to a profile the user isn't looking at.
+        """
+        row = self._active_stage_row
+        if row is None or profile != self._profile:
+            return
+        self._building = True
+        try:
+            row.set_selected(max(0, active - 1))
+        finally:
+            self._building = False
+
+    def _announce_profile_change(self, profile):
+        """Say the mouse changed profile; don't act on it unasked.
+
+        A profile switch invalidates every value on every page, and reloading
+        silently would throw away unsaved edits.  Apply targets the profile
+        this window is showing (see _do_apply), so a stale page misleads
+        rather than destroys - not worth overriding the user's work for.
+        Their call, via the banner's Reload.
+        """
+        self._banner.set_title(f'The mouse switched to profile {profile} — '
+                               'this window still shows profile '
+                               f'{self._profile}')
+        self._banner.set_button_label('Reload')
+        self._banner.set_revealed(True)
+
+    def _on_banner_reload(self, _banner):
+        self._banner.set_revealed(False)
+        self._banner.set_button_label('')
+        self._reload()
+
     def _show_error(self, msg: str):
         self._banner.set_title(msg)
+        # No Reload action on an error: the banner is shared, and a stale
+        # button from a profile-change notice would sit on an unrelated error.
+        self._banner.set_button_label('')
         self._banner.set_revealed(True)
 
     def _show_toast(self, msg: str):
