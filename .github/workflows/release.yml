@@ -35,7 +35,7 @@ jobs:
 
           # Package tree
           mkdir -p "${DIR}/DEBIAN"
-          mkdir -p "${DIR}/usr/local/bin"
+          mkdir -p "${DIR}/usr/bin"
           mkdir -p "${DIR}/usr/share/applications"
           mkdir -p "${DIR}/etc/udev/rules.d"
 
@@ -52,20 +52,20 @@ jobs:
           done
 
           # CLI entry point
-          cat > "${DIR}/usr/local/bin/pulsar-mouse" << 'SCRIPT'
+          cat > "${DIR}/usr/bin/pulsar-mouse" << 'SCRIPT'
           #!/usr/bin/env python3
           from pulsar_mouse.cli import main
           main()
           SCRIPT
-          chmod 755 "${DIR}/usr/local/bin/pulsar-mouse"
+          chmod 755 "${DIR}/usr/bin/pulsar-mouse"
 
           # GUI entry point
-          cat > "${DIR}/usr/local/bin/pulsar-mouse-gui" << 'SCRIPT'
+          cat > "${DIR}/usr/bin/pulsar-mouse-gui" << 'SCRIPT'
           #!/usr/bin/env python3
           from pulsar_mouse.gui import main
           main()
           SCRIPT
-          chmod 755 "${DIR}/usr/local/bin/pulsar-mouse-gui"
+          chmod 755 "${DIR}/usr/bin/pulsar-mouse-gui"
 
           # udev rules
           install -m 644 udev/50-pulsar-mouse.rules \
@@ -181,11 +181,11 @@ jobs:
             install -m 644 "\$f" \${SITE}/drivers/
           done
 
-          install -d %{buildroot}/usr/local/bin
-          printf '#!/usr/bin/env python3\nfrom pulsar_mouse.cli import main\nmain()\n' > %{buildroot}/usr/local/bin/pulsar-mouse
-          chmod 755 %{buildroot}/usr/local/bin/pulsar-mouse
-          printf '#!/usr/bin/env python3\nfrom pulsar_mouse.gui import main\nmain()\n' > %{buildroot}/usr/local/bin/pulsar-mouse-gui
-          chmod 755 %{buildroot}/usr/local/bin/pulsar-mouse-gui
+          install -d %{buildroot}/usr/bin
+          printf '#!/usr/bin/env python3\nfrom pulsar_mouse.cli import main\nmain()\n' > %{buildroot}/usr/bin/pulsar-mouse
+          chmod 755 %{buildroot}/usr/bin/pulsar-mouse
+          printf '#!/usr/bin/env python3\nfrom pulsar_mouse.gui import main\nmain()\n' > %{buildroot}/usr/bin/pulsar-mouse-gui
+          chmod 755 %{buildroot}/usr/bin/pulsar-mouse-gui
 
           install -d %{buildroot}/etc/udev/rules.d
           install -m 644 ${SRC}/udev/50-pulsar-mouse.rules %{buildroot}/etc/udev/rules.d/
@@ -197,8 +197,8 @@ jobs:
           install -m 644 ${SRC}/data/pulsar-mouse.svg %{buildroot}/usr/share/icons/hicolor/scalable/apps/
 
           %files
-          /usr/local/bin/pulsar-mouse
-          /usr/local/bin/pulsar-mouse-gui
+          /usr/bin/pulsar-mouse
+          /usr/bin/pulsar-mouse-gui
           %{python3_sitelib}/pulsar_mouse/
           /etc/udev/rules.d/50-pulsar-mouse.rules
           /usr/share/applications/pulsar-mouse.desktop
