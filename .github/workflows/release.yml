@@ -103,6 +103,17 @@ jobs:
           chmod 755 "${DIR}/DEBIAN/postinst"
 
           fakeroot dpkg-deb --build "${DIR}"
+
+          # Same guard as the .rpm build: assert the layout rather than trust it.
+          dpkg-deb -c "${DIR}.deb" | awk '{print $NF}' | sed 's|^\.||' > /tmp/deb-files.txt
+          grep -q '^/usr/bin/pulsar-mouse$' /tmp/deb-files.txt \
+            || { echo "FAIL: /usr/bin/pulsar-mouse missing"; exit 1; }
+          grep -q '^/usr/lib/python3/dist-packages/pulsar_mouse/__init__\.py$' /tmp/deb-files.txt \
+            || { echo "FAIL: pulsar_mouse is not in dist-packages"; exit 1; }
+          grep -q '/usr/local/' /tmp/deb-files.txt \
+            && { echo "FAIL: packages must not install into /usr/local"; exit 1; }
+          echo "deb layout OK"
+
           echo "DEB_PATH=${DIR}.deb" >> "$GITHUB_ENV"
 
       - name: Stash .deb
@@ -143,7 +154,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Install build tools
-        run: dnf install -y rpm-build python3-rpm-macros
+        run: dnf install -y rpm-build python3-rpm-macros python3-devel
 
       - name: Set version from tag
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
@@ -164,7 +175,15 @@ jobs:
           Summary:        Linux configuration tool for Pulsar gaming mice
           License:        MIT
           BuildArch:      noarch
+          BuildRequires:  python3-devel
           Requires:       python3, python3-pyusb, python3-gobject, gtk4, libadwaita
+
+          # Every .rpm up to 0.1.10 shipped the Python package in /pulsar_mouse
+          # at the filesystem root, because this macro expanded to nothing and
+          # nobody noticed - the entry points could not import the package they
+          # were installed alongside.  Define it ourselves if the build root
+          # hasn't.
+          %{!?python3_sitelib: %global python3_sitelib %(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')}
 
           %description
           Plugin-based tool providing CLI and GTK4/libadwaita GUI for
@@ -211,6 +230,20 @@ jobs:
 
           rpmbuild --define "_topdir ${TOPDIR}" -bb "${TOPDIR}/SPECS/${PKG}.spec"
           cp "${TOPDIR}"/RPMS/noarch/*.rpm .
+
+          # Check what was actually built.  Both of these shipped broken for
+          # several releases: the package installed at / because a macro was
+          # empty, and the entry points installed into /usr/local/bin.
+          RPM_FILE=$(ls *.rpm)
+          rpm -qlp "$RPM_FILE" > /tmp/rpm-files.txt
+          cat /tmp/rpm-files.txt
+          grep -qE '/(site|dist)-packages/pulsar_mouse/__init__\.py$' /tmp/rpm-files.txt \
+            || { echo "FAIL: pulsar_mouse is not in site-packages"; exit 1; }
+          grep -q '^/usr/bin/pulsar-mouse$' /tmp/rpm-files.txt \
+            || { echo "FAIL: /usr/bin/pulsar-mouse missing"; exit 1; }
+          grep -q '/usr/local/' /tmp/rpm-files.txt \
+            && { echo "FAIL: packages must not install into /usr/local"; exit 1; }
+          echo "rpm layout OK"
 
       - name: Stash .rpm
         uses: actions/upload-artifact@v4
