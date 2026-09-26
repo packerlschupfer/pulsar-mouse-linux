@@ -90,6 +90,24 @@ _USB_LOCK = threading.Lock()
 # Home page and the tray throttle down to this).
 _SIGNAL_UPDATE_INTERVAL = 20.0
 
+# How long to let device-initiated events settle before reading the value
+# back.  Reading claims the config interface, and on the Nordic family that
+# is the interface the events arrive on - so the read blinds the listener for
+# as long as it takes the kernel to give the hidraw node back.  Reading once
+# per press meant a second press inside that window was never seen at all:
+# two quick presses from stage 1 left the tray reporting stage 2 while the
+# mouse sat on 3.  Waiting for the burst to end keeps the node alive for
+# every press in it and then reads once, which is also fewer USB round-trips
+# than one read per press.  Long enough for a double-tap, short enough that
+# a single press still feels immediate.
+_EVENT_COALESCE_MS = 300
+
+# How long the event listener waits before looking for its hidraw node
+# again.  It is gone for as long as something holds the config interface, so
+# this is the tail of the window in which a press can still be missed - keep
+# it short, since finding the node is a couple of cheap sysfs reads.
+_NODE_WAIT = 0.3
+
 
 def _connection_quality_label(pct):
     # Bands are this app's own estimate, not confirmed against Fusion's
@@ -346,6 +364,10 @@ class PulsarMouseApp(Adw.Application):
         # file write from whatever's most recently seen, possibly None if
         # no event has arrived yet this session.
         self._last_signal_percent = None
+        # Debounce state for device-initiated events - see
+        # _schedule_event_refresh() and _EVENT_COALESCE_MS.
+        self._event_refresh_id = 0
+        self._event_pending_profile_change = False
         self._device = None  # PulsarDevice instance
 
     def _find_or_create_device(self) -> PulsarDevice | None:
@@ -638,12 +660,12 @@ class PulsarMouseApp(Adw.Application):
         while True:
             path = device.find_hidraw()
             if not path:
-                time.sleep(2.0)
+                time.sleep(_NODE_WAIT)
                 continue
             try:
                 fd = os.open(path, os.O_RDONLY)
             except OSError:
-                time.sleep(2.0)
+                time.sleep(_NODE_WAIT)
                 continue
             try:
                 while True:
@@ -656,8 +678,10 @@ class PulsarMouseApp(Adw.Application):
                     if 'dpi' in event:
                         GLib.idle_add(self._update_tray_label, event['dpi'], None)
                     elif 'dpi_changed' in event or 'profile_changed' in event:
-                        self._refresh_after_device_event(
-                            profile_changed='profile_changed' in event)
+                        # Deliberately not read here - see
+                        # _schedule_event_refresh().
+                        GLib.idle_add(self._schedule_event_refresh,
+                                      'profile_changed' in event)
                     elif 'signal_percent' in event:
                         now = time.monotonic()
                         if now - last_signal_update >= _SIGNAL_UPDATE_INTERVAL:
@@ -668,7 +692,30 @@ class PulsarMouseApp(Adw.Application):
                 pass        # interface claimed elsewhere; wait and reopen
             finally:
                 os.close(fd)
-            time.sleep(1.0)
+            time.sleep(_NODE_WAIT)
+
+    def _schedule_event_refresh(self, profile_changed=False):
+        """Coalesce device-initiated events into one read once they stop.
+
+        Every event restarts the timer, so a burst of DPI presses produces a
+        single read after the last one - which is both correct (the read sees
+        where the mouse actually ended up) and what keeps the burst visible
+        at all, since the read is what takes the listener's node away.
+        """
+        if self._event_refresh_id:
+            GLib.source_remove(self._event_refresh_id)
+        # Sticky: a profile change anywhere in the burst is a profile change.
+        self._event_pending_profile_change |= bool(profile_changed)
+        self._event_refresh_id = GLib.timeout_add(_EVENT_COALESCE_MS,
+                                                  self._fire_event_refresh)
+        return False
+
+    def _fire_event_refresh(self):
+        self._event_refresh_id = 0
+        profile_changed = self._event_pending_profile_change
+        self._event_pending_profile_change = False
+        self._refresh_after_device_event(profile_changed=profile_changed)
+        return False
 
     def _refresh_after_device_event(self, profile_changed=False):
         """Re-read what the mouse just changed by itself.
@@ -830,6 +877,11 @@ class PulsarMouseApp(Adw.Application):
                 return
             GLib.idle_add(self._update_tray_label, dpi, None)
             GLib.idle_add(self._mark_active_dpi_item, stage)
+            # The window has to hear about this too.  Nothing reports it
+            # otherwise: the mouse sends its event when its own button is
+            # pressed, not when the host writes the stage.
+            GLib.idle_add(self._apply_event_to_window, profile, stage, dpi,
+                          False)
         threading.Thread(target=_write, daemon=True).start()
 
     def _mark_active_dpi_item(self, stage):
