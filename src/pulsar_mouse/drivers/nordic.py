@@ -36,13 +36,21 @@ Status: UNTESTED — protocol assumed compatible with X2A Wireless based on
 
 import ctypes
 import glob
+import os
+import select
 import struct
+import time
 from typing import Optional
 
 import usb.core
 import usb.util
 
 from pulsar_mouse.base import PulsarDevice, DeviceCapabilities
+
+# Every configuration report, in both directions, carries this HID report
+# ID.  hidraw wants it as the first byte of a write, and it is how a reply
+# is told apart from the mouse input sharing this interface.
+REPORT_ID = 0x08
 
 # ── Commands ─────────────────────────────────────────────────────────────────
 
@@ -330,7 +338,8 @@ class PulsarNordic(PulsarDevice):
     _DPI_MODES: tuple = DPI_MODES_SINGLE    # see the DPI encoding notes
 
     def __init__(self):
-        self._dev = None
+        self._dev = None        # pyusb handle, only on the fallback path
+        self._fd = None         # hidraw fd, the path this normally takes
         self._mem = {}
         self._profile = None   # active profile, 1-based; None until read
         self._home_profile = None    # the profile to leave the mouse on
@@ -339,8 +348,40 @@ class PulsarNordic(PulsarDevice):
 
     def open(self) -> None:
         caps = self.capabilities
-        if self._dev is not None:
+        if self._dev is not None or self._fd is not None:
             return          # already open; claiming twice would be EBUSY
+
+        # hidraw first, because claiming this interface over libusb means
+        # detaching the kernel's HID driver from it - and on these mice
+        # interface 1 is not a configuration-only interface.  Its report
+        # descriptor carries Consumer and Generic Desktop usages including
+        # the wheel, at a 49-byte packet and 8 kHz: it is the mouse's real
+        # input path, with interface 0 as the boot-compatible fallback.  Every
+        # battery poll used to pull the kernel driver off it and hand it back
+        # a moment later, which a game reading raw input sees as the wheel
+        # dropping out and returning (issue #13, reported as the camera
+        # snapping around in GTA 5 whenever the wheel moved).
+        #
+        # Through hidraw nothing is detached: the kernel keeps driving the
+        # mouse while we talk to it.  Interface 1 has no OUT endpoint, so a
+        # write here becomes the same SET_REPORT control transfer libusb was
+        # sending by hand.
+        path = self.find_hidraw()
+        if path:
+            try:
+                self._fd = os.open(path, os.O_RDWR)
+            except OSError:
+                self._fd = None     # no permission, say; fall through
+            else:
+                try:
+                    self._after_open()
+                except Exception:
+                    os.close(self._fd)
+                    self._fd = None
+                    self._mem = {}
+                    raise
+                return
+
         dev = None
         for vid, pid in caps.vid_pid_pairs:
             dev = usb.core.find(idVendor=vid, idProduct=pid)
@@ -363,12 +404,7 @@ class PulsarNordic(PulsarDevice):
         # ("Resource busy") for the rest of the process's life - reported
         # from the GUI as closing the window to tray and reopening it.
         try:
-            self._mem_read_all()
-            if caps.num_profiles > 1:
-                try:
-                    self._home_profile = self.get_active_profile()
-                except Exception:
-                    self._profile = None
+            self._after_open()
         except Exception:
             self._dev = None
             self._mem = {}
@@ -379,8 +415,17 @@ class PulsarNordic(PulsarDevice):
                 pass
             raise
 
+    def _after_open(self) -> None:
+        """Read the memory map and note which profile the user was on."""
+        self._mem_read_all()
+        if self.capabilities.num_profiles > 1:
+            try:
+                self._home_profile = self.get_active_profile()
+            except Exception:
+                self._profile = None
+
     def close(self) -> None:
-        if self._dev is None:
+        if self._dev is None and self._fd is None:
             return
         # Reading or editing another profile has to switch the mouse to it,
         # because the memory map is whichever one is loaded.  Undo those
@@ -393,12 +438,16 @@ class PulsarNordic(PulsarDevice):
                 self._drain()
             except Exception:
                 pass
-        iface = self.capabilities.interface_num
-        usb.util.release_interface(self._dev, iface)
-        try:
-            self._dev.attach_kernel_driver(iface)
-        except Exception:
-            pass
+        if self._fd is not None:
+            os.close(self._fd)      # nothing was detached, nothing to restore
+            self._fd = None
+        else:
+            iface = self.capabilities.interface_num
+            usb.util.release_interface(self._dev, iface)
+            try:
+                self._dev.attach_kernel_driver(iface)
+            except Exception:
+                pass
         self._dev = None
         self._mem = {}
         self._profile = None
@@ -412,7 +461,7 @@ class PulsarNordic(PulsarDevice):
 
     def _build_packet(self, command, **kwargs):
         pkt = [0] * 16
-        pkt[0] = 0x08  # report ID
+        pkt[0] = REPORT_ID
         pkt[1] = command
         for key, val in kwargs.items():
             idx = int(key.replace('b', ''))
@@ -421,12 +470,35 @@ class PulsarNordic(PulsarDevice):
         return bytes(pkt)
 
     def _send(self, packet):
+        if self._fd is not None:
+            # packet[0] is already the report ID (0x08), which is what hidraw
+            # wants at the front of an output report.
+            os.write(self._fd, packet)
+            return
         iface = self.capabilities.interface_num
         self._dev.ctrl_transfer(0x21, 0x09, 0x0208, iface, packet)
 
-    def _recv(self):
-        return bytes(self._dev.read(self._ENDPOINT_IN,
-                                    self.capabilities.report_size, timeout=2000))
+    def _recv(self, timeout_ms: int = 2000):
+        if self._fd is None:
+            return bytes(self._dev.read(self._ENDPOINT_IN,
+                                        self.capabilities.report_size,
+                                        timeout=timeout_ms))
+        # This interface carries the mouse's own input as well as our
+        # replies, so movement and button reports arrive here too.  Skip
+        # anything that isn't a configuration report rather than handing a
+        # command someone's mouse movement as its answer.
+        size = self.capabilities.report_size
+        deadline = time.monotonic() + timeout_ms / 1000
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise usb.core.USBTimeoutError('hidraw read timed out', None, None)
+            ready, _w, _x = select.select([self._fd], [], [], remaining)
+            if not ready:
+                continue
+            data = os.read(self._fd, 64)
+            if len(data) == size and data[0] == REPORT_ID:
+                return bytes(data)
 
     # Unsolicited reports do arrive: 0x0A follows every profile switch, and
     # also turns up on its own mid-session.  Taking whatever lands next would
@@ -452,8 +524,7 @@ class PulsarNordic(PulsarDevice):
         """
         while True:
             try:
-                self._dev.read(self._ENDPOINT_IN,
-                               self.capabilities.report_size, timeout=50)
+                self._recv(timeout_ms=50)
             except Exception:
                 return
 
