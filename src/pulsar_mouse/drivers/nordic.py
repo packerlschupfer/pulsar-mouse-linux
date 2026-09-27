@@ -669,14 +669,13 @@ class PulsarNordic(PulsarDevice):
         if not 1 <= active <= len(stages):
             raise ValueError(f"Active stage must be 1–{len(stages)}")
 
-        # Order matters, and it used to be the other way round.  Writing the
-        # active stage is what makes the mouse load a stage into the sensor,
-        # so doing it first and the values second left the sensor running on
-        # whatever the stage held *before* the write: the stored bytes changed
-        # and the pointer didn't, which is what @Wyatt-Robinson saw on the
-        # Noctua (issue #12) - every write shape stuck, none of them took
-        # effect.  Values first, then the count, then the active stage last so
-        # the mouse reloads from what was just written.
+        # Write stage count
+        self._write_value(ADDR_DPI_STAGE_COUNT, len(stages))
+
+        # Write active stage (stored 0-based)
+        self._write_value(ADDR_ACTIVE_DPI_STAGE, active - 1)
+
+        # Write each DPI stage
         for i, dpi in enumerate(stages):
             if not caps.dpi_min <= dpi <= caps.dpi_max:
                 raise ValueError(f"DPI {dpi} out of range {caps.dpi_min}–{caps.dpi_max}")
@@ -688,9 +687,6 @@ class PulsarNordic(PulsarDevice):
                 base + 2: raw[2],
                 base + 3: self._checksum(*raw),
             })
-
-        self._write_value(ADDR_DPI_STAGE_COUNT, len(stages))
-        self._write_value(ADDR_ACTIVE_DPI_STAGE, active - 1)
 
     def get_active_dpi_stage(self, profile: int) -> int:
         self._ensure_profile(profile)

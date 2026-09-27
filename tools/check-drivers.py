@@ -103,6 +103,28 @@ def check_usb_ids(modules, udev_text):
 
 
 def check_nordic_dpi(cls):
+    """Round-trip every DPI the driver claims to support.
+
+    A driver may carry its own encoding rather than the shared mode table -
+    the Noctua Edition's DPI records are a different size, at a different
+    address, in a different format - so prefer the pair it defines.
+    """
+    encode = getattr(cls, '_dpi_encode', None)
+    decode = getattr(cls, '_dpi_decode', None)
+    if encode and decode:
+        caps = cls.capabilities
+        problems = []
+        for dpi in range(caps.dpi_min, caps.dpi_max + 1, caps.dpi_step):
+            record = encode(dpi)
+            if ((0x55 - sum(record[:-1])) & 0xFF) != record[-1]:
+                problems.append(f'{dpi} DPI encodes with a bad checksum')
+            elif decode(record) != dpi:
+                problems.append(f'{dpi} DPI reads back as {decode(record)}')
+        return problems
+    return _check_nordic_dpi_modes(cls)
+
+
+def _check_nordic_dpi_modes(cls):
     """Every step from dpi_min to dpi_max must encode, read back, and have a
     single byte form.  Snapping to a coarser granularity higher up the range
     is allowed, as long as the value moves by less than one of the coarsest

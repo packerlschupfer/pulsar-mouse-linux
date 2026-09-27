@@ -33,7 +33,26 @@ capability says so and the CLI and GUI omit those controls.
 from dataclasses import replace
 
 from pulsar_mouse.base import DeviceCapabilities
+from pulsar_mouse.drivers.nordic import (
+    ADDR_ACTIVE_DPI_STAGE, ADDR_DPI_STAGE_COUNT,
+)
 from pulsar_mouse.drivers.x2_crazylight import PulsarX2CrazyLight
+
+# The DPI table this mouse actually uses.  Not 0x000C, where the CrazyLight
+# keeps its stages: that area exists here too and its first four entries
+# happen to agree, which is exactly why the first reading of this protocol
+# got it wrong.  Stages 5 and 6 disagreed, and the disagreement was the table
+# saying it lived somewhere else.  Fusion reads and writes only this one
+# (capture of a DPI drag, issue #12), six bytes per stage:
+#
+#     [x_lo, x_hi, y_lo, y_hi, 0x00, checksum]
+#
+# X and Y are separate 16-bit values holding DPI - 1, and the checksum is the
+# usual 0x55 minus the sum of the bytes before it.  A write takes effect
+# immediately: Fusion sends one per slider position as you drag, and nothing
+# else follows to commit it.
+ADDR_DPI_TABLE   = 0x1B00
+DPI_RECORD_SIZE  = 6
 
 # Outside the per-profile window (0x00–0xBF); see the module docstring.
 ADDR_FAN_MODE          = 0x00E7
@@ -63,15 +82,14 @@ class PulsarFeinmannNoctua(PulsarX2CrazyLight):
         PulsarX2CrazyLight.capabilities,
         name='Feinmann F01 Noctua Edition (dongle)',
         vid_pid_pairs=[(0x3710, 0x5504)],
-        # DPI: the stage records decode with the same layout as the
-        # CrazyLight's but at 50 DPI per step, not 10 — 07/0f/1f/3f read back
-        # as Fusion's 400/800/1600/3200.  One mode, so the whole range is a
-        # single linear scale.  12800 is where Fusion's own stage list
-        # stopped; whether the sensor goes higher is untested, and claiming a
-        # range the device can't reach would write values it rejects.
+        # 42000 max, reported by the owner and matching the largest value
+        # his drag produced (0xA40F = 41999, so 42000).  The device takes any
+        # integer in between - Fusion's slider lands on values like 28393 -
+        # but a 1 DPI spinner over a 42000 range is unusable, so the UI steps
+        # by 10 while the CLI and the encoder accept anything.
         dpi_min=50,
-        dpi_max=12800,
-        dpi_step=50,
+        dpi_max=42000,
+        dpi_step=10,
         # No LEDs on this edition — see the module docstring.
         has_led=False,
         has_breathe_speed=False,
@@ -82,9 +100,52 @@ class PulsarFeinmannNoctua(PulsarX2CrazyLight):
         wireless=True,
     )
 
-    # Single mode, (mode, mult, base, limit): index = dpi/50 - 1, which is
-    # what the captured stage records hold.
+    # The inherited (mode, mult, base, limit) encoding doesn't describe this
+    # model at all - see ADDR_DPI_TABLE.  Kept only because the base class
+    # reads it; nothing here uses it.
     _DPI_MODES = ((0, 1, 1, None),)
+
+    # ── DPI stages ───────────────────────────────────────────────────────
+
+    @staticmethod
+    def _dpi_encode(dpi: int) -> bytes:
+        """One stage record.  X and Y get the same value."""
+        v = dpi - 1
+        body = bytes([v & 0xFF, (v >> 8) & 0xFF, v & 0xFF, (v >> 8) & 0xFF, 0x00])
+        return body + bytes([(0x55 - sum(body)) & 0xFF])
+
+    @staticmethod
+    def _dpi_decode(record: bytes) -> int:
+        return (record[0] | (record[1] << 8)) + 1
+
+    def get_dpi_stages(self, profile: int) -> dict:
+        self._ensure_profile(profile)
+        count = self._mem.get(ADDR_DPI_STAGE_COUNT, self.capabilities.max_dpi_stages)
+        count = max(1, min(count, self.capabilities.max_dpi_stages))
+        blob = self._mem_read_range(ADDR_DPI_TABLE, DPI_RECORD_SIZE * count)
+        stages = []
+        for i in range(count):
+            rec = blob[i * DPI_RECORD_SIZE:(i + 1) * DPI_RECORD_SIZE]
+            stages.append(((rec[0] | (rec[1] << 8)) + 1,
+                           (rec[2] | (rec[3] << 8)) + 1))
+        return {'active': self._mem.get(ADDR_ACTIVE_DPI_STAGE, 0) + 1,
+                'count': count, 'stages': stages}
+
+    def set_dpi_stages(self, stages: list[int], active: int, profile: int) -> None:
+        caps = self.capabilities
+        if not 1 <= len(stages) <= caps.max_dpi_stages:
+            raise ValueError(f"Must have 1–{caps.max_dpi_stages} DPI stages")
+        if not 1 <= active <= len(stages):
+            raise ValueError(f"Active stage must be 1–{len(stages)}")
+        self._ensure_profile(profile)
+        for i, dpi in enumerate(stages):
+            if not caps.dpi_min <= dpi <= caps.dpi_max:
+                raise ValueError(f"DPI {dpi} out of range {caps.dpi_min}–{caps.dpi_max}")
+            record = self._dpi_encode(dpi)
+            base = ADDR_DPI_TABLE + i * DPI_RECORD_SIZE
+            self._mem_write({base + j: record[j] for j in range(DPI_RECORD_SIZE)})
+        self._write_value(ADDR_DPI_STAGE_COUNT, len(stages))
+        self._write_value(ADDR_ACTIVE_DPI_STAGE, active - 1)
 
     # mm -> code, from the line described at the top of this module.
     _LOD_CODES = {round(_LOD_MM_OFFSET + _LOD_STEP_MM * code, 1): code
