@@ -18,9 +18,11 @@ Every register this mouse writes is one the CrazyLight already has, except two:
     0x00E7   fan mode, 0 = off … 4 = maximum   (this model has a fan)
     0x00D7   low-power-mode threshold, percent
 
-Both sit *above* the 0x00–0xBF per-profile window, so they are treated as
-device-wide rather than per-profile.  That placement is the evidence; it has
-not been confirmed by switching profiles and reading back.
+Both sit *above* the 0x00–0xBF window the CrazyLight stores a profile in,
+which read as device-wide.  It isn't: @Wyatt-Robinson set the fan, switched
+profile and watched it change back, so this model's per-profile window
+reaches further than that.  Both are per profile, and both follow the
+per_profile_globals contract — no profile argument means the active one.
 
 No LEDs.  Fusion still shows an LED panel and the firmware still accepts
 writes to the LED registers — the Noctua edition shares firmware with its
@@ -90,23 +92,35 @@ class PulsarFeinmannNoctua(PulsarX2CrazyLight):
 
     # ── Fan ──────────────────────────────────────────────────────────────
 
-    def get_fan_mode(self) -> int:
-        """Fan level, 0 (off) to 4 (maximum)."""
+    def get_fan_mode(self, profile=None) -> int:
+        """Fan level, 0 (off) to 4 (maximum), of `profile`.
+
+        Read straight from the device rather than the cache: _mem_read_all()
+        stops at 0xC0 and this register lives past it.
+        """
+        self._tunable_profile(profile)
         return self._mem_read_range(ADDR_FAN_MODE, 1)[0]
 
-    def set_fan_mode(self, level: int) -> None:
+    def set_fan_mode(self, level: int, profile=None) -> None:
         lo, hi = self.capabilities.fan_range
         if not lo <= level <= hi:
             raise ValueError(f"Fan mode must be {lo}–{hi}")
+        self._tunable_profile(profile)
         self._write_value(ADDR_FAN_MODE, level)
 
     # ── Low power threshold ──────────────────────────────────────────────
 
-    def get_low_power_threshold(self) -> int:
-        """Battery percentage at which the mouse enters low power mode."""
+    def get_low_power_threshold(self, profile=None) -> int:
+        """Battery percentage at which the mouse enters low power mode.
+
+        Per profile, on the evidence that its neighbour 0x00E7 is; not
+        separately confirmed.
+        """
+        self._tunable_profile(profile)
         return self._mem_read_range(ADDR_LOW_POWER_PERCENT, 1)[0]
 
-    def set_low_power_threshold(self, percent: int) -> None:
+    def set_low_power_threshold(self, percent: int, profile=None) -> None:
         if not 0 <= percent <= 100:
             raise ValueError("Low power threshold must be 0–100")
+        self._tunable_profile(profile)
         self._write_value(ADDR_LOW_POWER_PERCENT, percent)

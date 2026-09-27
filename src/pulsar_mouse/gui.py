@@ -2474,9 +2474,7 @@ X-GNOME-Autostart-enabled=true
             if 'turbo' in s:
                 device.set_turbo_mode(s['turbo'], **kw)
             if 'fan' in s:
-                # Device-wide, like the low power threshold below it, so no
-                # profile keyword - see feinmann_noctua.py.
-                device.set_fan_mode(s['fan'])
+                device.set_fan_mode(s['fan'], **kw)
             if 'power_saving' in s:
                 device.set_power_saving_timeout(s['power_saving'], **kw)
             if 'low_power' in s:

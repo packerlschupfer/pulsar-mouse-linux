@@ -713,6 +713,12 @@ class PulsarNordic(PulsarDevice):
         self._ensure_profile(profile)
         code = self._LOD_CODES.get(mm)
         if code is None:
+            # A 0.1mm slider hands back 1.4000000000000001 for 1.4, which no
+            # dict lookup will ever match.  Accept float noise, but nothing
+            # wider - a value the user actually mistyped should still fail.
+            code = next((v for k, v in self._LOD_CODES.items()
+                         if abs(k - mm) < 1e-6), None)
+        if code is None:
             raise ValueError(f"LOD must be one of {sorted(self._LOD_CODES)}")
         self._write_value(ADDR_LOD_MM, code)
 

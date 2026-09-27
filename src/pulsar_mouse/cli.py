@@ -110,7 +110,7 @@ def print_tunables(device: PulsarDevice, profile=None):
             print(f"  Turbo mode:       error ({e})")
     if caps.fan_range is not None:
         try:
-            level = device.get_fan_mode()
+            level = device.get_fan_mode(**kw)
             print(f"  Fan mode:         {_fan_label(level, caps)}")
         except Exception as e:
             print(f"  Fan mode:         error ({e})")
