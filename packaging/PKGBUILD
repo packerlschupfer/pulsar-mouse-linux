@@ -1,0 +1,49 @@
+# Maintainer: packerlschupfer <https://github.com/packerlschupfer>
+#
+# Kept in the repository so it is updated with the code it packages; the AUR
+# copy is this file with the version and checksum bumped.  See
+# packaging/README.md for what to do on a release.
+
+pkgname=pulsar-mouse-linux
+pkgver=0.1.12
+pkgrel=1
+pkgdesc="Configure Pulsar gaming mice — CLI and GTK4/libadwaita GUI"
+arch=('any')
+url="https://github.com/packerlschupfer/pulsar-mouse-linux"
+license=('MIT')
+depends=(
+  'python'
+  'python-pyusb'        # usb.core / usb.util
+  'python-gobject'      # the GUI's GTK bindings
+  'gtk4'
+  'libadwaita'
+  'libdbusmenu-glib'    # the tray menu (Dbusmenu)
+  'hicolor-icon-theme'  # the icon is installed into its hierarchy
+)
+makedepends=('python-build' 'python-installer' 'python-wheel' 'python-setuptools')
+provides=("${pkgname}")
+conflicts=("${pkgname}-git" 'pulsar-x2a-linux')
+replaces=('pulsar-x2a-linux')
+source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
+sha256sums=('00603291b917b1ad9d0ee3d7c1460f057d2c5e8c9ed60fc60a9e83e1e8aaf4b0')
+
+build() {
+  cd "${srcdir}/${pkgname}-${pkgver}"
+  python -m build --wheel --no-isolation
+}
+
+package() {
+  cd "${srcdir}/${pkgname}-${pkgver}"
+  python -m installer --destdir="${pkgdir}" dist/*.whl
+
+  # A packaged rule belongs in /usr/lib, leaving /etc for the administrator.
+  install -Dm644 udev/50-pulsar-mouse.rules \
+    "${pkgdir}/usr/lib/udev/rules.d/50-pulsar-mouse.rules"
+
+  install -Dm644 data/pulsar-mouse.desktop \
+    "${pkgdir}/usr/share/applications/pulsar-mouse.desktop"
+  install -Dm644 data/pulsar-mouse.svg \
+    "${pkgdir}/usr/share/icons/hicolor/scalable/apps/pulsar-mouse.svg"
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+}
