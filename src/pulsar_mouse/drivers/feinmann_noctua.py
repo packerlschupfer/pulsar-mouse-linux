@@ -62,11 +62,16 @@ ADDR_LOW_POWER_PERCENT = 0x00D7
 FAN_OFF = 0
 FAN_MAX = 4
 
-# Observed: stored 0x04 while Fusion read 1.00 mm, written 0x06 for 1.20 mm.
-# Two points, 0.1 mm apart per step, giving mm = (code + 6) / 10.  The line
-# through them was a guess at the time; every value from 0.7 to 2.0 mm has
-# since been written and read back on the mouse (issue #12), so the whole
-# range is confirmed.
+# Observed: stored 0x04 while Fusion read 1.00 mm, written 0x06 for 1.20 mm,
+# so mm = (code + 6) / 10 — 0.1 mm per step.  A later capture of Fusion
+# dragging that slider from end to end used codes 0x01 to 0x0B and nothing
+# outside them, which puts the range at 0.7–1.7 mm (issue #12).
+#
+# The mouse will store a larger code: a run through 1.8, 1.9 and 2.0 mm read
+# all three back happily, which is why this table used to offer them.  Fusion
+# never offers them, so whether the sensor does anything with them is
+# unknown, and a lift-off distance that silently means nothing is worse than
+# one the UI doesn't list.
 _LOD_MM_OFFSET = 0.6
 _LOD_STEP_MM = 0.1
 
@@ -95,7 +100,7 @@ class PulsarFeinmannNoctua(PulsarX2CrazyLight):
         has_led=False,
         has_breathe_speed=False,
         has_stage_colors=False,
-        lod_values=[0.7, 2.0],
+        lod_values=[0.7, 1.7],
         lod_step=_LOD_STEP_MM,
         fan_range=(FAN_OFF, FAN_MAX),
         wireless=True,
@@ -150,7 +155,7 @@ class PulsarFeinmannNoctua(PulsarX2CrazyLight):
 
     # mm -> code, from the line described at the top of this module.
     _LOD_CODES = {round(_LOD_MM_OFFSET + _LOD_STEP_MM * code, 1): code
-                  for code in range(1, 15)}
+                  for code in range(1, 12)}
 
     # ── Fan ──────────────────────────────────────────────────────────────
 
