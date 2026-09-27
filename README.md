@@ -127,7 +127,27 @@ cd pulsar-mouse-linux
 pip install --user -e .
 ```
 
-### Option 5: Nix / NixOS
+### Option 5: Arch Linux
+
+A `PKGBUILD` lives in [`packaging/`](packaging/), so no AUR account or helper is
+needed:
+
+```bash
+git clone https://github.com/packerlschupfer/pulsar-mouse-linux
+cd pulsar-mouse-linux/packaging
+makepkg -si
+```
+
+It pulls its dependencies from the official repositories, installs the entry
+points to `/usr/bin` and the udev rules to `/usr/lib/udev/rules.d`, and upgrades
+cleanly with `pacman -U` on later releases. See
+[`packaging/README.md`](packaging/README.md) for what changes per release.
+
+*(Not on the AUR yet: registration there is paused while they deal with a wave of
+automated sign-ups. The PKGBUILD is ready to publish the moment it reopens — or
+sooner, if someone with an existing account would like to maintain it.)*
+
+### Option 6: Nix / NixOS
 
 Ships a flake. Run it directly without installing:
 
