@@ -63,9 +63,10 @@ FAN_OFF = 0
 FAN_MAX = 4
 
 # Observed: stored 0x04 while Fusion read 1.00 mm, written 0x06 for 1.20 mm.
-# Two points, 0.1 mm apart per step, giving mm = (code + 6) / 10.  Only those
-# two are confirmed; the rest of the range follows that line and wants a
-# hardware check.
+# Two points, 0.1 mm apart per step, giving mm = (code + 6) / 10.  The line
+# through them was a guess at the time; every value from 0.7 to 2.0 mm has
+# since been written and read back on the mouse (issue #12), so the whole
+# range is confirmed.
 _LOD_MM_OFFSET = 0.6
 _LOD_STEP_MM = 0.1
 
