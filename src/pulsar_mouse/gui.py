@@ -1385,6 +1385,17 @@ class MainWindow(Adw.ApplicationWindow):
             self._turbo_row.set_title('Turbo Mode')
             global_group.add(self._turbo_row)
 
+        # A slider rather than a switch: the one mouse with a fan runs it at
+        # several speeds, and 0 is off - the same shape Fusion gives it.
+        self._fan_row = None
+        if caps.fan_range is not None:
+            lo, hi = caps.fan_range
+            row, self._fan_row = self._make_slider_row(
+                'Fan Mode', 'Speed of the mouse\'s cooling fan',
+                lo, hi, 1, snap=True,
+                format_value=lambda v: 'Off' if int(v) == lo else str(int(v)))
+            global_group.add(row)
+
         # LOD lives here (not on the Customize tab with the rest of
         # "Profile Settings") to match Fusion's own Performance tab, which
         # groups Lift-off Distance with DPI/polling rate rather than LED.
@@ -2224,6 +2235,8 @@ X-GNOME-Autostart-enabled=true
             s['motion'] = self._motion_row.get_active()
         if self._turbo_row:
             s['turbo'] = self._turbo_row.get_active()
+        if self._fan_row:
+            s['fan'] = int(self._fan_row.get_value())
         if self._power_saving_row:
             s['power_saving'] = int(self._power_saving_row.get_value())
         if self._low_power_row:
@@ -2300,10 +2313,11 @@ X-GNOME-Autostart-enabled=true
         power_saving = (self._read_field(device.get_power_saving_timeout)
                         if _power_saving_supported(device) else None)
         turbo = self._read_field(device.get_turbo_mode) if caps.has_turbo else None
+        fan = self._read_field(device.get_fan_mode) if caps.fan_range is not None else None
         low_power = (self._read_field(device.get_low_power_threshold)
                     if hasattr(device, 'get_low_power_threshold') else None)
         GLib.idle_add(self._populate_global, poll_hz, debounce, angle, ripple, motion,
-                      power_saving, low_power, turbo)
+                      power_saving, low_power, turbo, fan)
 
     def _do_reload(self):
         if not self._open_dev():
@@ -2459,6 +2473,10 @@ X-GNOME-Autostart-enabled=true
                 device.set_motion_sync(s['motion'], **kw)
             if 'turbo' in s:
                 device.set_turbo_mode(s['turbo'], **kw)
+            if 'fan' in s:
+                # Device-wide, like the low power threshold below it, so no
+                # profile keyword - see feinmann_noctua.py.
+                device.set_fan_mode(s['fan'])
             if 'power_saving' in s:
                 device.set_power_saving_timeout(s['power_saving'], **kw)
             if 'low_power' in s:
@@ -2519,7 +2537,8 @@ X-GNOME-Autostart-enabled=true
     # ── UI population helpers ────────────────────────────────────────────
 
     def _populate_global(self, poll_hz, debounce, angle, ripple, motion,
-                         power_saving=None, low_power=None, turbo=None):
+                         power_saving=None, low_power=None, turbo=None,
+                         fan=None):
         # try/finally, not a plain trailing assignment: anything raising in
         # between used to leave self._building stuck True forever, and
         # every change handler in this window (_on_profile_changed,
@@ -2554,6 +2573,8 @@ X-GNOME-Autostart-enabled=true
                 self._motion_row.set_active(motion)
             if self._turbo_row and turbo is not None:
                 self._turbo_row.set_active(turbo)
+            if self._fan_row and fan is not None:
+                self._fan_row.set_value(fan)
             if self._power_saving_row and power_saving is not None:
                 self._power_saving_row.set_value(power_saving)
             if self._low_power_row and low_power is not None:

@@ -7,7 +7,7 @@
 Linux configuration tool for **Pulsar gaming mice**.
 
 Plugin architecture — each mouse model has its own protocol driver.
-Currently supports the **Pulsar Xlite Wired**, **Pulsar X2 Wired**, **Pulsar X2H Wired Medium**, **Pulsar X2A Medium Wired**, **Pulsar Xlite v4**, **Pulsar Feinmann 8K / FO1**, **Pulsar X2A Wireless / X2 V2 Mini**, **Pulsar X2 CrazyLight**, and **Pulsar X2 Wireless (Areson)** — see [Supported Mice](#supported-mice) below.
+Currently supports the **Pulsar Xlite Wired**, **Pulsar X2 Wired**, **Pulsar X2H Wired Medium**, **Pulsar X2A Medium Wired**, **Pulsar Xlite v4**, **Pulsar Feinmann 8K / FO1**, **Pulsar X2A Wireless / X2 V2 Mini**, **Pulsar X2 CrazyLight**, **Pulsar X2 Wireless (Areson)**, and the **Pulsar Feinmann F01 Noctua Edition** — see [Supported Mice](#supported-mice) below.
 
 Reverse-engineered from USB HID captures of Pulsar Fusion on Windows 11.
 Wireless (Nordic) protocol based on [python-pulsar-mouse-tool](https://github.com/andrewrabert/python-pulsar-mouse-tool) by andrewrabert.
@@ -50,6 +50,8 @@ Wireless (Nordic) protocol based on [python-pulsar-mouse-tool](https://github.co
 | Pulsar X2 CrazyLight Wireless | `x2_crazylight` | `3710:5406` | Fully supported, reads and writes confirmed on hardware (Nordic protocol under the Sonix VID, 8K Hz polling, 4 profiles) |
 | Pulsar X2 CrazyLight Wired | `x2_crazylight_wired` | `3710:3414` | Fully supported, reads and writes confirmed on hardware (same protocol as the dongle, 1K Hz max) |
 | Pulsar X2 Wireless (Areson dongle) | `x2_areson_wireless` | `25a7:fa7c` | Reads and writes confirmed on hardware (Nordic layout; GUI and button remapping tested) |
+| Pulsar Feinmann F01 Noctua Edition (dongle) | `feinmann_noctua` | `3710:5504` | Decoded from a capture, untested on hardware (Nordic protocol despite the Feinmann name; fan control; no LEDs) |
+| Pulsar Feinmann F01 Noctua Edition (wired) | `feinmann_noctua_wired` | `3710:7507` | Decoded from a capture of this device, untested on hardware (fan control; no LEDs; 1K Hz max) |
 | Pulsar X2 Wireless (Areson cable) | `x2_areson_wired` | `25a7:fa7b` | Reads and writes confirmed on hardware (Nordic layout; 1K Hz max; GUI tested; charging LED overrides RGB effects while cabled) |
 
 Want to add support for your mouse? See [Adding a new driver](#adding-a-new-driver) below.
@@ -343,6 +345,7 @@ Checksum: bytes[62:64] = LE uint16(sum(bytes[0:62])).
 - [@iamtherobin](https://github.com/iamtherobin) — Pulsar Fusion USB captures and screen recordings that the X2 CrazyLight drivers (dongle and wired) were decoded from
 - [@dbergPROTAKT](https://github.com/dbergPROTAKT) — Pulsar X2 Wireless (Areson IDs) driver, with hardware testing over both the dongle and the cable
 - [@macieqzz](https://github.com/macieqzz) — Pulsar X2A Wireless button layout confirmed on hardware (thumb3/thumb4/DPI addresses and function slots)
+- [@Wyatt-Robinson](https://github.com/Wyatt-Robinson) — Feinmann F01 Noctua Edition: USB capture and screen recording the driver was decoded from, plus hardware testing
 - [andrewrabert](https://github.com/andrewrabert) — [python-pulsar-mouse-tool](https://github.com/andrewrabert/python-pulsar-mouse-tool), reference implementation for the Nordic wireless protocol
 
 ## Related Projects

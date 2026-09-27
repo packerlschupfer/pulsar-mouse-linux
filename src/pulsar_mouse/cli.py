@@ -15,6 +15,12 @@ from pulsar_mouse.drivers import discover_all
 from pulsar_mouse.hid import describe_button, parse_button_function  # fallback for non-device contexts
 
 
+def _fan_label(level: int, caps) -> str:
+    """0 reads as off, like Fusion's own slider; the rest are plain levels."""
+    lo, hi = caps.fan_range
+    return 'off' if level == lo else f'{level} of {hi}'
+
+
 def _on_off(val: bool) -> str:
     return 'on' if val else 'off'
 
@@ -102,6 +108,12 @@ def print_tunables(device: PulsarDevice, profile=None):
             print(f"  Turbo mode:       {_on_off(device.get_turbo_mode(**kw))}")
         except Exception as e:
             print(f"  Turbo mode:       error ({e})")
+    if caps.fan_range is not None:
+        try:
+            level = device.get_fan_mode()
+            print(f"  Fan mode:         {_fan_label(level, caps)}")
+        except Exception as e:
+            print(f"  Fan mode:         error ({e})")
     if _has_power_saving(device):
         try:
             print(f"  Power saving:     {device.get_power_saving_timeout(**kw)} s")
@@ -244,6 +256,8 @@ Examples:
     g.add_argument('--ripple', metavar='on|off')
     g.add_argument('--motion-sync', metavar='on|off')
     g.add_argument('--turbo', metavar='on|off', help='Turbo Mode')
+    g.add_argument('--fan', type=int, metavar='LEVEL',
+                   help='Fan mode, 0 (off) to the maximum this mouse offers')
     g.add_argument('--power-saving', type=int, metavar='SECONDS',
                    help='Power-saving / auto-sleep timeout in seconds '
                         '(the range depends on the mouse)')
@@ -294,7 +308,7 @@ def main():
     # checked separately rather than folded into the `is not None` list.
     write_ops = args.reset or any(x is not None for x in [
         args.poll, args.debounce,
-        args.angle_snap, args.ripple, args.motion_sync, args.turbo,
+        args.angle_snap, args.ripple, args.motion_sync, args.turbo, args.fan,
         args.power_saving, args.low_power, args.active_profile,
         args.lod, args.dpi, args.active_stage,
         args.brightness, args.brightness_percent, args.led, args.breathe_speed,
@@ -383,6 +397,8 @@ def main():
                 status['motion_sync'] = device.get_motion_sync()
             if caps.has_turbo:
                 status['turbo_mode'] = device.get_turbo_mode()
+            if caps.fan_range is not None:
+                status['fan_mode'] = device.get_fan_mode()
             if caps.lod_values:
                 lod_val = device.get_lod(profile)
                 if caps.lod_step is not None:
@@ -492,6 +508,15 @@ def main():
                 v = _parse_bool(args.turbo, 'turbo')
                 device.set_turbo_mode(v)
                 print(f"Turbo mode: {_on_off(v)}")
+
+            if args.fan is not None:
+                if caps.fan_range is None:
+                    sys.exit(f"Error: {caps.name} has no fan")
+                lo, hi = caps.fan_range
+                if not lo <= args.fan <= hi:
+                    sys.exit(f"Error: fan mode must be {lo}-{hi}")
+                device.set_fan_mode(args.fan)
+                print(f"Fan mode: {_fan_label(args.fan, caps)}")
 
             if args.power_saving is not None:
                 if not _has_power_saving(device):

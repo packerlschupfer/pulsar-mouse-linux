@@ -75,6 +75,11 @@ class DeviceCapabilities:
     # inheriting them for a model where they're unverified.
     power_saving_range: Optional[tuple[int, int, int]] = (30, 900, 30)
 
+    # (min, max) fan levels for get/set_fan_mode(), where the minimum is
+    # "off".  Only the Feinmann F01 Noctua Edition has a fan; None hides the
+    # control everywhere else rather than each driver opting out.
+    fan_range: Optional[tuple[int, int]] = None
+
     # Whether the mouse pushes a wireless signal-quality reading.  The
     # Feinmann does, about once a second.  The Nordic family does not: a
     # listening run on an X2 CrazyLight dongle, including carrying the mouse
@@ -212,6 +217,13 @@ class PulsarDevice(ABC):
         raise NotImplementedError
 
     def reset_to_defaults(self, profile: int) -> None:
+        raise NotImplementedError
+
+    # Device-wide on the one model that has a fan, so no profile argument.
+    def get_fan_mode(self) -> int:
+        raise NotImplementedError
+
+    def set_fan_mode(self, level: int) -> None:
         raise NotImplementedError
 
     # ── Button encoding hooks ────────────────────────────────────────────
