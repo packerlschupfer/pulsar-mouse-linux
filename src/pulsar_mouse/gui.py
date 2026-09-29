@@ -22,9 +22,31 @@ import threading
 import time
 
 import gi
-gi.require_version('Gtk', '4.0')
-gi.require_version('Adw', '1')
-gi.require_version('Dbusmenu', '0.4')
+
+# Exits rather than letting the ValueError through, which is unusual for an
+# import and deliberate: this module is an application entry point, not a
+# library, and the traceback it raised instead ("Namespace Gtk not available")
+# says nothing about what to install.  The AppImage bundles only the app and
+# pyusb and uses the system's GTK by design, so this is the first thing
+# someone sees when they run it on a machine without it.
+try:
+    gi.require_version('Gtk', '4.0')
+    gi.require_version('Adw', '1')
+    gi.require_version('Dbusmenu', '0.4')
+except ValueError as missing:
+    raise SystemExit(
+        f"{missing}\n\n"
+        "The GUI needs GTK 4, libadwaita and the Dbusmenu bindings, and this\n"
+        "system doesn't have all of them:\n\n"
+        "  Debian/Ubuntu  sudo apt install python3-gi gir1.2-gtk-4.0 "
+        "gir1.2-adw-1 gir1.2-dbusmenu-glib-0.4\n"
+        "  Arch           sudo pacman -S python-gobject gtk4 libadwaita "
+        "libdbusmenu-glib\n"
+        "  Fedora         sudo dnf install python3-gobject gtk4 libadwaita "
+        "libdbusmenu-glib\n\n"
+        "The CLI needs none of them: run pulsar-mouse, or the AppImage with "
+        "--cli."
+    ) from missing
 from gi.repository import Gtk, Adw, GLib, Gio, Gdk, Dbusmenu
 
 from pulsar_mouse import find_device, scan_devices, __version__
