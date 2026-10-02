@@ -610,17 +610,36 @@ class PulsarMouseApp(Adw.Application):
         mouse: find_sibling() will not hand back a different model.
         """
         device = self._device
-        if device is None or device_present(device):
+        if device is None:
             return False
-        sibling = find_sibling(device)
-        if sibling is None:
-            return False
+
+        if device_present(device):
+            # Both halves can be plugged in at once — the cable in the mouse,
+            # the dongle still in a port — and then the dongle is present but
+            # has nothing to relay to, so every command through it times out.
+            # @iamtherobin hit exactly that: cabling the mouse while the
+            # dongle stayed in gave "hidraw read timed out" rather than a
+            # switch, because the connection in use had not gone anywhere.
+            # scan_devices() already prefers a cable over an idle dongle when
+            # picking a device at startup; this is the same preference applied
+            # while running.
+            if device.capabilities.wireless is not True:
+                return False
+            sibling = find_sibling(device)
+            if sibling is None or sibling.capabilities.wireless is not False:
+                return False
+        else:
+            sibling = find_sibling(device)
+            if sibling is None:
+                return False
         try:
             device.close()
         except Exception:
             pass
         self._device = sibling
-        print(f'{device.capabilities.name} is gone; '
+        why = ('is gone' if not device_present(device)
+               else 'cannot reach the mouse while it is cabled')
+        print(f'{device.capabilities.name} {why}; '
               f'following the mouse to {sibling.capabilities.name}')
 
         if self._menu_server is not None:
