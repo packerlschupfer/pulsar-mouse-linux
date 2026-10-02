@@ -104,6 +104,7 @@ class PulsarFeinmannNoctua(PulsarX2CrazyLight):
         lod_step=_LOD_STEP_MM,
         fan_range=(FAN_OFF, FAN_MAX),
         wireless=True,
+        model_key='feinmann_noctua',
     )
 
     # The inherited (mode, mult, base, limit) encoding doesn't describe this

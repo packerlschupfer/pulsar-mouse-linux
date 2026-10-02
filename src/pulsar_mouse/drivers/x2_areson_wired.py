@@ -22,6 +22,7 @@ class PulsarX2AresonWired(_AresonMixin, PulsarX2CrazyLightWired):
         name='Pulsar X2 Wireless (Areson cable)',
         vid_pid_pairs=[(0x25A7, 0xFA7B)],
         dpi_min=50,
+        model_key='x2_areson',
         dpi_max=26000,
         dpi_step=50,
         # Inherited from the X2 CrazyLight, but not seen on this model.

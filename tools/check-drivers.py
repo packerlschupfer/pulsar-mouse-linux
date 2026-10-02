@@ -102,6 +102,34 @@ def check_usb_ids(modules, udev_text):
     return problems
 
 
+def check_model_keys(modules):
+    """A model_key names one physical mouse, so exactly two drivers share it.
+
+    Worth checking because the pairs that have one build their capabilities
+    with replace() off another driver's: the Areson and Noctua drivers derive
+    from the CrazyLight, so leaving their key unset doesn't leave it absent,
+    it silently inherits the CrazyLight's and claims to be that mouse.  A key
+    on three drivers, or on two that connect the same way, is that mistake.
+    """
+    keyed = {}
+    for name, module in modules.items():
+        for cls in driver_classes(module):
+            key = cls.capabilities.model_key
+            if key:
+                keyed.setdefault(key, []).append((name, cls.capabilities.wireless))
+    problems = []
+    for key, members in sorted(keyed.items()):
+        names = ', '.join(n for n, _ in members)
+        if len(members) != 2:
+            problems.append(f"model_key '{key}' is on {len(members)} drivers "
+                            f"({names}); it names one mouse, so it belongs to two")
+            continue
+        if {w for _, w in members} != {True, False}:
+            problems.append(f"model_key '{key}' ({names}) has no cabled/wireless "
+                            "split; a pair is one mouse reached two ways")
+    return problems
+
+
 def check_nordic_dpi(cls):
     """Round-trip every DPI the driver claims to support.
 
@@ -207,6 +235,7 @@ def main() -> int:
         ('one driver class per module', check_one_class_per_module(modules)),
         ('entry points match their modules', check_entry_points(modules, entry_points)),
         ('USB IDs are unique and have udev rules', check_usb_ids(modules, udev_text)),
+        ('paired drivers name one mouse each', check_model_keys(modules)),
         ('Nordic: every DPI in range encodes and reads back', per_driver(nordic, check_nordic_dpi)),
         ('Nordic: every driver can send a command', per_driver(nordic, check_nordic_dispatch)),
         ('Nordic: no driver claims a signal-quality channel',

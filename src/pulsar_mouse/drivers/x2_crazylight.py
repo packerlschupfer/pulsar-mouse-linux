@@ -88,6 +88,7 @@ class PulsarX2CrazyLight(PulsarNordic):
         # captures show profile 1 at 1 kHz, 3 at 4 kHz and 4 at 8 kHz.
         per_profile_globals=True,
         wireless=True,
+        model_key='x2_crazylight',
         # No signal-quality channel: a tester walking an X2 CrazyLight out of
         # the dongle's range produced nothing at all on the config interface.
         reports_signal_quality=False,

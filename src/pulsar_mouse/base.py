@@ -75,6 +75,17 @@ class DeviceCapabilities:
     # inheriting them for a model where they're unverified.
     power_saving_range: Optional[tuple[int, int, int]] = (30, 900, 30)
 
+    # Drivers for the same physical mouse, reached two ways — its cable and
+    # its dongle — share this.  Each connection needs its own driver because
+    # the PIDs and often the capabilities differ, and nothing until now
+    # recorded that two of them are one mouse: the pairs were described in
+    # prose in the README and the udev rules and nowhere a program could read.
+    #
+    # Set it only where the two halves are known to be the same product.  A
+    # wrong pairing would have the app follow a swap onto somebody's *other*
+    # Pulsar mouse, which is worse than not following it at all.
+    model_key: Optional[str] = None
+
     # (min, max) fan levels for get/set_fan_mode(), where the minimum is
     # "off".  Only the Feinmann F01 Noctua Edition has a fan; None hides the
     # control everywhere else rather than each driver opting out.

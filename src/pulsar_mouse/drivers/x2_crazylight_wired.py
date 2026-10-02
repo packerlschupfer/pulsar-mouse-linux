@@ -45,6 +45,7 @@ class PulsarX2CrazyLightWired(PulsarX2CrazyLight):
         vid_pid_pairs=[(0x3710, 0x3414)],
         polling_rates=[125, 250, 500, 1000],
         wireless=False,
+        model_key='x2_crazylight',
     )
 
     _WIRED_MAX_HZ = 1000

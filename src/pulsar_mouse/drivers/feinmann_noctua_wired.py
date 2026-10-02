@@ -25,4 +25,5 @@ class PulsarFeinmannNoctuaWired(PulsarFeinmannNoctua):
         name='Feinmann F01 Noctua Edition Wired',
         vid_pid_pairs=[(0x3710, 0x7507)],
         wireless=False,
+        model_key='feinmann_noctua',
     )

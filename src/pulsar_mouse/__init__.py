@@ -31,6 +31,41 @@ def scan_devices() -> list[PulsarDevice]:
     return found
 
 
+def device_present(device: PulsarDevice) -> bool:
+    """Is the mouse this driver speaks to still on the bus?
+
+    Cheap enough to call on a timer: it asks libusb for a descriptor and
+    claims nothing, so it does not disturb the device the way opening it
+    would.
+    """
+    return any(usb.core.find(idVendor=vid, idProduct=pid) is not None
+               for vid, pid in device.capabilities.vid_pid_pairs)
+
+
+def find_sibling(device: PulsarDevice) -> PulsarDevice | None:
+    """The same mouse on its other connection, if that one is plugged in.
+
+    A mouse reached by cable and by dongle is two drivers with two PIDs and
+    often different capabilities, paired by capabilities.model_key.  This is
+    what lets the app follow a mouse across a swap — plug the cable in to
+    charge, unplug it later — instead of reporting the connection it started
+    on as missing.
+
+    None when the driver has no declared sibling, or the sibling isn't
+    plugged in.  Never returns a different model: following a swap onto
+    somebody's other Pulsar mouse would be worse than not following it.
+    """
+    key = device.capabilities.model_key
+    if not key:
+        return None
+    mine = set(device.capabilities.vid_pid_pairs)
+    for candidate in scan_devices():
+        caps = candidate.capabilities
+        if caps.model_key == key and not mine & set(caps.vid_pid_pairs):
+            return candidate
+    return None
+
+
 def find_device(name: str | None = None) -> PulsarDevice:
     """Find a single Pulsar mouse device.
 
