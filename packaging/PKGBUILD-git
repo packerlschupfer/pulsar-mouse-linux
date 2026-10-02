@@ -1,0 +1,59 @@
+# Maintainer: packerlschupfer <https://github.com/packerlschupfer>
+#
+# Builds the current main branch rather than a release.  For people testing
+# unreleased work — most of what gets asked for in issues lands here first,
+# and `pulsar-mouse --version` reports the last release either way, so there
+# is otherwise no way for a tester on Arch to be sure which code they are
+# running.
+#
+# Build with: makepkg -p PKGBUILD-git -si
+
+pkgname=pulsar-mouse-linux-git
+_pkgname=pulsar-mouse-linux
+pkgver=0.1.12.r0.g0000000
+pkgrel=1
+pkgdesc="Configure Pulsar gaming mice — CLI and GTK4/libadwaita GUI (git)"
+arch=('any')
+url="https://github.com/packerlschupfer/pulsar-mouse-linux"
+license=('MIT')
+depends=(
+  'python'
+  'python-pyusb'
+  'python-gobject'
+  'gtk4'
+  'libadwaita'
+  'libdbusmenu-glib'
+  'hicolor-icon-theme'
+)
+makedepends=('git' 'python-build' 'python-installer' 'python-wheel' 'python-setuptools')
+provides=("${_pkgname}")
+conflicts=("${_pkgname}")
+source=("${_pkgname}::git+${url}.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "${srcdir}/${_pkgname}"
+  # Last tag, commits since, and the hash — so the installed version says
+  # which commit it is, which the release package cannot.
+  git describe --long --tags --abbrev=7 2>/dev/null \
+    | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g' \
+    || printf "0.0.0.r%s.g%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+build() {
+  cd "${srcdir}/${_pkgname}"
+  python -m build --wheel --no-isolation
+}
+
+package() {
+  cd "${srcdir}/${_pkgname}"
+  python -m installer --destdir="${pkgdir}" dist/*.whl
+
+  install -Dm644 udev/50-pulsar-mouse.rules \
+    "${pkgdir}/usr/lib/udev/rules.d/50-pulsar-mouse.rules"
+  install -Dm644 data/pulsar-mouse.desktop \
+    "${pkgdir}/usr/share/applications/pulsar-mouse.desktop"
+  install -Dm644 data/pulsar-mouse.svg \
+    "${pkgdir}/usr/share/icons/hicolor/scalable/apps/pulsar-mouse.svg"
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}

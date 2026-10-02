@@ -48,6 +48,21 @@ administrator), and `pulsar-mouse --version` runs against the installed copy wit
 all drivers discoverable. `namcap` reports nothing beyond notes about the
 `#!/usr/bin/env python3` shebangs.
 
-There is no `-git` package. One would be easy — drop `source` to the repository
-and add a `pkgver()` — but two packages mean two things to keep working, and
-nobody has asked for it.
+## Testing unreleased work
+
+`PKGBUILD-git` builds the current `main`:
+
+```sh
+cd packaging
+makepkg -p PKGBUILD-git -si
+```
+
+It exists because of a real confusion. `pulsar-mouse --version` reports the
+last release whether the code came from a tag or from `main`, so a tester on
+Arch who installed the release package had no way to tell they were no longer
+running the commit they were being asked to test — and following the install
+instructions above is itself a way to end up back on the release. The git
+package's version names the commit (`0.1.12.r7.gd32e53e`), so `pacman -Q`
+answers the question.
+
+It conflicts with `pulsar-mouse-linux`, so installing one replaces the other.

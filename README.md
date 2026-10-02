@@ -140,7 +140,11 @@ makepkg -si
 
 It pulls its dependencies from the official repositories, installs the entry
 points to `/usr/bin` and the udev rules to `/usr/lib/udev/rules.d`, and upgrades
-cleanly with `pacman -U` on later releases. See
+cleanly with `pacman -U` on later releases.
+
+To track `main` instead — worth it if you're testing something from an issue,
+since `--version` reports the last release either way — use
+`makepkg -p PKGBUILD-git -si`, whose package version names the commit. See
 [`packaging/README.md`](packaging/README.md) for what changes per release.
 
 *(Not on the AUR yet: registration there is paused while they deal with a wave of
