@@ -49,7 +49,8 @@ except ValueError as missing:
     ) from missing
 from gi.repository import Gtk, Adw, GLib, Gio, Gdk, Dbusmenu
 
-from pulsar_mouse import find_device, scan_devices, __version__
+from pulsar_mouse import (find_device, scan_devices, device_present,
+                          find_sibling, __version__)
 
 
 def _power_saving_supported(device) -> bool:
@@ -390,6 +391,7 @@ class PulsarMouseApp(Adw.Application):
         # _schedule_event_refresh() and _EVENT_COALESCE_MS.
         self._event_refresh_id = 0
         self._event_pending_profile_change = False
+        self._menu_server = None     # rebuilt when the mouse changes connection
         self._device = None  # PulsarDevice instance
 
     def _find_or_create_device(self) -> PulsarDevice | None:
@@ -431,6 +433,28 @@ class PulsarMouseApp(Adw.Application):
         sni = _StatusNotifierItem('pulsar-mouse', 'input-mouse', caps.name)
         sni.set_on_activate(lambda: self.activate())
         self._sni = sni
+
+        server = Dbusmenu.Server.new(_StatusNotifierItem._MENU_PATH)
+        server.set_root(self._build_tray_menu(device))
+        self._menu_server = server
+        sni.set_dbusmenu_server(server)
+
+        conn = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        sni.start(conn)
+
+        GLib.timeout_add(500, self._start_tray_updates)
+
+    def _build_tray_menu(self, device: PulsarDevice):
+        """The menu for one mouse.
+
+        Separate from _build_tray() because the two halves of a mouse differ
+        in what the menu should offer - the polling rates it can carry, a
+        battery reading, a signal row - so following a mouse to its other
+        connection means building this again against the new capabilities
+        rather than leaving the old one's menu in the tray (#11).
+        """
+        caps = device.capabilities
+        self._poll_items = {}
 
         root = Dbusmenu.Menuitem.new()
 
@@ -512,15 +536,7 @@ class PulsarMouseApp(Adw.Application):
         item_quit.property_set(Dbusmenu.MENUITEM_PROP_LABEL, 'Quit')
         item_quit.connect('item-activated', lambda _i, _t: self.quit())
         root.child_append(item_quit)
-
-        server = Dbusmenu.Server.new(_StatusNotifierItem._MENU_PATH)
-        server.set_root(root)
-        sni.set_dbusmenu_server(server)
-
-        conn = Gio.bus_get_sync(Gio.BusType.SESSION, None)
-        sni.start(conn)
-
-        GLib.timeout_add(500, self._start_tray_updates)
+        return root
 
     def _start_tray_updates(self):
         self._read_initial_state()
@@ -583,7 +599,50 @@ class PulsarMouseApp(Adw.Application):
                 pass
         threading.Thread(target=_read, daemon=True).start()
 
+    def _follow_device_swap(self) -> bool:
+        """Move to the mouse's other connection when this one has gone.
+
+        Plugging the cable in to charge and pulling it out later used to leave
+        the app reporting the connection it started on as missing, because the
+        device was found once and kept for the life of the process (#11).
+
+        Returns True when it switched, and only ever switches to the same
+        mouse: find_sibling() will not hand back a different model.
+        """
+        device = self._device
+        if device is None or device_present(device):
+            return False
+        sibling = find_sibling(device)
+        if sibling is None:
+            return False
+        try:
+            device.close()
+        except Exception:
+            pass
+        self._device = sibling
+        print(f'{device.capabilities.name} is gone; '
+              f'following the mouse to {sibling.capabilities.name}')
+
+        if self._menu_server is not None:
+            # The whole menu, not the DPI submenu: polling rates, battery and
+            # signal all depend on which half of the mouse this is.
+            self._menu_server.set_root(self._build_tray_menu(sibling))
+        self._battery_text = self._conn_text = None
+        self._last_signal_percent = None
+        self._read_initial_state()
+
+        # The window is built from capabilities too, so it has to be built
+        # again rather than reloaded.  Only when one is open: closing to the
+        # tray and swapping should not put a window back on screen.
+        if self.get_windows():
+            self._win.destroy()
+            self._win = None
+            GLib.idle_add(self.activate)
+        return True
+
     def _refresh_battery(self):
+        if self._follow_device_swap():
+            return True     # the new device's own read is already under way
         device = self._device
         if device is None or not hasattr(device, 'get_power') or self._battery_item is None:
             return True  # keep the timer alive in case device/UI state changes
