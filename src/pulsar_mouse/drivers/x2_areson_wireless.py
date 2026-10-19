@@ -29,6 +29,7 @@ from pulsar_mouse.drivers.nordic import (
     CMD_POWER,
     CMD_STATUS,
     DPI_MODES_SINGLE,
+    REPORT_ID,
 )
 
 
@@ -36,6 +37,10 @@ class _AresonMixin:
     """Shared protocol differences for both Areson USB modes."""
 
     _DPI_MODES = DPI_MODES_SINGLE
+
+    # Both the dongle and the cable answer configuration requests on hidraw
+    # with Input Report ID 0x09, while host requests use Output Report ID 0x08.
+    _INPUT_REPORT_IDS = (REPORT_ID, 0x09)
 
     _BUTTON_ADDRS = {
         'left': 0x60,

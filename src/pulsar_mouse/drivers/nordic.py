@@ -330,6 +330,7 @@ class PulsarNordic(PulsarDevice):
     )
 
     _ENDPOINT_IN = 0x82
+    _INPUT_REPORT_IDS = (REPORT_ID,)
 
     # Per-model overrides.  Subclasses that share the protocol but differ in
     # layout (extra buttons, a third LOD step) replace these.
@@ -521,7 +522,9 @@ class PulsarNordic(PulsarDevice):
             if not ready:
                 continue
             data = os.read(self._fd, 64)
-            if len(data) == size and data[0] == REPORT_ID:
+            if (len(data) == size
+                    and data[0] in self._INPUT_REPORT_IDS
+                    and self._checksum(*data[:size - 1]) == data[size - 1]):
                 return bytes(data)
 
     # Unsolicited reports do arrive: 0x0A follows every profile switch, and
@@ -529,15 +532,26 @@ class PulsarNordic(PulsarDevice):
     # hand one command another's reply and desync everything after it.
     _MAX_STALE_REPLIES = 4
 
+    @staticmethod
+    def _echoes(request, response) -> bool:
+        """A memory read is answered with the request's address and length
+        echoed back.  hidraw hands every open handle every report, so another
+        process talking to the mouse would otherwise have its replies taken
+        for ours."""
+        if request[1] == CMD_MEM_GET:
+            return request[3:6] == response[3:6]
+        return True
+
     def _command(self, cmd, **kwargs):
         pkt = self._build_packet(cmd, **kwargs)
         self._send(pkt)
-        resp = self._recv()
-        for _ in range(self._MAX_STALE_REPLIES):
-            if len(resp) > 1 and resp[1] == cmd:
-                break
+        for _ in range(self._MAX_STALE_REPLIES + 1):
             resp = self._recv()
-        return resp
+            if len(resp) > 1 and resp[1] == cmd and self._echoes(pkt, resp):
+                return resp
+        raise RuntimeError(
+            f"received no response for command 0x{cmd:02x} after "
+            f"{self._MAX_STALE_REPLIES + 1} unrelated reports")
 
     def _drain(self):
         """Discard unsolicited replies.
