@@ -205,20 +205,44 @@ class PulsarXliteV4Wireless(Fusion2Power, PulsarXliteV4):
     # (profile 0 replies carry data there instead).  The sub-register is
     # not compared: get_dpi_stages() asks with sub 0x15 and is answered
     # with 0x21 on this family too.  Answers arrived on the second poll,
-    # 11 ms after the request, for every register exercised; the deadline
-    # is there for a mouse that is asleep.
+    # 11 ms after the request, for every register exercised.  The deadline
+    # is for a reply that never comes; a mouse that is asleep is told apart
+    # sooner, by _NO_LINK below.
 
     _REPLY_TIMEOUT = 1.0
     _REPLY_POLL = 0.01
+
+    # A mouse that is asleep, or not back on the dongle yet, isn't slow to
+    # answer.  The dongle says it has no link to it, with byte[0]=0x05 and
+    # the request echoed, on the first poll, and a request that got one has
+    # never been answered.  With an X3 asleep, a polling-rate read got 05
+    # on all 5606 polls over 90 s, and on all 286 more over the 3 s after
+    # the mouse woke and its reports were coming through the dongle again;
+    # the same read sent again was answered in 33 ms.  A LOD write held the
+    # same way stayed on 05 through the wake too, and the mouse never took
+    # it.  In every log that kept each poll, none of 100 answered exchanges
+    # had a 05 before its 0x01, and every 05 came on the first poll (#21).
+    # So a 05 that echoes the request ends it there, for writes as well as
+    # reads.  One that echoes some other request is left to the deadline
+    # like any other reply that isn't ours: the reply buffer belongs to the
+    # dongle, not to this process, and another program's battery read has
+    # been seen sitting in it with a 05 of its own.
+    _NO_LINK = 0x05
 
     def _transact(self, cmd: bytes) -> bytes:
         self._set_report(cmd)
         deadline = time.monotonic() + self._REPLY_TIMEOUT
         while True:
             rsp = self._get_report()
-            if (rsp[0] == 0x01 and rsp[1:3] == cmd[1:3]
-                    and (cmd[6] == 0x00 or rsp[6] == cmd[6])):
-                return rsp
+            if rsp[1:3] == cmd[1:3] and (cmd[6] == 0x00 or rsp[6] == cmd[6]):
+                if rsp[0] == 0x01:
+                    return rsp
+                if rsp[0] == self._NO_LINK:
+                    raise IOError(
+                        f"no link from the dongle to the mouse for "
+                        f"cat=0x{cmd[1]:02x} reg=0x{cmd[2]:02x} "
+                        f"sub=0x{cmd[3]:02x} (status byte 0x{rsp[0]:02x}; "
+                        f"is the mouse awake and paired?)")
             if time.monotonic() >= deadline:
                 raise IOError(
                     f"no reply from the mouse to cat=0x{cmd[1]:02x} "
