@@ -302,12 +302,86 @@ class PulsarXliteV4Wireless(Fusion2Power, PulsarXliteV4):
     # been seen sitting in it with a 05 of its own.
     _NO_LINK = 0x05
 
+    # A request can also be lost after the dongle has taken it.  With the
+    # mouse moving, 216 of 5155 exchanges on an X3 went that way: the reply
+    # buffer showed the request pending (02), then, up to 147 ms in, went
+    # back to an answer it had already given.  The 67 watched for a second
+    # or more stayed there, never answered.  All 211 sent again, the same
+    # frame, were answered after that one resend, 150 on the first poll
+    # after it (about 11 ms), the slowest in 168 ms.  None was lost in 2295
+    # exchanges with the mouse still.  A gap before each request does not
+    # prevent it - 17 of 660 back to back, 20 of 660 with 10 ms, 14 of 660
+    # with Fusion2's 30 ms - so it is recovered from here rather than
+    # avoided.  Apply showed it first, after a LOD change (#24), but it is
+    # not about the LOD: 10 kinds of write and 11 kinds of read were lost.
+    #
+    # Two things count as the buffer going back.  Any answer at all in
+    # place of ours once the dongle has shown ours pending: 213 of the 216
+    # did, and 35 of those went back further than the previous request,
+    # past get_connected_mouse(), which the dongle answers itself (all 421
+    # on the first poll, within 0.5 ms, where nothing from the mouse comes
+    # back in under 10), to the request before it or to the last answer of
+    # the open before.  And the previous request's answer even when ours
+    # never showed, as the other 3 did, from the first poll.  An answer
+    # that was there before ours showed, to anything else, is another
+    # program's sitting in the buffer, and goes to the deadline as before
+    # (#28).
+    #
+    # Not on the first sight of it: _STALE_POLLS polls in a row, which put
+    # the resend 41-42 ms after the first such poll.  The exact number
+    # matters little by the logs: none of the 7234 exchanges answered on
+    # their first send showed an earlier answer at any poll, not even the
+    # first, straight after the SET_REPORT, and none of the 67 losses
+    # watched for a second showed ours again once it was gone.  So this is
+    # margin against what has not been seen.  And not in the last
+    # _STALE_RESEND_ROOM before the deadline: a resend there would be left
+    # pending when this gives up, for the next request to be dropped behind
+    # (#15); the slowest answer here took 336 ms.
+    #
+    # Writes too.  The risk #25 left alone on the cable is resending a
+    # write the mouse did take.  Here a resend only goes out after the
+    # dongle has stopped showing ours as pending (this never returns on 02)
+    # and gone back to an answer it had already given, so it is no longer
+    # working on ours; and the frame is the same byte for byte, so a write
+    # that did land is written again with the value it already has.  58 of
+    # the resent writes changed the LOD (1 mm <-> 2 mm), and all 58 read
+    # back as written.
+    #
+    # A budget per request, not per open as #25's: on the cable the losses
+    # all come at the start of an open, here at any point - 45 opens lost
+    # two requests and 10 lost three or more, one of them six - so one budget
+    # for the open would be spent by the first and fail the rest.  Each loss
+    # so far took one resend; two are allowed, inside the same deadline.
+    _STALE_POLLS = 5
+    _STALE_RESENDS = 2
+    _STALE_RESEND_ROOM = 0.35
+
+    # A button or stage-colour request is told apart from its neighbours by
+    # byte 7, the button or stage it is for: six of each go out back to back
+    # with the same category, register and profile, so without it a lost
+    # one going back to the previous one's answer passes for ours.  3 button
+    # reads did, here, before this, and came back with the previous button's
+    # binding.  The other 1047 button answers echo the button there and all
+    # 240 stage-colour answers the stage, as they do in a Fusion2 capture
+    # through this dongle; feinmann8k.py checks the same byte on the 8K
+    # dongle.
+    _INDEX_ECHO = ((0x04, 0x01), (0x05, 0x05))
+
+    def _echoes(self, rsp: bytes, req: bytes) -> bool:
+        if rsp[1:3] != req[1:3] or (req[6] != 0x00 and rsp[6] != req[6]):
+            return False
+        return ((req[1], req[2] & 0x7F) not in self._INDEX_ECHO
+                or rsp[7] == req[7])
+
     def _transact(self, cmd: bytes) -> bytes:
+        prev, self._last_sent = self._last_sent, cmd
         self._set_report(cmd)
         deadline = time.monotonic() + self._REPLY_TIMEOUT
+        sends, stale, shown = 1, 0, False
         while True:
             rsp = self._get_report()
-            if rsp[1:3] == cmd[1:3] and (cmd[6] == 0x00 or rsp[6] == cmd[6]):
+            if self._echoes(rsp, cmd):
+                stale = 0
                 if rsp[0] == 0x01:
                     return rsp
                 if rsp[0] == self._NO_LINK:
@@ -316,12 +390,26 @@ class PulsarXliteV4Wireless(Fusion2Power, PulsarXliteV4):
                         f"cat=0x{cmd[1]:02x} reg=0x{cmd[2]:02x} "
                         f"sub=0x{cmd[3]:02x} (status byte 0x{rsp[0]:02x}; "
                         f"is the mouse awake and paired?)")
+                shown = True
+            elif rsp[0] == 0x01 and (
+                    shown or (prev is not None and self._echoes(rsp, prev))):
+                stale += 1
+                if (stale >= self._STALE_POLLS
+                        and sends <= self._STALE_RESENDS
+                        and time.monotonic() + self._STALE_RESEND_ROOM
+                        < deadline):
+                    self._set_report(cmd)
+                    sends += 1
+                    stale = 0
+            else:
+                stale = 0
             if time.monotonic() >= deadline:
+                sent = f", sent {sends} times" if sends > 1 else ""
                 raise IOError(
                     f"no reply from the mouse to cat=0x{cmd[1]:02x} "
                     f"reg=0x{cmd[2]:02x} sub=0x{cmd[3]:02x} within "
                     f"{self._REPLY_TIMEOUT * 1000:.0f} ms (last status byte "
-                    f"0x{rsp[0]:02x}; is the mouse awake and paired?)")
+                    f"0x{rsp[0]:02x}{sent}; is the mouse awake and paired?)")
             time.sleep(self._REPLY_POLL)
 
     def _cmd(self, cat, reg, sub, profile, payload=()):
@@ -387,10 +475,12 @@ class PulsarXliteV4Wireless(Fusion2Power, PulsarXliteV4):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._lod_tenths = None     # see _lod_is_tenths()
+        self._last_sent = None      # see _STALE_POLLS
 
     def open(self) -> None:
         super().open()
         self._lod_tenths = None     # the dongle may have been re-paired
+        self._last_sent = None
 
     def _lod_is_tenths(self) -> bool:
         """Whether the mouse on the dongle uses Fusion2LodTenths' encoding.

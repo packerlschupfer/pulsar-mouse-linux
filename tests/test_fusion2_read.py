@@ -109,9 +109,10 @@ class DroppedReadTests(unittest.TestCase):
         self.assertEqual(len(mouse.sent), 1)
 
     def test_dongle_does_not_come_through_here(self):
-        # The 1K dongle has its own _read() (_transact()), where a second
-        # copy of a command is what loses replies (#15).  One send, then it
-        # gives up on its own deadline.
+        # The 1K dongle has its own _read() (_transact()), which sends a
+        # command again only once the dongle has gone back to an answer it
+        # already gave (#24), never on a 00 as this cable path does.  One
+        # send, then it gives up on its own deadline.
         class ScriptedDongle(PulsarXliteV4Wireless):
             _REPLY_TIMEOUT = 0
             _REPLY_POLL = 0
