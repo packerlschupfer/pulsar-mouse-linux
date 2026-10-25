@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from pulsar_mouse.drivers import xlite_v4_wireless
+from pulsar_mouse.drivers.x2a import PulsarX2A
 from pulsar_mouse.drivers.xlite_v4_wireless import PulsarXliteV4Wireless
 
 GAP = getattr(PulsarXliteV4Wireless, '_WRITE_GAP', 0.03)
@@ -87,6 +88,14 @@ class WriteGapTests(unittest.TestCase):
         before = self.clock.now
         self.dongle.get_polling_rate()
         self.assertEqual(self.dongle.sent_at[-1], before)
+
+    def test_a_new_open_inside_the_gap_still_waits(self):
+        # The slot is the radio's, not the handle's: open() leaves it alone.
+        self.dongle.set_polling_rate(1000)
+        with patch.object(PulsarX2A, 'open', lambda self: None):
+            self.dongle.open()
+        self.dongle.get_polling_rate()
+        self.assertAlmostEqual(self.gap_before_last(), GAP)
 
     def test_only_the_next_request_waits(self):
         self.dongle.set_polling_rate(1000)

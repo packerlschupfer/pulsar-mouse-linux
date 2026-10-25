@@ -379,6 +379,12 @@ class PulsarXliteV4Wireless(Fusion2Power, PulsarXliteV4):
     # waits, and the page read took 0.40 s either way.  It does not stop
     # the losses _STALE_POLLS recovers from: 27, 20, 19, 18 and 30 of 920
     # exchanges were lost moving at 0, 10, 20, 30 and 50 ms.
+    #
+    # open() leaves _write_answered alone on purpose, where it clears
+    # _last_sent and _lod_tenths.  The slot belongs to the dongle's radio,
+    # not to this handle, and monotonic() runs on across a close, so an
+    # open that starts inside the gap still waits out the rest of it and a
+    # later one pays nothing.
     _WRITE_GAP = 0.03
 
     def _echoes(self, rsp: bytes, req: bytes) -> bool:
@@ -503,6 +509,7 @@ class PulsarXliteV4Wireless(Fusion2Power, PulsarXliteV4):
         super().open()
         self._lod_tenths = None     # the dongle may have been re-paired
         self._last_sent = None
+        # Not _write_answered - see _WRITE_GAP.
 
     def _lod_is_tenths(self) -> bool:
         """Whether the mouse on the dongle uses Fusion2LodTenths' encoding.
