@@ -367,6 +367,20 @@ class PulsarXliteV4Wireless(Fusion2Power, PulsarXliteV4):
     # dongle.
     _INDEX_ECHO = ((0x04, 0x01), (0x05, 0x05))
 
+    # A request sent straight after a write's answer is answered in the
+    # dongle's next slot, about 230 ms later.  One sent 30 ms after it is
+    # answered about 74 ms after that.  On an X3, a page read and an Apply
+    # as the GUI makes them, 20 rounds of each gap with the mouse still and
+    # 20 moving: with no gap, 507 of 623 requests after a write waited for
+    # that slot, and with 30 ms none of 628 did, so Apply took 1.72 s
+    # instead of 3.42 with the mouse still and 1.81 instead of 3.01 moving.
+    # 20 ms left 30 of 627 in the slot, and 50 ms was no faster.  Reads
+    # after reads are answered on the second poll anyway, so nothing else
+    # waits, and the page read took 0.40 s either way.  It does not stop
+    # the losses _STALE_POLLS recovers from: 27, 20, 19, 18 and 30 of 920
+    # exchanges were lost moving at 0, 10, 20, 30 and 50 ms.
+    _WRITE_GAP = 0.03
+
     def _echoes(self, rsp: bytes, req: bytes) -> bool:
         if rsp[1:3] != req[1:3] or (req[6] != 0x00 and rsp[6] != req[6]):
             return False
@@ -374,6 +388,11 @@ class PulsarXliteV4Wireless(Fusion2Power, PulsarXliteV4):
                 or rsp[7] == req[7])
 
     def _transact(self, cmd: bytes) -> bytes:
+        if self._write_answered is not None:
+            wait = self._WRITE_GAP - (time.monotonic() - self._write_answered)
+            if wait > 0:
+                time.sleep(wait)
+            self._write_answered = None
         prev, self._last_sent = self._last_sent, cmd
         self._set_report(cmd)
         deadline = time.monotonic() + self._REPLY_TIMEOUT
@@ -383,6 +402,8 @@ class PulsarXliteV4Wireless(Fusion2Power, PulsarXliteV4):
             if self._echoes(rsp, cmd):
                 stale = 0
                 if rsp[0] == 0x01:
+                    if not cmd[2] & 0x80:   # a write; see _WRITE_GAP
+                        self._write_answered = time.monotonic()
                     return rsp
                 if rsp[0] == self._NO_LINK:
                     raise IOError(
@@ -476,6 +497,7 @@ class PulsarXliteV4Wireless(Fusion2Power, PulsarXliteV4):
         super().__init__(*args, **kwargs)
         self._lod_tenths = None     # see _lod_is_tenths()
         self._last_sent = None      # see _STALE_POLLS
+        self._write_answered = None  # see _WRITE_GAP
 
     def open(self) -> None:
         super().open()
