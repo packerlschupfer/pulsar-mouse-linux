@@ -428,7 +428,24 @@ class PulsarNordic(PulsarDevice):
         vid_pid_pairs=[(0x3554, 0xF507), (0x3554, 0xF508), (0x3554, 0xF509)],
         interface_num=1,
         report_size=17,
-        num_profiles=1,
+        # Four, measured at last: @bluesceada switched to 3 and 4 in Fusion
+        # and with a button bound to a profile switch, and the 2026-10-29
+        # capture showed 1 and 2 taking the same 0x0F this driver sends
+        # (#30).  It was 1 here, which left every profile but the active one
+        # unreachable - and the app editing whichever one the mouse happened
+        # to be on while calling it profile 1.
+        #
+        # One value for all 21 models, which is the same bet the rest of
+        # these capabilities make; Fusion's Cfg.ini has no per-model count
+        # to do better with.  What makes it safe is that a switch the mouse
+        # refuses now raises - see _switch_to() - instead of leaving a read
+        # addressing the profile it is still on.
+        num_profiles=4,
+        # The memory map *is* the active profile on this family, so
+        # everything in it is per profile by construction.  Two measured
+        # rather than assumed: debounce read 3 ms on profile 1 and 2 ms on
+        # profile 2 of the same mouse, and the sleep timer 1 min and 10 s.
+        per_profile_globals=True,
         # Four, and now cross-checked rather than inherited: every one of
         # the 21 models in Fusion's Cfg.ini carries DM=4, with four values
         # in its DPI= line and four colours in its DC= (@f-o-o-g-s, #30).
@@ -459,11 +476,14 @@ class PulsarNordic(PulsarDevice):
         debounce_range=(0, 30),
         # 0xB7 in units of 10 s, and Fusion's own slider gives the ends:
         # @bluesceada's profile 2 sat at its minimum, 01, and a drag to the
-        # far end wrote 3c (@f-o-o-g-s read it off the capture, #30).  Its
-        # stops are not evenly spaced - three under a minute, then whole
-        # minutes - so a value between them, 90 s say, is untested rather
-        # than known good.  Without this the slider would offer the base
-        # class's 30-900 s, which is neither end of what this mouse takes.
+        # far end wrote 3c (@f-o-o-g-s read it off the capture, #30).
+        # Without this the slider would offer the base class's 30-900 s,
+        # which is neither end of what this mouse takes.
+        #
+        # Every 10 s, not only Fusion's stops.  Fusion offers 10, 20 and
+        # 30 s and then whole minutes, but @bluesceada set 50 s here and
+        # timed the light going out: the register takes what it is given, so
+        # this app keeps offering the finer step.
         power_saving_range=(10, 600, 10),
         has_stage_colors=True,
         button_labels={

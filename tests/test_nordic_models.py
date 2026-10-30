@@ -357,6 +357,58 @@ class ProfileSwitchTests(unittest.TestCase):
         self.assertEqual(switch[6], 1)          # 0-based on the wire
 
 
+class ProfileCountTests(unittest.TestCase):
+    """Four profiles, and the globals that live in each of them (#30)."""
+
+    def test_the_family_has_four(self):
+        # 1 and 2 were measured in the capture, 3 and 4 by @bluesceada
+        # switching to them in Fusion and with a button bound to it.
+        self.assertEqual(PulsarNordic.capabilities.num_profiles, 4)
+
+    def test_the_globals_are_per_profile(self):
+        # The memory map is the active profile, so a "global" read with a
+        # profile named has to load that profile first.
+        self.assertTrue(PulsarNordic.capabilities.per_profile_globals)
+        device = mouse(XLITE_V3)
+        # The real _tunable_profile/_ensure_profile, which is what decides
+        # whether a profile gets loaded before the read.
+        del device.__class__._tunable_profile
+        del device.__class__._ensure_profile
+        device.__class__._mem_read_all = lambda self: None
+        # _drain() reads until one times out, and this stub always answers.
+        device.__class__._drain = lambda self: None
+        device._profile = 1
+        device._home_profile = 1
+        device.sent = []
+        device.get_debounce(profile=3)
+        switch = [p for p in device.sent if p[1] == 0x0F]
+        self.assertEqual([p[6] for p in switch], [2])    # 0-based on the wire
+
+    def test_a_global_with_no_profile_stays_where_the_mouse_is(self):
+        device = mouse(XLITE_V3)
+        del device.__class__._tunable_profile
+        del device.__class__._ensure_profile
+        device.__class__._mem_read_all = lambda self: None
+        device.__class__._drain = lambda self: None
+        device._profile = 2
+        device._home_profile = 2
+        device.sent = []
+        device.get_debounce()
+        self.assertEqual([p for p in device.sent if p[1] == 0x0F], [])
+
+    def test_the_sleep_step_is_finer_than_fusion_s_stops(self):
+        # Fusion offers 10/20/30 s then whole minutes; 50 s was set here and
+        # timed on hardware, so the step stays at 10 s.
+        lo, hi, step = PulsarNordic.capabilities.power_saving_range
+        self.assertEqual((lo, hi, step), (10, 600, 10))
+        device = mouse(XLITE_V3)
+        device._mem[ADDR_AUTOSLEEP] = 0x06
+        device.sent = []
+        device.set_power_saving_timeout(50)
+        wrote = [p for p in device.sent if p[1] == CMD_MEM_SET]
+        self.assertEqual(wrote[-1][6], 0x05)
+
+
 class CfgIniTests(unittest.TestCase):
     def test_the_table_is_the_one_from_the_cfg_ini(self):
         # All 21 models in Fusion Wireless Mice 1.3.3's Cfg.ini, and the
