@@ -2,6 +2,7 @@
 on the dongle" (01/84/04) under the previous request's header, which the 1K
 dongle's echo check never accepts."""
 
+import time
 import unittest
 
 from pulsar_mouse.drivers.fusion2_8k_dongle import PulsarFusion28KDongle
@@ -47,7 +48,8 @@ class EightKDongleTests(unittest.TestCase):
         dongle._read(0x01, 0x07, 0x04, 0x00)    # firmware, as the CLI reads first
         mouse = dongle.get_connected_mouse()
         self.assertEqual((mouse['vid'], mouse['pid']), (0x3710, X3_LHD_PID))
-        self.assertEqual(mouse['name'], 'Pulsar X3 Wired')
+        # The left-handed X3 has its own driver and its own name (x3_lhd.py).
+        self.assertEqual(mouse['name'], 'Pulsar X3 LHD')
 
     def test_the_next_read_is_not_mistaken_for_it(self):
         dongle = Scripted8KDongle()
@@ -64,6 +66,29 @@ class EightKDongleTests(unittest.TestCase):
     def test_the_1k_dongle_still_stops_at_1000(self):
         self.assertEqual(max(PulsarXliteV4Wireless.capabilities.polling_rates), 1000)
         self.assertEqual(max(PulsarFusion28KDongle.capabilities.polling_rates), 8000)
+
+    def test_a_sleeping_mouse_ends_it_on_the_first_poll(self):
+        # #28's rule, which the override had lost: a 05 that echoes the
+        # request is never answered, so polling on cost a whole second.
+        class Asleep(Scripted8KDongle):
+            def _get_report(self):
+                rsp = bytearray(self.sent[-1])
+                rsp[0] = 0x05
+                return bytes(rsp)
+
+        dongle = Asleep()
+        started = time.monotonic()
+        with self.assertRaisesRegex(IOError, 'no link'):
+            dongle.get_connected_mouse()
+        self.assertLess(time.monotonic() - started, dongle._REPLY_TIMEOUT / 2)
+        self.assertEqual(len(dongle.sent), 1)       # asked once
+
+    def test_a_reply_that_is_there_already_costs_no_poll(self):
+        dongle = Scripted8KDongle()
+        dongle._REPLY_POLL = 0.5
+        started = time.monotonic()
+        dongle.get_connected_mouse()
+        self.assertLess(time.monotonic() - started, 0.25)
 
     def test_it_is_its_own_driver(self):
         caps = PulsarFusion28KDongle.capabilities

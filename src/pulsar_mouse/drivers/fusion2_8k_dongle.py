@@ -62,17 +62,34 @@ class PulsarFusion28KDongle(PulsarXliteV4Wireless):
     def get_connected_mouse(self) -> dict:
         # Same request as the 1K dongle's; take the first done reply that
         # carries a Pulsar VID instead of one that echoes the request.
-        self._set_report(self._build_read(0x01, 0x04, 0x04, 0x00))
+        cmd = self._build_read(0x01, 0x04, 0x04, 0x00)
+        self._set_report(cmd)
         deadline = time.monotonic() + self._REPLY_TIMEOUT
-        while time.monotonic() < deadline:
-            time.sleep(self._REPLY_POLL)
+        while True:
             rsp = self._get_report()
             vid, pid = struct.unpack_from('<HH', rsp, 6)
+            # A no-link 05 that echoes this request is never answered, however
+            # long it is polled - the same thing #28 measured on the 1K
+            # dongle, and the reason _transact() gives up on the first one.
+            # Reaching the deadline instead cost a whole second per open on a
+            # sleeping mouse, since refine_capabilities() and _lod_is_tenths()
+            # both ask this.
+            if rsp[0] == self._NO_LINK and self._echoes(rsp, cmd):
+                raise IOError(
+                    "no link from the dongle to the mouse for cat=0x01 "
+                    "reg=0x84 sub=0x04 (status byte "
+                    f"0x{rsp[0]:02x}; is the mouse awake and paired?)")
             if rsp[0] == 0x01 and vid == 0x3710:
                 # The reply doesn't echo this request, so don't let the
                 # next one treat it as the previous request's answer.
                 self._last_sent = None
                 return {'vid': vid, 'pid': pid, 'name': _cabled_name(vid, pid)}
+            if time.monotonic() >= deadline:
+                break
+            # After the read, not before it: the answer is usually already
+            # there, and sleeping first spent a poll on every call.
+            time.sleep(self._REPLY_POLL)
+        self._last_sent = None      # see above; this request never echoed
         raise IOError("no reply from the mouse to cat=0x01 reg=0x84 sub=0x04 "
                       f"within {self._REPLY_TIMEOUT * 1000:.0f} ms "
                       "(is the mouse awake and paired?)")

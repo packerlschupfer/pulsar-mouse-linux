@@ -59,7 +59,7 @@ BUTTON_DEFAULTS = {
 # which mouse it is carrying and looks it up here.
 LOD_TENTHS_PIDS = {
     0x3409,     # Pulsar X3, x3.py's cabled PID
-    0x3410,     # Pulsar X3 LHD, x3.py's other cabled PID
+    0x3410,     # Pulsar X3 LHD, x3_lhd.py's
     0x3401,     # Pulsar Xlite v4, xlite_v4.py's
 }
 
