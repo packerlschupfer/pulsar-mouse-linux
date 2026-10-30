@@ -20,6 +20,7 @@ from pulsar_mouse.drivers.xlite_v4 import PulsarXliteV4
 from pulsar_mouse.drivers.xlite_v4_wireless import PulsarXliteV4Wireless
 
 X3_PID = 0x3409
+X3_LHD_PID = 0x3410
 XLITE_V4_PID = 0x3401
 # A Fusion2 mouse the dongle can carry whose lift-off shape nobody has read:
 # the X2 v3, X2H v3 and X2A v3 are in the Dongle Kit and not in this repo.
@@ -273,8 +274,8 @@ class DongleTests(unittest.TestCase):
         self.assertEqual(PulsarXliteV4Wireless.capabilities.num_profiles, 5)
         self.assertEqual(PulsarXliteV4Wireless.capabilities.lod_values, [1, 2])
 
-    def test_the_two_pids_are_the_two_that_were_read(self):
-        self.assertEqual(LOD_TENTHS_PIDS, {X3_PID, XLITE_V4_PID})
+    def test_the_pids_are_the_ones_that_were_read(self):
+        self.assertEqual(LOD_TENTHS_PIDS, {X3_PID, X3_LHD_PID, XLITE_V4_PID})
 
 
 class CabledXliteV4Tests(unittest.TestCase):

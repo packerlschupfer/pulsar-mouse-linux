@@ -449,6 +449,9 @@ class PulsarXliteV4Wireless(Fusion2Power, PulsarXliteV4):
         self._last_sent = None
         # Not _write_answered - see _WRITE_GAP.
 
+    # Which dongle the refined name says the mouse is on.
+    _DONGLE_LABEL = '1K dongle'
+
     # What belongs to the mouse rather than to the link: its profiles, its
     # DPI range and its lift-off distances are stored in the mouse and come
     # back through whichever end is plugged in.  Polling rates are not here
@@ -487,7 +490,7 @@ class PulsarXliteV4Wireless(Fusion2Power, PulsarXliteV4):
                 # once; the cabled driver's name says Wired because that is
                 # which half it is.
                 base = caps.name.removesuffix(' Wired')
-                changes['name'] = f'{base} (1K dongle)'
+                changes['name'] = f'{base} ({self._DONGLE_LABEL})'
                 return self._narrow_capabilities(**changes)
         return False
 

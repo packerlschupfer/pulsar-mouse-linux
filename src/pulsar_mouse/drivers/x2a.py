@@ -59,6 +59,7 @@ BUTTON_DEFAULTS = {
 # which mouse it is carrying and looks it up here.
 LOD_TENTHS_PIDS = {
     0x3409,     # Pulsar X3, x3.py's cabled PID
+    0x3410,     # Pulsar X3 LHD, x3.py's other cabled PID
     0x3401,     # Pulsar Xlite v4, xlite_v4.py's
 }
 
@@ -191,9 +192,12 @@ class PulsarX2A(PulsarDevice):
         caps = self.capabilities
         if self._dev is not None:
             return      # already open; claiming the interface twice is EBUSY
-        vid, pid = caps.vid_pid_pairs[0]
-        dev = usb.core.find(idVendor=vid, idProduct=pid)
+        for vid, pid in caps.vid_pid_pairs:
+            dev = usb.core.find(idVendor=vid, idProduct=pid)
+            if dev is not None:
+                break
         if dev is None:
+            vid, pid = caps.vid_pid_pairs[0]
             raise RuntimeError(
                 f"{caps.name} not found (VID=0x{vid:04x}, PID=0x{pid:04x}). "
                 "Is the mouse plugged in?")

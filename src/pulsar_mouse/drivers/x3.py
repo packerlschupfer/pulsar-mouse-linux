@@ -1,5 +1,5 @@
 """
-Pulsar X3 on its cable (3710:3409) — protocol driver.
+Pulsar X3 on its cable (3710:3409, LHD 3710:3410) — protocol driver.
 
 The X3 is a Fusion2 mouse: the same Sonix 64-byte Feature Report protocol
 as the X2A and Xlite v4, on interface 3, and the mouse the 1K dongle driver
@@ -18,10 +18,11 @@ it carries and matches the answer against this driver's ID.
 
 USB:
     VID 0x3710
-    PID 0x3409
+    PID 0x3409 (RHD), 0x3410 (LHD)
     Interface 3
 
-Confirmed on hardware with a Pulsar X3 on its cable (2026-10).
+Confirmed on hardware with a Pulsar X3 on its cable (2026-10), and the
+LHD both on its cable and through its 8K dongle (fusion2_8k_dongle.py).
 """
 
 from pulsar_mouse.base import DeviceCapabilities
@@ -34,7 +35,7 @@ class PulsarX3(Fusion2Power, PulsarXliteV4):
 
     capabilities = DeviceCapabilities(
         name='Pulsar X3 Wired',
-        vid_pid_pairs=[(0x3710, 0x3409)],
+        vid_pid_pairs=[(0x3710, 0x3409), (0x3710, 0x3410)],
         interface_num=3,
         report_size=64,
         # The profile list (02/82/10) answers 06 01 02 03 04 05 06, and the
