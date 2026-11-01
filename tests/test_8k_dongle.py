@@ -90,6 +90,35 @@ class EightKDongleTests(unittest.TestCase):
         dongle.get_connected_mouse()
         self.assertLess(time.monotonic() - started, 0.25)
 
+    def test_the_link_reports_read_the_same_on_both_dongles(self):
+        # @jonkristian's 8K log and @f-o-o-g-s's 1K walk agree: 02 while the
+        # mouse is gone, 01 when it is back (#21).
+        for cls in (PulsarFusion28KDongle, PulsarXliteV4Wireless):
+            device = cls.__new__(cls)
+            gone = device.parse_hidraw_event(
+                bytes.fromhex('05080201') + bytes(20))
+            back = device.parse_hidraw_event(
+                bytes.fromhex('05080101') + bytes(20))
+            self.assertEqual(gone, {'link_up': False}, cls.__name__)
+            self.assertEqual(back, {'link_up': True}, cls.__name__)
+
+    def test_the_other_pushed_reports_still_read(self):
+        device = PulsarFusion28KDongle.__new__(PulsarFusion28KDongle)
+        self.assertEqual(
+            device.parse_hidraw_event(bytes.fromhex('050d64') + bytes(20)),
+            {'signal_percent': 100})
+        self.assertEqual(
+            device.parse_hidraw_event(bytes.fromhex('0507005001') + bytes(20)),
+            {'battery_percent': 80, 'power_connected': False,
+             'battery_mv': None})
+
+    def test_a_report_nobody_reads_is_still_nothing(self):
+        # The 64-byte "HMRD" frame @jonkristian's 8K dongle sends on
+        # interface 2 at a wake, which nothing here decodes.
+        device = PulsarFusion28KDongle.__new__(PulsarFusion28KDongle)
+        self.assertIsNone(device.parse_hidraw_event(
+            bytes.fromhex('484d5244ff00000000030000ff1d1610') + bytes(48)))
+
     def test_it_is_its_own_driver(self):
         caps = PulsarFusion28KDongle.capabilities
         self.assertEqual(caps.vid_pid_pairs, [(0x3710, 0x5403)])

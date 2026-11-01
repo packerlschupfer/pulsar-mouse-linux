@@ -419,6 +419,25 @@ class PulsarXliteV4Wireless(Fusion2Power, PulsarXliteV4):
         # channel.
         if len(data) >= 3 and data[0] == 0x05 and data[1] == 0x0d:
             return {'signal_percent': data[2]}
+        # `05 08 <state> 01` when the link goes and comes back: 02 gone,
+        # 01 back.  Two mice on two dongles agree - @f-o-o-g-s's X3 on the
+        # 1K and @jonkristian's X3 LHD on the 8K, each carried out of range
+        # and brought back (#21).
+        #
+        # "Gone" is wider than out of range, which is what makes this worth
+        # reading: @jonkristian's first drop was his sleep timer, not his
+        # walk.  His last pointer report was at 0.358 s and the 02 came at
+        # 31.423 s, 31 s later, with that timer on 30 s - and @f-o-o-g-s
+        # reproduced it deliberately on his own mouse at the same 31 s,
+        # including that a read through the dongle partway does not push
+        # the sleep back.  So a battery poll neither keeps the mouse awake
+        # nor stops this arriving.
+        #
+        # The 01 lands about 0.1 s after the first movement, where the
+        # battery report the mouse pushes on waking took closer to a
+        # second, so this is the earliest anything here can know.
+        if len(data) >= 4 and data[0] == 0x05 and data[1] == 0x08:
+            return {'link_up': data[2] == 0x01}
         return super().parse_hidraw_event(data)
 
     # ── Per-profile: LOD ──────────────────────────────────────────────────

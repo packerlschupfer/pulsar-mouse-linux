@@ -1245,6 +1245,18 @@ class PulsarMouseApp(Adw.Application):
                         # _schedule_event_refresh().
                         GLib.idle_add(self._schedule_event_refresh,
                                       'profile_changed' in event)
+                    elif 'link_up' in event:
+                        # The mouse came back, from sleep as often as from
+                        # out of range (#21), and this says so sooner than
+                        # the battery report it pushes on waking.  Acted on
+                        # only when it is back: a link that went is not an
+                        # error - a sleeping mouse is the normal case - and
+                        # the last reading stays true enough to show.
+                        if event['link_up']:
+                            if self._initial_read_owed is device:
+                                GLib.idle_add(self._retry_initial_read,
+                                              device, _INITIAL_READ_TRIES)
+                            GLib.idle_add(self._reload_window_if_unread)
                     elif 'battery_percent' in event:
                         # Volunteered by the mouse (#21).  Cheaper and
                         # faster than the minute poll - no USB read, so

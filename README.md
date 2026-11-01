@@ -382,7 +382,7 @@ link, and the code comments next to whatever each finding explains.
 - [@iamtherobin](https://github.com/iamtherobin) — Pulsar Fusion USB captures and screen recordings that the X2 CrazyLight drivers (dongle and wired) were decoded from
 - [@dbergPROTAKT](https://github.com/dbergPROTAKT) — Pulsar X2 Wireless (Areson IDs) driver, with hardware testing over both the dongle and the cable; the hidraw framing checks that keep another program's replies out of ours, and the swap and retry timing behind the sleeping-mouse fixes
 - [@macieqzz](https://github.com/macieqzz) — Pulsar X2A Wireless button layout confirmed on hardware (thumb3/thumb4/DPI addresses and function slots)
-- [@jonkristian](https://github.com/jonkristian) — Pulsar X3 LHD and 8K dongle support, decoded from hardware including the dongle's stale-header answer
+- [@jonkristian](https://github.com/jonkristian) — Pulsar X3 LHD and 8K dongle support, decoded from hardware including the dongle's stale-header answer, and the log that settled the link-up/down report
 - [@bluesceada](https://github.com/bluesceada) — Xlite V3: found that it shares the X2A Wireless's USB IDs and differs only in the key matrix, the captures that decoded the CID/MID identity read, the readings that corrected the Nordic firmware string, the Cfg.ini model table, the captures that measured the sleep timer, and the libadwaita 1.5 fallback that fixed the GUI on Ubuntu 24.04
 - [@Wyatt-Robinson](https://github.com/Wyatt-Robinson) — Feinmann F01 Noctua Edition: USB capture and screen recording the driver was decoded from, plus hardware testing
 - meniscus- — Found that a wheel turn over a GUI slider silently changed the setting, on an X2 CrazyLight
