@@ -5,7 +5,7 @@
 # packaging/README.md for what to do on a release.
 
 pkgname=pulsar-mouse-linux
-pkgver=0.1.31
+pkgver=0.1.32
 pkgrel=1
 pkgdesc="Configure Pulsar gaming mice — CLI and GTK4/libadwaita GUI"
 arch=('any')
@@ -25,7 +25,7 @@ provides=("${pkgname}")
 conflicts=("${pkgname}-git" 'pulsar-x2a-linux')
 replaces=('pulsar-x2a-linux')
 source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
-sha256sums=('a35071224f0a4648c298cf47d9c848ca8332bb5cb6f0c7b7bb95563c5e715506')
+sha256sums=('9b4de25a3484205326696486aa0d3be04e7c3cc5210c4491f7a8bef4c2d5515c')
 
 build() {
   cd "${srcdir}/${pkgname}-${pkgver}"
