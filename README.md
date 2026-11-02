@@ -284,6 +284,30 @@ noctalia msg plugins enable harveywuk/pulsar-mouse
 
 Then add the `bar` or `battery` widget from Noctalia's widget editor.
 
+## Battery data for widgets
+
+Two ways to read it, both meant for exactly that, so a widget never has to talk to the
+mouse itself — which matters because only one program can hold a mouse's config interface
+at a time:
+
+```bash
+pulsar-mouse --battery-json
+{"wireless": true, "battery_percent": 86, "power_connected": false, "battery_mv": 4201}
+```
+
+and, while `pulsar-mouse-gui` is running (the window or just the tray), the same reading
+lands in `~/.cache/pulsar-mouse/battery.json` on every poll, plus `signal_percent` and
+`updated_at`. It is written to a temporary file and renamed into place, so a reader always
+sees a complete file.
+
+`battery_mv` is `null` on most mice: of the drivers here, only the Nordic-protocol ones
+report millivolts, and they are worth having where they exist — a percentage often moves
+in steps of 5 where the voltage moves continuously and dips under sensor load.
+`wireless` is `false`, with nothing else, on a mouse that has no battery.
+
+Other projects are welcome to emit the same shape; [espulse](https://github.com/itCFBTS/espulse)
+already does, so one widget can read either.
+
 ## Adding a new driver
 
 Each Pulsar mouse model uses a different USB protocol. To add support for a new model:
@@ -391,3 +415,4 @@ link, and the code comments next to whatever each finding explains.
 ## Related Projects
 
 - [python-pulsar-mouse-tool](https://github.com/andrewrabert/python-pulsar-mouse-tool) — Linux tool for the Pulsar X2 V2 Mini (wireless, battery support)
+- [espulse](https://github.com/itCFBTS/espulse) — Linux tool for the Pulsar eS line, whose dongles speak a third protocol this app does not: report `0x0e` with an `a5` magic and an opcode byte, documented in that repo
