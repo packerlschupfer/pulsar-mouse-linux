@@ -81,3 +81,11 @@ KERNEL=="hidraw*", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="5504", MODE="0660
 # Pulsar Feinmann F01 Noctua Edition wired (VID 0x3710, PID 0x7507) - Nordic protocol
 SUBSYSTEM=="usb", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="7507", MODE="0660", TAG+="uaccess"
 KERNEL=="hidraw*", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="7507", MODE="0660", TAG+="uaccess"
+
+# Pulsar eS Xlite on its cable (VID 0x3710, PID 0x9604)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="9604", MODE="0660", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="9604", MODE="0660", TAG+="uaccess"
+
+# Pulsar eS LINK Dongle (VID 0x3710, PID 0x5602)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="5602", MODE="0660", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="3710", ATTRS{idProduct}=="5602", MODE="0660", TAG+="uaccess"
