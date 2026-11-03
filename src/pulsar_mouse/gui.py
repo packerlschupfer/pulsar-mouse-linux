@@ -51,6 +51,9 @@ from gi.repository import Gtk, Adw, GLib, Gio, Gdk, Dbusmenu
 
 from pulsar_mouse import (find_device, scan_devices, device_present,
                           find_sibling, remember_connected_mouse, __version__)
+from pulsar_mouse.config import (
+    LOW_BATTERY_PERCENT_MAX, LOW_BATTERY_PERCENT_MIN, LOW_BATTERY_PERCENT_STEP,
+    load as load_settings, save as save_settings)
 
 
 def _power_saving_supported(device) -> bool:
@@ -2439,6 +2442,19 @@ X-GNOME-Autostart-enabled=true
         if row.get_active() != self._autostart_enabled():
             self._set_autostart(row.get_active())
 
+    def _on_low_battery_setting_changed(self, _row, _pspec):
+        notify = self._low_battery_notify_row.get_active()
+        # The threshold and the resident switch only mean something once
+        # the warning is on. They stay visible so the page shows what
+        # turning it on will do.
+        self._low_battery_percent_row.set_sensitive(notify)
+        self._low_battery_resident_row.set_sensitive(notify)
+        save_settings({
+            'low_battery_notify': notify,
+            'low_battery_percent': int(self._low_battery_percent_row.get_value()),
+            'low_battery_resident': self._low_battery_resident_row.get_active(),
+        })
+
     def _build_tools_page(self):
         caps = self._caps
 
@@ -2448,6 +2464,44 @@ X-GNOME-Autostart-enabled=true
         autostart_row.set_active(self._autostart_enabled())
         autostart_row.connect('notify::active', self._on_autostart_row_toggled)
         startup_group.add(autostart_row)
+
+        # Connected after the values are set: setting them must not write
+        # the file, or opening Tools would create a config the user never
+        # touched.
+        settings = load_settings()
+        battery_group = Adw.PreferencesGroup()
+        battery_group.set_title('Low Battery')
+        battery_group.set_description(
+            'One notification when the battery falls to the threshold')
+
+        self._low_battery_notify_row = Adw.SwitchRow()
+        self._low_battery_notify_row.set_title('Low Battery Warning')
+        self._low_battery_notify_row.set_active(settings['low_battery_notify'])
+
+        self._low_battery_percent_row = Adw.SpinRow.new_with_range(
+            LOW_BATTERY_PERCENT_MIN, LOW_BATTERY_PERCENT_MAX,
+            LOW_BATTERY_PERCENT_STEP)
+        self._low_battery_percent_row.set_title('Threshold')
+        self._low_battery_percent_row.set_subtitle('Battery percentage')
+        self._low_battery_percent_row.set_value(settings['low_battery_percent'])
+
+        self._low_battery_resident_row = Adw.SwitchRow()
+        self._low_battery_resident_row.set_title(
+            'Keep the warning until I dismiss it')
+        self._low_battery_resident_row.set_active(settings['low_battery_resident'])
+
+        notify = settings['low_battery_notify']
+        self._low_battery_percent_row.set_sensitive(notify)
+        self._low_battery_resident_row.set_sensitive(notify)
+        self._low_battery_notify_row.connect(
+            'notify::active', self._on_low_battery_setting_changed)
+        self._low_battery_percent_row.connect(
+            'notify::value', self._on_low_battery_setting_changed)
+        self._low_battery_resident_row.connect(
+            'notify::active', self._on_low_battery_setting_changed)
+        battery_group.add(self._low_battery_notify_row)
+        battery_group.add(self._low_battery_percent_row)
+        battery_group.add(self._low_battery_resident_row)
 
         diagnostics_group = Adw.PreferencesGroup()
         diagnostics_group.set_title('Diagnostics')
@@ -2479,7 +2533,7 @@ X-GNOME-Autostart-enabled=true
         import_row.connect('activated', self._on_import_clicked)
         io_group.add(import_row)
 
-        return self._wrap_page(startup_group, diagnostics_group, io_group)
+        return self._wrap_page(startup_group, battery_group, diagnostics_group, io_group)
 
     def _build_power_page(self):
         device = self._device

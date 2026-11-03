@@ -9,7 +9,11 @@ the 1.5 path is covered on a 1.7 box and the other way round.  Needs a
 display: CI runs the suite under xvfb-run.
 """
 
+import json
+import os
+import tempfile
 import unittest
+from unittest.mock import patch
 
 try:
     import gi
@@ -26,7 +30,9 @@ except (ImportError, ValueError):            # no GTK 4 / libadwaita here
 from pulsar_mouse.drivers.x2a import PulsarX2A
 
 TOOLS_ROWS = ['Test Input', 'Export Profile to JSON',
-              'Import Profile from JSON']
+              'Import Profile from JSON',
+              'Low Battery Warning', 'Threshold',
+              'Keep the warning until I dismiss it']
 
 
 class StubX2A(PulsarX2A):
@@ -81,6 +87,30 @@ class WindowBuildTests(unittest.TestCase):
         found = titles(win._view_stack.get_child_by_name('tools'))
         for title in TOOLS_ROWS:
             self.assertIn(title, found)
+
+    def test_the_low_battery_rows_write_the_config(self):
+        # A temp path: building the window must not create the user's file,
+        # and the rows must write the one they are given.
+        from pulsar_mouse import config
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, 'config.json')
+            with patch.object(config, 'CONFIG_PATH', path):
+                win = self.build()
+                self.assertFalse(os.path.exists(path))
+                self.assertFalse(win._low_battery_notify_row.get_active())
+                self.assertFalse(win._low_battery_percent_row.get_sensitive())
+                self.assertFalse(win._low_battery_resident_row.get_sensitive())
+                win._low_battery_notify_row.set_active(True)
+                self.assertTrue(win._low_battery_percent_row.get_sensitive())
+                win._low_battery_percent_row.set_value(35)
+                win._low_battery_resident_row.set_active(True)
+                with open(path) as f:
+                    saved = json.load(f)
+        self.assertEqual(saved, {
+            'low_battery_notify': True,
+            'low_battery_percent': 35,
+            'low_battery_resident': True,
+        })
 
     def test_it_builds_the_way_libadwaita_1_5_would(self):
         # No Adw.ButtonRow before 1.6, which is what Ubuntu 24.04 has.
