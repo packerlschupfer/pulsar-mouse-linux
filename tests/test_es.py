@@ -10,7 +10,8 @@ from unittest.mock import patch
 
 from pulsar_mouse import cli
 from pulsar_mouse.drivers.es import (
-    DIR_READ, MAGIC, OP_BATTERY, REPORT_ID, REPORT_SIZE, PulsarEs, _READS,
+    DIR_READ, MAGIC, OP_BATTERY, POLL_VAL_TO_HZ, REPORT_ID, REPORT_SIZE,
+    PulsarEs, _READS,
     _HIDIOCGFEATURE, _HIDIOCSFEATURE, _read_packet, _reply_data,
 )
 from pulsar_mouse.drivers.es_link_dongle import PulsarEsLinkDongle
@@ -126,6 +127,15 @@ class PacketTests(unittest.TestCase):
         self.assertIsNone(_reply_data(stage1, 0x04, 6, 2))
         self.assertIsNotNone(_reply_data(stage1, 0x04, 6, 1))
 
+    def test_a_longer_reply_is_cut_to_what_was_asked(self):
+        self.assertEqual(_reply_data(reply(0x01, 0x56, 0x00, 0x99), 0x01, 2),
+                         bytes([0x56, 0x00]))
+
+    def test_every_rate_the_mouse_can_report_is_listed(self):
+        # The GUI shows the last entry for a rate it can't find.
+        self.assertEqual(sorted(POLL_VAL_TO_HZ.values()),
+                         PulsarEs.capabilities.polling_rates)
+
 
 class ReadTests(EsTestCase):
     def test_settings(self):
@@ -146,6 +156,13 @@ class ReadTests(EsTestCase):
         self.assertEqual(info, {'active': 2, 'count': 2,
                                 'stages': [(800, 800), (3200, 3600)]})
         self.assertEqual(self.device.get_active_dpi_stage(1), 2)
+
+    def test_impossible_dpi_selections_are_errors(self):
+        for count, active in ((0, 0), (2, 3), (2, 0), (7, 1)):
+            device = self.make(FakeNode({**ANSWERS,
+                                         (0x02, None): reply(0x02, count, active)}))
+            with self.assertRaises(IOError):
+                device.get_dpi_stages()
 
     def test_power_has_no_voltage(self):
         self.assertEqual(self.device.get_power(),
@@ -235,9 +252,12 @@ class CliTests(EsTestCase):
         for packet in self.node.sent:
             self.assertEqual(packet[3], DIR_READ)
 
-    def test_a_write_flag_sends_nothing(self):
-        with self.assertRaises((NotImplementedError, SystemExit)):
-            self.run_cli('--poll', '1000')
+    def test_a_write_flag_gives_a_clean_error_and_sends_nothing(self):
+        for flag, says in ((('--poll', '1000'), 'read-only'),
+                           (('--active-profile', '1'), 'not supported')):
+            with self.assertRaises(SystemExit) as caught:
+                self.run_cli(*flag)
+            self.assertIn(says, str(caught.exception.code))
         self.assertTrue(all(p[3] == DIR_READ for p in self.node.sent))
 
 
@@ -368,6 +388,10 @@ class WindowTests(unittest.TestCase):
                 child = child.get_next_sibling()
             return found
 
+        # Anything that does read gets the script, never a real node.
+        patcher = patch('pulsar_mouse.drivers.es.fcntl.ioctl', FakeNode().ioctl)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         win = gui.MainWindow(device=StubEs())
         self.addCleanup(win._stop_listeners)
         found = titles(win, [])

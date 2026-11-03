@@ -103,7 +103,7 @@ def _reply_data(reply: bytes, op: int, length: int, selector=None):
     if (len(reply) < 5 or reply[0] != REPORT_ID or reply[1] != MAGIC
             or reply[2] != op or reply[3] != DIR_READ):
         return None
-    data = bytes(reply[5:5 + reply[4]])
+    data = bytes(reply[5:5 + reply[4]])[:length]
     if len(data) < length or (selector is not None and data[0] != selector):
         return None
     return data
@@ -130,7 +130,10 @@ class PulsarEs(PulsarDevice):
             'left': 0xb1, 'right': 0xb2, 'wheel': 0xb3,
             'back': 0xb4, 'forward': 0xb5,
         },
-        polling_rates=[500, 1000, 2000, 4000, 8000],
+        # 125 is in Bibimbap's table, though its page starts at 500.  Listed so
+        # a mouse on it reads as it is: the GUI shows the last entry for a
+        # rate it can't find.  Check it on hardware before writes offer it.
+        polling_rates=[125, 500, 1000, 2000, 4000, 8000],
         lod_values=[0.7, 0.8, 1.0, 1.2, 1.4],
         led_effects=['off', 'steady'],
         has_breathe_speed=False,
@@ -258,8 +261,10 @@ class PulsarEs(PulsarDevice):
 
     def get_dpi_stages(self, profile: int = 1) -> dict:
         count, active = self._read(OP_DPI_SELECTION, 2)
+        if not 1 <= active <= count <= self.capabilities.max_dpi_stages:
+            raise IOError(f'unexpected DPI selection: stage {active} of {count}')
         stages = []
-        for stage in range(1, min(count, self.capabilities.max_dpi_stages) + 1):
+        for stage in range(1, count + 1):
             data = self._read(OP_DPI_VALUE, 6, stage)
             stages.append((int.from_bytes(data[2:4], 'little'),
                            int.from_bytes(data[4:6], 'little')))
@@ -269,7 +274,7 @@ class PulsarEs(PulsarDevice):
         return self._read(OP_DPI_SELECTION, 2)[1]
 
     def get_stage_color(self, stage: int, profile: int = 1) -> tuple[int, int, int]:
-        _stage, r, g, b = self._read(OP_DPI_LED, 4, stage)[:4]
+        _stage, r, g, b = self._read(OP_DPI_LED, 4, stage)
         return (r, g, b)
 
     # ── Other settings ────────────────────────────────────────────────────
