@@ -54,6 +54,9 @@ from pulsar_mouse import (find_device, scan_devices, device_present,
 from pulsar_mouse.config import (
     LOW_BATTERY_PERCENT_MAX, LOW_BATTERY_PERCENT_MIN, LOW_BATTERY_PERCENT_STEP,
     load as load_settings, save as save_settings)
+from pulsar_mouse.low_battery import (
+    latch_released, notification_hints, notification_icon, should_notify,
+    warning_summary)
 
 
 def _power_saving_supported(device) -> bool:
@@ -253,6 +256,19 @@ def _connection_quality_label(pct):
     if pct >= 20:
         return 'Weak'
     return 'Poor'
+
+
+def _notification_icon() -> str:
+    """Where the warning's icon comes from.
+
+    The installed logo, then the one next to a source checkout.  See
+    low_battery.notification_icon().
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    return notification_icon((
+        '/usr/share/icons/hicolor/scalable/apps/pulsar-mouse.svg',
+        os.path.abspath(os.path.join(here, '..', '..', 'data', 'pulsar-mouse.svg')),
+    ))
 
 
 def _battery_icon_name(pct, charging):
@@ -498,6 +514,12 @@ class PulsarMouseApp(Adw.Application):
         self._event_refresh_id = 0
         self._event_pending_profile_change = False
         self._power_state = {}       # merged view of polled and pushed power
+        # One warning per discharge, for this process only.  See
+        # low_battery.should_notify().  The id is what CloseNotification
+        # needs; 0 means there is nothing on screen.
+        self._low_battery_latched = False
+        self._low_battery_notification_id = 0
+        self._low_battery_notify_warned = False
         # Set of one: the device the listener has seen leave the bus, and
         # when - see _swap_check_on_absence().
         self._absent_device = None
@@ -996,6 +1018,9 @@ class PulsarMouseApp(Adw.Application):
         # state every reader of it already has to handle, since that is what
         # it looks like before the first poll.
         self._power_state = {}
+        # The warning on screen names the mouse that left.  Close it, and
+        # let the next mouse's own reading warn if that one is low too.
+        self._forget_low_battery_warning()
         try:
             os.unlink(self._BATTERY_STATE_PATH)
         except OSError:
@@ -1171,6 +1196,113 @@ class PulsarMouseApp(Adw.Application):
         wins = self.get_windows()
         if wins:
             wins[0]._set_home_battery(pwr)
+        # After the label and the state file.  A missing notification
+        # daemon must not skip either, and must not kill this poll.
+        try:
+            self._consider_low_battery(pct, charging)
+        except Exception:
+            pass
+
+    def _consider_low_battery(self, pct, charging):
+        """Send, or withdraw, the host-side warning for this reading.
+
+        The switch defaults off.  While it is off there is nothing to do
+        except take down a warning that was sent before it was turned off.
+        The decision itself is low_battery.should_notify(); this method
+        only applies it and talks to the daemon.
+        """
+        settings = load_settings()
+        if not settings['low_battery_notify']:
+            self._forget_low_battery_warning()
+            return
+        threshold = settings['low_battery_percent']
+        if latch_released(pct, charging, threshold):
+            self._forget_low_battery_warning()
+        if not should_notify(pct, charging, self._low_battery_latched, threshold):
+            return
+        device = self._device
+        name = device.capabilities.name if device is not None else 'Pulsar mouse'
+        try:
+            self._low_battery_notification_id = self._send_low_battery(
+                warning_summary(name, pct), settings['low_battery_resident'])
+        except Exception:
+            # The next poll tries again.  Said once, so a machine with no
+            # notification daemon does not print on every reading.
+            if not self._low_battery_notify_warned:
+                self._low_battery_notify_warned = True
+                print('pulsar-mouse: low-battery warning not sent '
+                      '(no notification daemon?)', file=sys.stderr)
+            return
+        self._low_battery_latched = True
+        self._low_battery_notify_warned = False
+
+    def _forget_low_battery_warning(self):
+        """Drop the latch and take the warning off the screen.
+
+        Charging, recovering past the hysteresis, turning the switch off,
+        and following a different mouse all mean the warning that is up
+        no longer describes the current discharge.
+        """
+        self._low_battery_latched = False
+        self._withdraw_low_battery_notification()
+
+    def _notification_hints_variant(self, resident):
+        raw = notification_hints(resident)
+        hints = {
+            'urgency': GLib.Variant('y', raw['urgency']),
+            'desktop-entry': GLib.Variant('s', raw['desktop-entry']),
+        }
+        if raw.get('resident'):
+            hints['resident'] = GLib.Variant('b', True)
+        return hints
+
+    def _send_low_battery(self, summary, resident):
+        """Notify() on the session bus.  Returns the daemon's id.
+
+        Raises when nothing owns org.freedesktop.Notifications.  The
+        caller keeps the battery label updating either way.
+        """
+        # replaces_id is the previous warning, or 0 for a new one.  -1 lets
+        # the daemon choose how long a normal warning stays up.
+        params = GLib.Variant('(susssasa{sv}i)', (
+            'Pulsar Mouse',
+            self._low_battery_notification_id,
+            _notification_icon(),
+            summary,
+            '',
+            [],
+            self._notification_hints_variant(resident),
+            -1,
+        ))
+        result = self._notifications_call('Notify', params, GLib.VariantType('(u)'))
+        return result.unpack()[0]
+
+    def _withdraw_low_battery_notification(self):
+        nid = self._low_battery_notification_id
+        self._low_battery_notification_id = 0
+        if not nid:
+            return
+        try:
+            # An id the daemon has already dropped is a no-op.  It still
+            # must not throw into the poll.
+            self._notifications_call(
+                'CloseNotification', GLib.Variant('(u)', (nid,)), None)
+        except Exception:
+            pass
+
+    def _notifications_call(self, method, params, reply_type):
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        return bus.call_sync(
+            'org.freedesktop.Notifications',
+            '/org/freedesktop/Notifications',
+            'org.freedesktop.Notifications',
+            method,
+            params,
+            reply_type,
+            Gio.DBusCallFlags.NONE,
+            2000,
+            None,
+        )
 
     def _set_conn_quality_label(self, pct):
         self._last_signal_percent = pct

@@ -1,4 +1,5 @@
-"""Host-side settings for the GUI.
+"""
+Host-side settings for the GUI.
 
 Three keys, in ~/.config/pulsar-mouse/config.json. There was no app config
 file before this: Start on Login is a desktop file under ~/.config/autostart,
