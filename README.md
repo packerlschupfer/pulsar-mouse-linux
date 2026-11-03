@@ -358,20 +358,41 @@ kwriteconfig6 --file kcminputrc --group Mouse --key XLbInptAccelProfileFlat true
 kwriteconfig6 --file kcminputrc --group Mouse --key XLbInptPointerAcceleration 0.0
 ```
 
-### Kernel boot options (advanced)
+### USB polling interval — check, don't set
 
-For lowest possible input latency, add to `/etc/default/grub` in
-`GRUB_CMDLINE_LINUX_DEFAULT`:
+You will find advice around to add `usbhid.mousepoll=1` to your kernel command
+line "for lower latency". **Don't, on these mice.** This README used to say it
+too, which is the reason it is spelled out here.
 
+That parameter is in milliseconds and it *overrides* what the mouse asks for,
+in both directions. These mice already ask for the fastest interval the bus
+has — every endpoint on an X2A reports `bInterval=1` — so at best the setting
+changes nothing, and on a mouse running above 1000 Hz it is a cap: 1 ms is
+1000 Hz, where an 8K dongle here was measured sending about 7200 reports a
+second.
+
+What to check, if you suspect something is throttling your mouse:
+
+```bash
+cat /sys/module/usbhid/parameters/mousepoll     # 0 is what you want
 ```
-usbhid.mousepoll=1    # 1ms USB polling (default is 10ms for non-gaming mice)
+
+`0` means the kernel uses the interval the mouse requests, which is the right
+answer for every mouse this app supports. Anything else was set by you or by
+your distribution, and on a high-rate mouse it is worth removing from
+`/etc/default/grub` (then `sudo update-grub` and reboot).
+
+To see what your own mouse asks for, with its bus address from `lsusb`
+(`Bus 001 Device 009` below is `1-6.4` or similar in the paths — the easiest
+way is to look at all of them and pick out yours):
+
+```bash
+lsusb | grep -i pulsar
+grep . /sys/bus/usb/devices/*:*/ep_*/bInterval
 ```
 
-Then run `sudo update-grub && reboot`.
-
-> **Note:** The mouse already reports `bInterval=1` so the kernel should
-> honour 1ms polling by default with most USB controllers. This option is
-> only needed if you suspect the kernel is overriding the interval.
+`01` is one interval, the fastest the bus offers. On this maintainer's X2A
+every endpoint reads `01`, while the hubs and keyboards around it read `0c`.
 
 ## Protocol notes (X2A)
 
