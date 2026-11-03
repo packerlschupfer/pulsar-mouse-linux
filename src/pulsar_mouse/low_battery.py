@@ -5,11 +5,16 @@ The GUI holds the latch and talks to the notification daemon.  This module
 only decides, so the rules can be tested without a display or a mouse.
 """
 
-import os
-
 # Five points above the threshold, so a reading that flickers on the
 # threshold does not send the warning again.
 HYSTERESIS = 5
+
+# The picture beside the text.  A standard theme icon, so it does not
+# depend on the app logo being installed.  The logo stays the application
+# icon, from the desktop file.  Plasma draws that column only from a file
+# it can load, and hides it when the icon is the same as the logo, so the
+# GUI sends a resolved path of this icon when it can find one.
+NOTIFICATION_IMAGE = 'battery-caution'
 
 
 def should_notify(percent, charging, latched, threshold) -> bool:
@@ -35,34 +40,41 @@ def latch_released(percent, charging, threshold) -> bool:
     return percent >= threshold + HYSTERESIS
 
 
-def warning_summary(name, percent) -> str:
-    """The notification title: which mouse, and the percentage."""
-    return f'{name} — {percent}%'
+def warning_summary() -> str:
+    """The title.  The app name is already shown, so this is the problem."""
+    return 'Battery low'
 
 
-def notification_icon(paths) -> str:
-    """The first logo file that exists, otherwise the icon name.
+def warning_body(name, percent) -> str:
+    """The line under the title: which mouse, and the percentage."""
+    return f'{name} is at {percent}%.'
 
-    A name is resolved by the icon theme the notification daemon loaded
-    at login.  A logo installed after that still shows as a blank
-    document.  The file is loaded directly.
+
+def notification_timeout(resident: bool) -> int:
+    """How long the desktop may keep the warning up, in milliseconds.
+
+    0 means never expire, which is "keep it until I dismiss it" without
+    raising the urgency.  Critical urgency would also show during Do Not
+    Disturb on Plasma, and the switch does not ask for that.  -1 lets the
+    desktop choose for an ordinary warning.
     """
-    for path in paths:
-        if path and os.path.isfile(path):
-            return path
-    return 'pulsar-mouse'
+    return 0 if resident else -1
 
 
-def notification_hints(resident: bool) -> dict:
+def notification_hints(resident: bool, image=None) -> dict:
     """Freedesktop hint values.  The GUI wraps them as D-Bus variants.
 
-    Urgency 1 uses the desktop's own timeout.  Urgency 2 plus `resident`
-    asks it to stay until dismissed.  `desktop-entry` is the installed
-    desktop file, without the suffix.
+    Urgency stays normal either way.  `resident` means a click on an
+    action does not dismiss the warning, which is separate from how long
+    it stays up.  `image-path` is the picture beside the text: the theme
+    name, or a file of that same icon when the caller resolved one.
+    `desktop-entry` is the installed desktop file, without the suffix,
+    and that is where the logo comes from.
     """
     hints = {
-        'urgency': 2 if resident else 1,
+        'urgency': 1,
         'desktop-entry': 'pulsar-mouse',
+        'image-path': image or NOTIFICATION_IMAGE,
     }
     if resident:
         hints['resident'] = True

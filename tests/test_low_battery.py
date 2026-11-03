@@ -11,8 +11,8 @@ import unittest
 from unittest.mock import patch
 
 from pulsar_mouse.low_battery import (
-    latch_released, notification_hints, notification_icon, should_notify,
-    warning_summary)
+    latch_released, notification_hints, notification_timeout, should_notify,
+    warning_body, warning_summary)
 
 try:
     from pulsar_mouse.gui import PulsarMouseApp
@@ -59,28 +59,34 @@ class LatchReleasedTests(unittest.TestCase):
 
 
 class WarningTextTests(unittest.TestCase):
-    def test_the_summary_names_the_mouse_and_the_percentage(self):
+    def test_the_title_is_the_problem_and_the_body_names_the_mouse(self):
+        self.assertEqual(warning_summary(), 'Battery low')
         self.assertEqual(
-            warning_summary('Pulsar X2 CrazyLight Wireless', 18),
-            'Pulsar X2 CrazyLight Wireless — 18%')
+            warning_body('Pulsar X2 CrazyLight Wireless', 18),
+            'Pulsar X2 CrazyLight Wireless is at 18%.')
 
     def test_a_normal_warning_uses_the_desktop_timeout(self):
         hints = notification_hints(False)
         self.assertEqual(hints['urgency'], 1)
         self.assertNotIn('resident', hints)
         self.assertEqual(hints['desktop-entry'], 'pulsar-mouse')
+        self.assertEqual(hints['image-path'], 'battery-caution')
+        self.assertEqual(notification_timeout(False), -1)
 
-    def test_a_logo_file_is_the_icon(self):
-        with tempfile.NamedTemporaryFile(suffix='.svg') as handle:
-            self.assertEqual(notification_icon((handle.name, '/no/such')), handle.name)
+    def test_a_resolved_icon_file_is_the_picture(self):
+        # A theme name does not fill Plasma's column beside the text.
+        path = '/usr/share/icons/breeze-dark/status/22/battery-caution.svg'
+        hints = notification_hints(False, path)
+        self.assertEqual(hints['image-path'], path)
+        self.assertEqual(hints['desktop-entry'], 'pulsar-mouse')
 
-    def test_a_missing_logo_uses_the_icon_name(self):
-        self.assertEqual(notification_icon(('/no/such',)), 'pulsar-mouse')
-
-    def test_a_resident_warning_asks_to_stay_until_dismissed(self):
+    def test_a_resident_warning_never_expires_and_stays_normal(self):
+        # Critical urgency would also show during Do Not Disturb on Plasma.
+        # The switch asks only to stay until dismissed.
         hints = notification_hints(True)
-        self.assertEqual(hints['urgency'], 2)
+        self.assertEqual(hints['urgency'], 1)
         self.assertTrue(hints['resident'])
+        self.assertEqual(notification_timeout(True), 0)
 
 
 @unittest.skipIf(PulsarMouseApp is None, 'needs GTK 4 and libadwaita')
@@ -95,8 +101,8 @@ class ConsiderTests(unittest.TestCase):
         app.sent = []
         app.closed = []
 
-        def send(summary, resident):
-            app.sent.append((summary, resident))
+        def send(summary, body, resident):
+            app.sent.append((summary, body, resident))
             return 9
 
         def withdraw():
@@ -124,7 +130,7 @@ class ConsiderTests(unittest.TestCase):
             self.app._consider_low_battery(18, False)
             self.app._consider_low_battery(16, False)
         self.assertEqual(self.app.sent, [(
-            'Pulsar X2 CrazyLight Wireless — 18%', False)])
+            'Battery low', 'Pulsar X2 CrazyLight Wireless is at 18%.', False)])
         self.assertTrue(self.app._low_battery_latched)
         self.assertEqual(self.app._low_battery_notification_id, 9)
 
@@ -141,7 +147,7 @@ class ConsiderTests(unittest.TestCase):
         self.assertFalse(self.app._low_battery_latched)
 
     def test_a_failed_send_does_not_latch_and_is_said_once(self):
-        def boom(summary, resident):
+        def boom(summary, body, resident):
             raise RuntimeError('no daemon')
 
         self.app._send_low_battery = boom

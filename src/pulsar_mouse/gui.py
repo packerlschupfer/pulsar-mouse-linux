@@ -55,8 +55,8 @@ from pulsar_mouse.config import (
     LOW_BATTERY_PERCENT_MAX, LOW_BATTERY_PERCENT_MIN, LOW_BATTERY_PERCENT_STEP,
     load as load_settings, save as save_settings)
 from pulsar_mouse.low_battery import (
-    latch_released, notification_hints, notification_icon, should_notify,
-    warning_summary)
+    NOTIFICATION_IMAGE, latch_released, notification_hints,
+    notification_timeout, should_notify, warning_body, warning_summary)
 
 
 def _power_saving_supported(device) -> bool:
@@ -256,19 +256,6 @@ def _connection_quality_label(pct):
     if pct >= 20:
         return 'Weak'
     return 'Poor'
-
-
-def _notification_icon() -> str:
-    """Where the warning's icon comes from.
-
-    The installed logo, then the one next to a source checkout.  See
-    low_battery.notification_icon().
-    """
-    here = os.path.dirname(os.path.abspath(__file__))
-    return notification_icon((
-        '/usr/share/icons/hicolor/scalable/apps/pulsar-mouse.svg',
-        os.path.abspath(os.path.join(here, '..', '..', 'data', 'pulsar-mouse.svg')),
-    ))
 
 
 def _battery_icon_name(pct, charging):
@@ -1224,7 +1211,8 @@ class PulsarMouseApp(Adw.Application):
         name = device.capabilities.name if device is not None else 'Pulsar mouse'
         try:
             self._low_battery_notification_id = self._send_low_battery(
-                warning_summary(name, pct), settings['low_battery_resident'])
+                warning_summary(), warning_body(name, pct),
+                settings['low_battery_resident'])
         except Exception:
             # The next poll tries again.  Said once, so a machine with no
             # notification daemon does not print on every reading.
@@ -1246,33 +1234,62 @@ class PulsarMouseApp(Adw.Application):
         self._low_battery_latched = False
         self._withdraw_low_battery_notification()
 
+    def _battery_caution_file(self):
+        """A file of the battery-caution icon, when the theme has one.
+
+        Plasma's history row draws the column beside the text from an
+        image file.  The theme name never becomes that image, and the
+        column is then hidden because the only icon left is the logo.
+        """
+        found = getattr(self, '_battery_caution_path', '')
+        if found:
+            return found
+        path = ''
+        try:
+            display = Gdk.Display.get_default()
+            if display is not None:
+                theme = Gtk.IconTheme.get_for_display(display)
+                icon = theme.lookup_icon(
+                    NOTIFICATION_IMAGE, None, 64, 1,
+                    Gtk.TextDirection.NONE, Gtk.IconLookupFlags.NONE)
+                file = icon.get_file() if icon is not None else None
+                path = file.get_path() if file is not None else ''
+        except Exception:
+            path = ''
+        if path:
+            self._battery_caution_path = path
+        return path or None
+
     def _notification_hints_variant(self, resident):
-        raw = notification_hints(resident)
+        raw = notification_hints(resident, self._battery_caution_file())
         hints = {
             'urgency': GLib.Variant('y', raw['urgency']),
             'desktop-entry': GLib.Variant('s', raw['desktop-entry']),
+            'image-path': GLib.Variant('s', raw['image-path']),
         }
         if raw.get('resident'):
             hints['resident'] = GLib.Variant('b', True)
         return hints
 
-    def _send_low_battery(self, summary, resident):
+    def _send_low_battery(self, summary, body, resident):
         """Notify() on the session bus.  Returns the daemon's id.
 
         Raises when nothing owns org.freedesktop.Notifications.  The
         caller keeps the battery label updating either way.
         """
-        # replaces_id is the previous warning, or 0 for a new one.  -1 lets
-        # the daemon choose how long a normal warning stays up.
+        # replaces_id is the previous warning, or 0 for a new one.
+        # The icon name is the application icon.  The picture beside the
+        # text is the image-path hint, resolved to a file of that icon
+        # when the theme has one.
         params = GLib.Variant('(susssasa{sv}i)', (
             'Pulsar Mouse',
             self._low_battery_notification_id,
-            _notification_icon(),
+            'pulsar-mouse',
             summary,
-            '',
+            body,
             [],
             self._notification_hints_variant(resident),
-            -1,
+            notification_timeout(resident),
         ))
         result = self._notifications_call('Notify', params, GLib.VariantType('(u)'))
         return result.unpack()[0]
