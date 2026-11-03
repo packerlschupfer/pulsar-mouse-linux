@@ -51,6 +51,12 @@ from gi.repository import Gtk, Adw, GLib, Gio, Gdk, Dbusmenu
 
 from pulsar_mouse import (find_device, scan_devices, device_present,
                           find_sibling, remember_connected_mouse, __version__)
+from pulsar_mouse.config import (
+    LOW_BATTERY_PERCENT_MAX, LOW_BATTERY_PERCENT_MIN, LOW_BATTERY_PERCENT_STEP,
+    load as load_settings, save as save_settings)
+from pulsar_mouse.low_battery import (
+    NOTIFICATION_IMAGE, latch_released, notification_hints,
+    notification_timeout, should_notify, warning_body, warning_summary)
 
 
 def _power_saving_supported(device) -> bool:
@@ -495,6 +501,12 @@ class PulsarMouseApp(Adw.Application):
         self._event_refresh_id = 0
         self._event_pending_profile_change = False
         self._power_state = {}       # merged view of polled and pushed power
+        # One warning per discharge, for this process only.  See
+        # low_battery.should_notify().  The id is what CloseNotification
+        # needs; 0 means there is nothing on screen.
+        self._low_battery_latched = False
+        self._low_battery_notification_id = 0
+        self._low_battery_notify_warned = False
         # Set of one: the device the listener has seen leave the bus, and
         # when - see _swap_check_on_absence().
         self._absent_device = None
@@ -993,6 +1005,9 @@ class PulsarMouseApp(Adw.Application):
         # state every reader of it already has to handle, since that is what
         # it looks like before the first poll.
         self._power_state = {}
+        # The warning on screen names the mouse that left.  Close it, and
+        # let the next mouse's own reading warn if that one is low too.
+        self._forget_low_battery_warning()
         try:
             os.unlink(self._BATTERY_STATE_PATH)
         except OSError:
@@ -1168,6 +1183,143 @@ class PulsarMouseApp(Adw.Application):
         wins = self.get_windows()
         if wins:
             wins[0]._set_home_battery(pwr)
+        # After the label and the state file.  A missing notification
+        # daemon must not skip either, and must not kill this poll.
+        try:
+            self._consider_low_battery(pct, charging)
+        except Exception:
+            pass
+
+    def _consider_low_battery(self, pct, charging):
+        """Send, or withdraw, the host-side warning for this reading.
+
+        The switch defaults off.  While it is off there is nothing to do
+        except take down a warning that was sent before it was turned off.
+        The decision itself is low_battery.should_notify(); this method
+        only applies it and talks to the daemon.
+        """
+        settings = load_settings()
+        if not settings['low_battery_notify']:
+            self._forget_low_battery_warning()
+            return
+        threshold = settings['low_battery_percent']
+        if latch_released(pct, charging, threshold):
+            self._forget_low_battery_warning()
+        if not should_notify(pct, charging, self._low_battery_latched, threshold):
+            return
+        device = self._device
+        name = device.capabilities.name if device is not None else 'Pulsar mouse'
+        try:
+            self._low_battery_notification_id = self._send_low_battery(
+                warning_summary(), warning_body(name, pct),
+                settings['low_battery_resident'])
+        except Exception:
+            # The next poll tries again.  Said once, so a machine with no
+            # notification daemon does not print on every reading.
+            if not self._low_battery_notify_warned:
+                self._low_battery_notify_warned = True
+                print('pulsar-mouse: low-battery warning not sent '
+                      '(no notification daemon?)', file=sys.stderr)
+            return
+        self._low_battery_latched = True
+        self._low_battery_notify_warned = False
+
+    def _forget_low_battery_warning(self):
+        """Drop the latch and take the warning off the screen.
+
+        Charging, recovering past the hysteresis, turning the switch off,
+        and following a different mouse all mean the warning that is up
+        no longer describes the current discharge.
+        """
+        self._low_battery_latched = False
+        self._withdraw_low_battery_notification()
+
+    def _battery_caution_file(self):
+        """A file of the battery-caution icon, when the theme has one.
+
+        Plasma's history row draws the column beside the text from an
+        image file.  The theme name never becomes that image, and the
+        column is then hidden because the only icon left is the logo.
+        """
+        found = getattr(self, '_battery_caution_path', '')
+        if found:
+            return found
+        path = ''
+        try:
+            display = Gdk.Display.get_default()
+            if display is not None:
+                theme = Gtk.IconTheme.get_for_display(display)
+                icon = theme.lookup_icon(
+                    NOTIFICATION_IMAGE, None, 64, 1,
+                    Gtk.TextDirection.NONE, Gtk.IconLookupFlags.NONE)
+                file = icon.get_file() if icon is not None else None
+                path = file.get_path() if file is not None else ''
+        except Exception:
+            path = ''
+        if path:
+            self._battery_caution_path = path
+        return path or None
+
+    def _notification_hints_variant(self, resident):
+        raw = notification_hints(resident, self._battery_caution_file())
+        hints = {
+            'urgency': GLib.Variant('y', raw['urgency']),
+            'desktop-entry': GLib.Variant('s', raw['desktop-entry']),
+            'image-path': GLib.Variant('s', raw['image-path']),
+        }
+        if raw.get('resident'):
+            hints['resident'] = GLib.Variant('b', True)
+        return hints
+
+    def _send_low_battery(self, summary, body, resident):
+        """Notify() on the session bus.  Returns the daemon's id.
+
+        Raises when nothing owns org.freedesktop.Notifications.  The
+        caller keeps the battery label updating either way.
+        """
+        # replaces_id is the previous warning, or 0 for a new one.
+        # The icon name is the application icon.  The picture beside the
+        # text is the image-path hint, resolved to a file of that icon
+        # when the theme has one.
+        params = GLib.Variant('(susssasa{sv}i)', (
+            'Pulsar Mouse',
+            self._low_battery_notification_id,
+            'pulsar-mouse',
+            summary,
+            body,
+            [],
+            self._notification_hints_variant(resident),
+            notification_timeout(resident),
+        ))
+        result = self._notifications_call('Notify', params, GLib.VariantType('(u)'))
+        return result.unpack()[0]
+
+    def _withdraw_low_battery_notification(self):
+        nid = self._low_battery_notification_id
+        self._low_battery_notification_id = 0
+        if not nid:
+            return
+        try:
+            # An id the daemon has already dropped is a no-op.  It still
+            # must not throw into the poll.
+            self._notifications_call(
+                'CloseNotification', GLib.Variant('(u)', (nid,)), None)
+        except Exception:
+            pass
+
+    def _notifications_call(self, method, params, reply_type):
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        return bus.call_sync(
+            'org.freedesktop.Notifications',
+            '/org/freedesktop/Notifications',
+            'org.freedesktop.Notifications',
+            method,
+            params,
+            reply_type,
+            Gio.DBusCallFlags.NONE,
+            2000,
+            None,
+        )
 
     def _set_conn_quality_label(self, pct):
         self._last_signal_percent = pct
@@ -2439,6 +2591,19 @@ X-GNOME-Autostart-enabled=true
         if row.get_active() != self._autostart_enabled():
             self._set_autostart(row.get_active())
 
+    def _on_low_battery_setting_changed(self, _row, _pspec):
+        notify = self._low_battery_notify_row.get_active()
+        # The threshold and the resident switch only mean something once
+        # the warning is on. They stay visible so the page shows what
+        # turning it on will do.
+        self._low_battery_percent_row.set_sensitive(notify)
+        self._low_battery_resident_row.set_sensitive(notify)
+        save_settings({
+            'low_battery_notify': notify,
+            'low_battery_percent': int(self._low_battery_percent_row.get_value()),
+            'low_battery_resident': self._low_battery_resident_row.get_active(),
+        })
+
     def _build_tools_page(self):
         caps = self._caps
 
@@ -2448,6 +2613,44 @@ X-GNOME-Autostart-enabled=true
         autostart_row.set_active(self._autostart_enabled())
         autostart_row.connect('notify::active', self._on_autostart_row_toggled)
         startup_group.add(autostart_row)
+
+        # Connected after the values are set: setting them must not write
+        # the file, or opening Tools would create a config the user never
+        # touched.
+        settings = load_settings()
+        battery_group = Adw.PreferencesGroup()
+        battery_group.set_title('Low Battery')
+        battery_group.set_description(
+            'One notification when the battery falls to the threshold')
+
+        self._low_battery_notify_row = Adw.SwitchRow()
+        self._low_battery_notify_row.set_title('Low Battery Warning')
+        self._low_battery_notify_row.set_active(settings['low_battery_notify'])
+
+        self._low_battery_percent_row = Adw.SpinRow.new_with_range(
+            LOW_BATTERY_PERCENT_MIN, LOW_BATTERY_PERCENT_MAX,
+            LOW_BATTERY_PERCENT_STEP)
+        self._low_battery_percent_row.set_title('Threshold')
+        self._low_battery_percent_row.set_subtitle('Battery percentage')
+        self._low_battery_percent_row.set_value(settings['low_battery_percent'])
+
+        self._low_battery_resident_row = Adw.SwitchRow()
+        self._low_battery_resident_row.set_title(
+            'Keep the warning until I dismiss it')
+        self._low_battery_resident_row.set_active(settings['low_battery_resident'])
+
+        notify = settings['low_battery_notify']
+        self._low_battery_percent_row.set_sensitive(notify)
+        self._low_battery_resident_row.set_sensitive(notify)
+        self._low_battery_notify_row.connect(
+            'notify::active', self._on_low_battery_setting_changed)
+        self._low_battery_percent_row.connect(
+            'notify::value', self._on_low_battery_setting_changed)
+        self._low_battery_resident_row.connect(
+            'notify::active', self._on_low_battery_setting_changed)
+        battery_group.add(self._low_battery_notify_row)
+        battery_group.add(self._low_battery_percent_row)
+        battery_group.add(self._low_battery_resident_row)
 
         diagnostics_group = Adw.PreferencesGroup()
         diagnostics_group.set_title('Diagnostics')
@@ -2479,7 +2682,7 @@ X-GNOME-Autostart-enabled=true
         import_row.connect('activated', self._on_import_clicked)
         io_group.add(import_row)
 
-        return self._wrap_page(startup_group, diagnostics_group, io_group)
+        return self._wrap_page(startup_group, battery_group, diagnostics_group, io_group)
 
     def _build_power_page(self):
         device = self._device
