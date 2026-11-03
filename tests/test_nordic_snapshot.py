@@ -34,6 +34,8 @@ def mouse(mem=None):
             super().__init__()
             self._fd = 17
             self._mem = {a: 0 for a in range(snap.SETTINGS_END + 1)}
+            self._mem.update({a: 0xff for a in
+                              range(0x100, snap.SHORTCUT_END + 1)})
             self._mem.update(mem or {})
             self._profile = 1
 
@@ -52,6 +54,9 @@ def mouse(mem=None):
         def _ensure_profile(self, profile):
             pass
 
+        def _mem_read_range(self, start, length):
+            return bytes(self._mem.get(start + i, 0) for i in range(length))
+
     return Scripted()
 
 
@@ -60,8 +65,11 @@ class SnapshotTests(unittest.TestCase):
         taken = snap.snapshot(mouse({ADDR_DEBOUNCE: 3}))
         self.assertEqual(taken['firmware'], '2.18')
         self.assertEqual(taken['get_model_ids'], (6, 7))
-        self.assertEqual(len(bytes.fromhex(taken['profiles']['1'])),
+        block = taken['profiles']['1']
+        self.assertEqual(len(bytes.fromhex(block['settings'])),
                          snap.SETTINGS_END + 1)
+        self.assertEqual(len(bytes.fromhex(block['shortcuts'])),
+                         snap.SHORTCUT_END - 0x100 + 1)
 
     def test_a_changed_byte_is_named_and_decoded(self):
         device = mouse({ADDR_DEBOUNCE: 3})
@@ -104,6 +112,36 @@ class SnapshotTests(unittest.TestCase):
         device._mem[ADDR_POLLING_RATE] = 0x01
         lines = snap.diff_lines(before, snap.snapshot(device), device)
         self.assertIn('polling rate: 125 Hz -> 1000 Hz', lines[0])
+
+    def test_a_record_s_checksum_is_named_not_mystified(self):
+        # 0x55 minus the record's bytes.  Unlabelled, it reads as a find:
+        # @bluesceada chased thumb1's as unidentified (#30).
+        device = mouse({0x70: 0x01, 0x71: 0x10, 0x73: 0x44})
+        before = snap.snapshot(device)
+        device._mem.update({0x70: 0x05, 0x71: 0x00, 0x73: 0x50})
+        lines = snap.diff_lines(before, snap.snapshot(device), device)
+        self.assertTrue(any('checksum' in l for l in lines), lines)
+        self.assertFalse(any('unidentified' in l for l in lines), lines)
+
+    def test_a_binding_in_the_shortcut_table_shows_up(self):
+        # Mode 0x05 keeps the binding itself at 0x100 + 32 * button index,
+        # which is where a media key set in Fusion would land - and what a
+        # snapshot that stopped at 0xC9 could never show.
+        device = mouse()
+        before = snap.snapshot(device)
+        device._mem[0x120] = 0x02       # thumb1's record: two events
+        device._mem[0x121] = 0x82
+        lines = snap.diff_lines(before, snap.snapshot(device), device)
+        self.assertTrue(any('0x0120' in l and 'shortcut record' in l
+                            for l in lines), lines)
+
+    def test_a_snapshot_from_before_the_table_was_covered_still_diffs(self):
+        device = mouse({ADDR_DEBOUNCE: 3})
+        old_style = {'profiles': {'1': snap.snapshot(device)
+                                  ['profiles']['1']['settings']}}
+        device._mem[ADDR_DEBOUNCE] = 2
+        lines = snap.diff_lines(old_style, snap.snapshot(device), device)
+        self.assertTrue(any('debounce: 3 ms -> 2 ms' in l for l in lines), lines)
 
     def test_nothing_changed_says_so(self):
         device = mouse()

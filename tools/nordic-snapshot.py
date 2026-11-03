@@ -45,6 +45,7 @@ from pulsar_mouse import find_device                        # noqa: E402
 from pulsar_mouse.drivers import nordic as N                # noqa: E402
 
 SETTINGS_END = 0xC9     # the block every driver here reads
+SHORTCUT_END = N.SHORTCUT_BASE + 8 * N.SHORTCUT_SIZE - 1    # 0x100-0x1ff
 
 
 def _hz(val):
@@ -71,16 +72,29 @@ def _labels(device):
         N.ADDR_AUTOSLEEP: ('auto-sleep', lambda v: f'{v * 10} s'),
         N.ADDR_AUTOSLEEP_ALT: ('0xAD, unidentified', str),
     }
+    # Every record here is its bytes plus a checksum, 0x55 minus their sum.
+    # Labelling that byte too, because an unlabelled one reads as a find:
+    # @bluesceada chased 0x0073 as unidentified when it was thumb1's (#30).
     for i in range(caps.max_dpi_stages):
         base = N.ADDR_DPI_BASE + i * N.DPI_STAGE_SIZE
         for j in range(3):
             out.setdefault(base + j, (f'DPI stage {i + 1}', str))
+        out.setdefault(base + 3, (f'DPI stage {i + 1} checksum', str))
         base = N.ADDR_LED_COLOR_BASE + i * N.LED_COLOR_SIZE
         for j, channel in enumerate('RGB'):
             out.setdefault(base + j, (f'stage {i + 1} colour {channel}', str))
-    for name, addr in getattr(device, '_BUTTON_ADDRS', N.BUTTON_ADDRS).items():
-        for j in range(3):
-            out.setdefault(addr + j, (f'button {name}', str))
+        out.setdefault(base + 3, (f'stage {i + 1} colour checksum', str))
+    addrs = getattr(device, '_BUTTON_ADDRS', N.BUTTON_ADDRS)
+    for name, addr in addrs.items():
+        out.setdefault(addr, (f'button {name} (what it does)', str))
+        out.setdefault(addr + 1, (f'button {name} (first argument)', str))
+        out.setdefault(addr + 2, (f'button {name} (second argument)', str))
+        out.setdefault(addr + 3, (f'button {name} checksum', str))
+        # Mode 0x05 means the binding itself is a 32-byte record up here.
+        start = N.SHORTCUT_BASE + N.SHORTCUT_SIZE * (
+            (addr - N.ADDR_BUTTON_BASE) // N.BUTTON_SIZE)
+        for j in range(N.SHORTCUT_SIZE):
+            out.setdefault(start + j, (f'{name}: shortcut record', str))
     return out
 
 
@@ -106,7 +120,18 @@ def snapshot(device, all_profiles=False):
     for profile in wanted:
         device._ensure_profile(profile)
         block = bytes(device._mem.get(a, 0) for a in range(SETTINGS_END + 1))
-        out['profiles'][str(profile)] = block.hex()
+        shortcuts = b''
+        try:
+            # Not in the memory map open() caches: a keyboard or media
+            # binding is a record up at 0x100, and without it a button
+            # changed in Fusion shows only its slot moving to mode 05 (#30).
+            shortcuts = device._mem_read_range(
+                N.SHORTCUT_BASE, SHORTCUT_END - N.SHORTCUT_BASE + 1)
+        except Exception as why:
+            print(f'  (profile {profile}: could not read the shortcut '
+                  f'table: {why})')
+        out['profiles'][str(profile)] = {'settings': block.hex(),
+                                         'shortcuts': shortcuts.hex()}
     return out
 
 
@@ -122,21 +147,43 @@ def diff_lines(old, new, device=None):
         if before is None:
             lines.append(f'profile {profile}: not in the first snapshot')
             continue
-        was, now = bytes.fromhex(before), bytes.fromhex(after)
-        for addr in range(min(len(was), len(now))):
-            if was[addr] == now[addr]:
+        for part, base in (('settings', 0), ('shortcuts', N.SHORTCUT_BASE)):
+            # A snapshot taken before the shortcut table was covered is a
+            # bare settings string; it can still be diffed, as far as it goes.
+            old_part = before.get(part, '') if isinstance(before, dict) else (
+                before if part == 'settings' else '')
+            new_part = after.get(part, '') if isinstance(after, dict) else (
+                after if part == 'settings' else '')
+            if not old_part or not new_part:
+                if new_part and part == 'shortcuts':
+                    lines.append(f'profile {profile}: the earlier snapshot '
+                                 'has no shortcut table to compare')
                 continue
-            label, show = labels.get(addr, ('unidentified', None))
-            decoded = (f'   {label}: {show(was[addr])} -> {show(now[addr])}'
-                       if show else f'   {label}')
-            lines.append(f'profile {profile}  {addr:#06x}  '
-                         f'{was[addr]:02x} -> {now[addr]:02x}{decoded}')
+            lines.extend(_part_lines(profile, base, old_part, new_part,
+                                     labels))
     return lines or ['nothing changed']
+
+
+def _part_lines(profile, base, before, after, labels):
+    lines = []
+    was, now = bytes.fromhex(before), bytes.fromhex(after)
+    for offset in range(min(len(was), len(now))):
+        addr = base + offset
+        if was[offset] == now[offset]:
+            continue
+        label, show = labels.get(addr, ('unidentified', None))
+        decoded = (f'   {label}: {show(was[offset])} -> {show(now[offset])}'
+                   if show else f'   {label}')
+        lines.append(f'profile {profile}  {addr:#06x}  '
+                     f'{was[offset]:02x} -> {now[offset]:02x}{decoded}')
+    return lines
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument('out', help='JSON file to write this snapshot to')
+    parser.add_argument('out', nargs='?',
+                        help='JSON file to write this snapshot to; leave it '
+                             'out with --diff to compare without saving')
     parser.add_argument('--diff', metavar='EARLIER',
                         help='an earlier snapshot to compare against')
     parser.add_argument('--all-profiles', action='store_true',
@@ -145,6 +192,8 @@ def main():
     parser.add_argument('--device', metavar='NAME',
                         help='driver to use, if more than one mouse is here')
     args = parser.parse_args()
+    if not args.out and not args.diff:
+        parser.error('give a file to write, or --diff to compare without one')
 
     device = find_device(args.device)
     if not isinstance(device, N.PulsarNordic):
@@ -155,10 +204,12 @@ def main():
         taken = snapshot(device, args.all_profiles)
     finally:
         device.close()
-    with open(args.out, 'w') as handle:
-        json.dump(taken, handle, indent=2)
+    if args.out:
+        with open(args.out, 'w') as handle:
+            json.dump(taken, handle, indent=2)
     print(f"{taken['name']}, firmware {taken['firmware']}, "
-          f"profile {taken['active_profile']} -> {args.out}")
+          f"profile {taken['active_profile']}"
+          + (f' -> {args.out}' if args.out else ' (not saved)'))
     if args.diff:
         with open(args.diff) as handle:
             earlier = json.load(handle)
