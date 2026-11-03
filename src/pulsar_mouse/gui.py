@@ -1504,8 +1504,16 @@ class PulsarMouseApp(Adw.Application):
                     finally:
                         device.close()
                 GLib.idle_add(self._update_tray_label, None, hz)
-            except Exception:
-                pass
+            except Exception as why:
+                # Put the ticks back where the mouse actually is.  The menu
+                # has already ticked what was clicked, and leaving it there
+                # claims a write that did not happen - @itCFBTS saw two at
+                # once on a driver whose every write refuses (#38).  There
+                # is nowhere in a tray menu to put an error, so it also goes
+                # to the terminal rather than nowhere at all.
+                print(f'setting the polling rate to {hz} Hz failed: {why}')
+                GLib.idle_add(self._update_tray_label, None,
+                              getattr(self, '_cur_hz', 0) or None)
         threading.Thread(target=_write, daemon=True).start()
 
 
@@ -1728,7 +1736,14 @@ class MainWindow(Adw.ApplicationWindow):
         # (view-stack page name, sidebar label, icon) - order here is the
         # order rows appear in the sidebar and must line up with
         # nav_list's row index in _on_nav_row_selected() below.
-        self._has_power_page = hasattr(self._device, 'get_power')
+        # Not merely "has a battery": the page's own contents are the sleep
+        # timer and the low-power threshold, so a driver with neither got a
+        # Power row in the sidebar leading to an empty page (@itCFBTS, #38).
+        # The battery reading itself has always been on the Home page.
+        self._has_power_page = (
+            hasattr(self._device, 'get_power')
+            and (_power_saving_supported(self._device)
+                 or hasattr(self._device, 'set_low_power_threshold')))
         self._nav_pages = [
             ('home', 'Home', 'go-home-symbolic'),
             ('performance', 'Performance', 'input-mouse-symbolic'),
