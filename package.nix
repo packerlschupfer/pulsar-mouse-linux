@@ -24,7 +24,7 @@
 
 python3Packages.buildPythonApplication {
   pname = "pulsar-mouse-linux";
-  version = "0.1.32";
+  version = "0.1.33";
   pyproject = true;
 
   inherit src;
