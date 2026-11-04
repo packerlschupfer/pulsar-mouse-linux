@@ -1,4 +1,4 @@
-"""The three low-battery keys. No display: this never imports GTK."""
+"""The config file. No display: this never imports GTK."""
 
 import json
 import os
@@ -24,6 +24,7 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(got['low_battery_notify'])
         self.assertEqual(got['low_battery_percent'], 20)
         self.assertFalse(got['low_battery_resident'])
+        self.assertFalse(got['start_in_tray'])
 
     def test_the_threshold_snaps_onto_the_spin_steps(self):
         self.assertEqual(config._percent(23), 25)
@@ -37,10 +38,12 @@ class ConfigTests(unittest.TestCase):
         path = self._write(json.dumps({
             'low_battery_notify': 'yes',
             'low_battery_resident': 1,
+            'start_in_tray': 'yes',
         }))
         got = config.load(path)
         self.assertFalse(got['low_battery_notify'])
         self.assertFalse(got['low_battery_resident'])
+        self.assertFalse(got['start_in_tray'])
 
     def test_save_keeps_keys_it_does_not_own(self):
         path = self._write(json.dumps({'theme': 'dark', 'low_battery_percent': 23}))
@@ -60,7 +63,24 @@ class ConfigTests(unittest.TestCase):
             'low_battery_notify': False,
             'low_battery_percent': 35,
             'low_battery_resident': True,
+            'start_in_tray': False,
         })
+
+    def test_a_command_keeps_only_flags_that_are_true(self):
+        line = str(config.Command('pulsar-mouse-gui')
+                   .flag(True, '--start-in-tray')
+                   .flag(False, '--other')
+                   .flag('yes', '--nope'))
+        self.assertEqual(line, 'pulsar-mouse-gui --start-in-tray')
+
+    def test_the_login_command_carries_start_in_tray(self):
+        self.assertEqual(config.autostart_command({}), 'pulsar-mouse-gui')
+        self.assertEqual(
+            config.autostart_command({'start_in_tray': True}),
+            'pulsar-mouse-gui --start-in-tray')
+        self.assertEqual(
+            config.autostart_command({'start_in_tray': 'yes'}),
+            'pulsar-mouse-gui')
 
     def _tmpdir(self):
         return self.enterContext(tempfile.TemporaryDirectory())

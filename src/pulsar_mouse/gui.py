@@ -7,6 +7,8 @@ Run directly:
     python3 -m pulsar_mouse.gui
 
 Single-instance: a second launch will focus the existing window.
+--start-in-tray brings the tray up and leaves the window closed.  Start
+in Tray writes that into the login desktop file.
 The system-tray icon requires the GNOME AppIndicator extension:
     sudo apt install gnome-shell-extension-appindicator
     gnome-extensions enable appindicatorsupport@rgcjonas.gmail.com
@@ -53,7 +55,7 @@ from pulsar_mouse import (find_device, scan_devices, device_present,
                           find_sibling, remember_connected_mouse, __version__)
 from pulsar_mouse.config import (
     LOW_BATTERY_PERCENT_MAX, LOW_BATTERY_PERCENT_MIN, LOW_BATTERY_PERCENT_STEP,
-    load as load_settings, save as save_settings)
+    autostart_command, load as load_settings, save as save_settings)
 from pulsar_mouse.low_battery import (
     NOTIFICATION_IMAGE, latch_released, notification_hints,
     notification_timeout, should_notify, warning_body, warning_summary)
@@ -479,6 +481,10 @@ class PulsarMouseApp(Adw.Application):
     # (e.g. a desktop-widget/lock-screen plugin) can show it without doing
     # their own redundant USB reads - see _set_battery_label().
     _BATTERY_STATE_PATH = os.path.expanduser('~/.cache/pulsar-mouse/battery.json')
+    _TRAY_WATCHER = 'org.kde.StatusNotifierWatcher'
+    # The panel takes this name a second or two after autostart.
+    _TRAY_WAIT_MS = 500
+    _TRAY_WAIT_TRIES = 4
 
     def __init__(self):
         super().__init__(
@@ -486,7 +492,26 @@ class PulsarMouseApp(Adw.Application):
             flags=Gio.ApplicationFlags.FLAGS_NONE,
         )
         self.connect('activate', self._on_activate)
+        # GApplication exits on an option it was not given.
+        self._start_in_tray = False
+        self._open_window_if_no_tray = False
+        self.add_main_option(
+            'start-in-tray',
+            0,
+            GLib.OptionFlags.NONE,
+            GLib.OptionArg.NONE,
+            'Start with the tray icon and no window',
+            None,
+        )
+        self.connect('handle-local-options', self._on_local_options)
         self._sni = None
+        self._no_session_bus = False
+        # The tray menu creates these. A start with no session bus never
+        # builds that menu, and the battery read still runs.
+        self._battery_item = None
+        self._conn_item = None
+        self._battery_text = None
+        self._conn_text = None
         self._win = None
         self._poll_items = {}
         self._tray_refresh_busy = False
@@ -544,7 +569,13 @@ class PulsarMouseApp(Adw.Application):
             self._adopt_device(found, f'{current.capabilities.name} is gone')
         return self._device
 
-    def _on_activate(self, app):
+    def _on_local_options(self, _app, options):
+        # -1 continues. Anything else is an exit code.
+        if options.contains('start-in-tray'):
+            self._start_in_tray = True
+        return -1
+
+    def _on_activate(self, _app):
         # get_windows(), not self._win/in_destruction() - GtkWidget's
         # in_destruction() is only True *during* the "destroy" signal
         # itself, not afterward (live-verified, Opus review this session:
@@ -564,18 +595,41 @@ class PulsarMouseApp(Adw.Application):
         # minute later is worse than one that takes a moment to appear.
         self._follow_device_swap(self._SWAP_LOCK_WAIT_OPENING)
         device = self._find_or_create_device()
-        win = MainWindow(application=app, device=device)
+        # Only this launch skips the window.
+        skip_window = self._start_in_tray and device is not None
+        self._start_in_tray = False
+        if (skip_window and self._sni is None and not self._no_session_bus
+                and self._build_tray(device)):
+            self._open_window_if_no_tray = True
+        elif not skip_window or self._sni is None:
+            self._open_main_window(device)
+        self.hold()
+
+    def _open_main_window(self, device):
+        """Present the settings window, building it when none is open."""
+        if self.get_windows():
+            self.get_windows()[0].present()
+            return
+        win = MainWindow(application=self, device=device)
         win.present()
         self._win = win
-        if device and self._sni is None:
+        if device and self._sni is None and not self._no_session_bus:
             self._build_tray(device)
         elif device is None:
             self._start_device_scan()
-        self.hold()
 
     # ── System-tray ──────────────────────────────────────────────────────────
 
-    def _build_tray(self, device: PulsarDevice):
+    def _build_tray(self, device: PulsarDevice) -> bool:
+        """Put the mouse in the tray. False when there is no session bus."""
+        try:
+            conn = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        except GLib.Error:
+            # The read, the listener and the battery timer still have to run.
+            # Nothing is registered, so a later open must not try the bus again.
+            self._no_session_bus = True
+            GLib.timeout_add(500, self._start_tray_updates)
+            return False
         caps = device.capabilities
         sni = _StatusNotifierItem('pulsar-mouse', 'input-mouse', caps.name)
         sni.set_on_activate(lambda: self.activate())
@@ -586,10 +640,10 @@ class PulsarMouseApp(Adw.Application):
         self._menu_server = server
         sni.set_dbusmenu_server(server)
 
-        conn = Gio.bus_get_sync(Gio.BusType.SESSION, None)
         sni.start(conn)
 
         GLib.timeout_add(500, self._start_tray_updates)
+        return True
 
     def _build_tray_menu(self, device: PulsarDevice):
         """The menu for one mouse.
@@ -695,7 +749,41 @@ class PulsarMouseApp(Adw.Application):
         # often it risks waking the mouse from its own power-saving sleep
         # more than necessary.
         GLib.timeout_add_seconds(60, self._refresh_battery)
+        if self._open_window_if_no_tray:
+            self._open_window_if_no_tray = False
+            self._await_tray_host(self._TRAY_WAIT_TRIES)
         return False
+
+    def _await_tray_host(self, tries_left):
+        """Open the window if no tray host appears."""
+        if self.get_windows():
+            return False
+        if self._tray_host_present():
+            return False
+        if tries_left > 1:
+            GLib.timeout_add(
+                self._TRAY_WAIT_MS, self._await_tray_host, tries_left - 1)
+            return False
+        self._open_main_window(self._device)
+        return False
+
+    def _tray_host_present(self):
+        try:
+            bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+            reply = bus.call_sync(
+                'org.freedesktop.DBus',
+                '/org/freedesktop/DBus',
+                'org.freedesktop.DBus',
+                'NameHasOwner',
+                GLib.Variant('(s)', (self._TRAY_WATCHER,)),
+                GLib.VariantType('(b)'),
+                Gio.DBusCallFlags.NONE,
+                1000,
+                None,
+            )
+            return bool(reply.unpack()[0])
+        except GLib.Error:
+            return False
 
     def _read_initial_state(self, tries_left: int = _INITIAL_READ_TRIES):
         device = self._device
@@ -909,7 +997,7 @@ class PulsarMouseApp(Adw.Application):
         self._scan_id = 0
         self._device = device
         print(f'{device.capabilities.name} arrived')
-        if self._sni is None:
+        if self._sni is None and not self._no_session_bus:
             self._build_tray(device)
         # The window was built for no device at all - a single banner, not
         # the tabbed layout - so it has to be built again rather than
@@ -2570,7 +2658,7 @@ class MainWindow(Adw.ApplicationWindow):
 [Desktop Entry]
 Name=Pulsar Mouse
 Comment=Pulsar Mouse system-tray applet
-Exec=pulsar-mouse-gui
+Exec={exec}
 Icon=input-mouse
 Type=Application
 X-GNOME-Autostart-enabled=true
@@ -2583,13 +2671,21 @@ X-GNOME-Autostart-enabled=true
         if enabled:
             os.makedirs(os.path.dirname(self._AUTOSTART_PATH), exist_ok=True)
             with open(self._AUTOSTART_PATH, 'w') as f:
-                f.write(self._AUTOSTART_CONTENT)
+                f.write(self._AUTOSTART_CONTENT.format(
+                    exec=autostart_command(load_settings())))
         else:
             os.remove(self._AUTOSTART_PATH)
 
     def _on_autostart_row_toggled(self, row, _pspec):
         if row.get_active() != self._autostart_enabled():
             self._set_autostart(row.get_active())
+        self._start_in_tray_row.set_sensitive(row.get_active())
+
+    def _on_start_in_tray_toggled(self, row, _pspec):
+        save_settings({'start_in_tray': row.get_active()})
+        # Keep an existing login file in step with the switch.
+        if self._autostart_enabled():
+            self._set_autostart(True)
 
     def _on_low_battery_setting_changed(self, _row, _pspec):
         notify = self._low_battery_notify_row.get_active()
@@ -2607,17 +2703,29 @@ X-GNOME-Autostart-enabled=true
     def _build_tools_page(self):
         caps = self._caps
 
-        startup_group = Adw.PreferencesGroup()
-        autostart_row = Adw.SwitchRow()
-        autostart_row.set_title('Start on Login')
-        autostart_row.set_active(self._autostart_enabled())
-        autostart_row.connect('notify::active', self._on_autostart_row_toggled)
-        startup_group.add(autostart_row)
-
         # Connected after the values are set: setting them must not write
-        # the file, or opening Tools would create a config the user never
-        # touched.
+        # a file, or opening Tools would create a config the user never
+        # touched.  Same for the login desktop file.
         settings = load_settings()
+
+        startup_group = Adw.PreferencesGroup()
+        self._autostart_row = Adw.SwitchRow()
+        self._autostart_row.set_title('Start on Login')
+        self._autostart_row.set_active(self._autostart_enabled())
+        startup_group.add(self._autostart_row)
+
+        self._start_in_tray_row = Adw.SwitchRow()
+        self._start_in_tray_row.set_title('Start in Tray')
+        self._start_in_tray_row.set_subtitle(
+            'On login, show the tray icon and leave the window closed')
+        self._start_in_tray_row.set_active(settings['start_in_tray'])
+        self._start_in_tray_row.set_sensitive(self._autostart_row.get_active())
+        self._start_in_tray_row.connect(
+            'notify::active', self._on_start_in_tray_toggled)
+        startup_group.add(self._start_in_tray_row)
+        self._autostart_row.connect(
+            'notify::active', self._on_autostart_row_toggled)
+
         battery_group = Adw.PreferencesGroup()
         battery_group.set_title('Low Battery')
         battery_group.set_description(
