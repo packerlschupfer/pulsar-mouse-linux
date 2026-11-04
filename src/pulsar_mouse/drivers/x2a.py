@@ -607,13 +607,21 @@ class PulsarX2A(PulsarDevice):
     }
 
     def parse_hidraw_event(self, data: bytes) -> Optional[dict]:
-        if len(data) == 2 and data[0] == self._REPORT_BUTTONS:
+        if len(data) >= 2 and data[0] == self._REPORT_BUTTONS:
             # Sent for every press whatever the button is bound to, so it
             # is the one report that says a button went down even when the
             # host sees nothing else - a button on dpiloop or profile+.
             # The press that wakes a sleeping mouse is spent waking it and
             # only its 04 00 gets out, which is the lone release in
             # @f-o-o-g-s's sleep runs.
+            #
+            # Length is a floor, not an equality: this arrives as 24 bytes,
+            # the size report 4 is declared at, with everything after the
+            # mask zero - all 19 of them in @f-o-o-g-s's log and every one
+            # in the October gist on #21.  It was written == 2 here because
+            # the issue quoted the reports with their trailing zeros
+            # trimmed, which no read ever produces, so this branch could
+            # not fire on a real mouse at all.
             return {'buttons_down': data[1]}
         if (len(data) >= 3 and data[0] == self._REPORT_EVENT
                 and data[1] == self._EVENT_PROFILE):

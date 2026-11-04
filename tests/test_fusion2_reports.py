@@ -4,6 +4,12 @@ Three arrive there.  `05 05` has been read since the start.  @f-o-o-g-s
 decoded the other two on an X3, identically on its cable and through the 1K
 dongle: `05 01 <profile>` when the active profile changes, and `04 <mask>`
 saying which buttons are down, with `04 00` when they come up.
+
+The button report is tested at the length it actually arrives in - 24
+bytes, the size report 4 is declared at.  The first version of these tests
+used the 2-byte form the issue quoted, which is that report with its
+trailing zeros trimmed for legibility and not something any read returns,
+so they passed against a branch that could never fire on a mouse.
 """
 
 import unittest
@@ -37,26 +43,45 @@ class ProfileChangedTests(unittest.TestCase):
         self.assertIsNone(PulsarX2A().parse_hidraw_event(b'\x05\x01'))
 
 
+def pressed(mask):
+    """The 24 bytes a press really arrives in."""
+    return bytes([0x04, mask]) + bytes(22)
+
+
 class ButtonMaskTests(unittest.TestCase):
     def test_the_bits_that_were_measured(self):
         mouse = PulsarX3()
         for mask, name in ((0x08, 'backward'), (0x10, 'forward'),
                            (0x20, 'dpi')):
-            self.assertEqual(mouse.parse_hidraw_event(bytes([0x04, mask])),
+            self.assertEqual(mouse.parse_hidraw_event(pressed(mask)),
                              {'buttons_down': mask})
             self.assertEqual(PulsarX3._BUTTON_BITS[mask], name)
 
+    def test_the_bytes_straight_out_of_the_log(self):
+        # @f-o-o-g-s's X3, DPI button down then up, on the cable and
+        # through the 1K dongle alike.
+        down = bytes.fromhex('042000000000000000000000'
+                             '000000000000000000000000')
+        up = bytes.fromhex('040000000000000000000000'
+                           '000000000000000000000000')
+        for mouse in (PulsarX3(), PulsarXliteV4Wireless()):
+            self.assertEqual(len(down), 24)
+            self.assertEqual(mouse.parse_hidraw_event(down),
+                             {'buttons_down': 0x20})
+            self.assertEqual(mouse.parse_hidraw_event(up),
+                             {'buttons_down': 0x00})
+
     def test_a_release_is_an_empty_mask(self):
-        self.assertEqual(PulsarX2A().parse_hidraw_event(b'\x04\x00'),
+        self.assertEqual(PulsarX2A().parse_hidraw_event(pressed(0x00)),
                          {'buttons_down': 0x00})
 
     def test_two_buttons_at_once_are_one_mask(self):
-        self.assertEqual(PulsarX2A().parse_hidraw_event(b'\x04\x18'),
+        self.assertEqual(PulsarX2A().parse_hidraw_event(pressed(0x18)),
                          {'buttons_down': 0x18})
 
     def test_the_dongle_passes_it_through(self):
         self.assertEqual(
-            PulsarXliteV4Wireless().parse_hidraw_event(b'\x04\x20'),
+            PulsarXliteV4Wireless().parse_hidraw_event(pressed(0x20)),
             {'buttons_down': 0x20})
 
     def test_every_named_bit_is_a_button_the_mouse_has(self):
@@ -91,13 +116,13 @@ class StillReadsWhatItAlwaysDidTests(unittest.TestCase):
     def test_nothing_else_on_the_node_is_guessed_at(self):
         mouse = PulsarX2A()
         for data in (b'', b'\x04', b'\x05', b'\x05\x40\x00',
-                     b'\x03\x20', b'\x04\x20\x00'):
+                     b'\x03\x20', b'\x06' + bytes(23)):
             self.assertIsNone(mouse.parse_hidraw_event(data), data)
 
     def test_the_8k_dongle_keeps_its_own_decoding(self):
         # It is a different protocol family with its own parser; this must
         # not have reached into it.
-        self.assertIsNone(PulsarFeinmann8K().parse_hidraw_event(b'\x04\x20'))
+        self.assertIsNone(PulsarFeinmann8K().parse_hidraw_event(pressed(0x20)))
 
 
 if __name__ == '__main__':

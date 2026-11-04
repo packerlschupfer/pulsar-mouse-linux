@@ -167,7 +167,8 @@ def parse_button_function(spec: str) -> tuple[int, int, int]:
       xclick
       play / next / prev / stop / mute / vol+ / vol- / mediaplayer /
         eject / calc / homepage
-      media(0x0192)                       (any HID Consumer usage)
+      'media(0x0192)'                     (any HID Consumer usage;
+                                           quote it, the shell eats ( ) )
       ctrl+c / shift+f5 / alt+tab / ...  (keyboard shortcut)
       disabled
     """
@@ -215,7 +216,7 @@ def parse_button_function(spec: str) -> tuple[int, int, int]:
                 f"  DPI: dpi+, dpi-, dpiloop\n"
                 f"  Profile: profile+, profile-\n"
                 f"  Media: {', '.join(MEDIA_CODES)}, "
-                f"or media(0xNNNN) for any HID Consumer usage\n"
+                f"or 'media(0xNNNN)' for any HID Consumer usage\n"
                 f"  Keyboard: [modifier+]key  e.g. ctrl+c, shift+f5"
             )
     if key:
