@@ -6,6 +6,8 @@ describe_button / parse_button_function helpers are device-independent
 and shared across all drivers.
 """
 
+import re
+
 # ── Button function types ────────────────────────────────────────────────────
 
 BTN_TYPE_DISABLED  = 0x00   # button disabled (no action)
@@ -50,6 +52,19 @@ SCROLL_ACTION_NAMES = {0x01: 'scrollup', 0xff: 'scrolldown'}
 
 # ── HID Consumer Usage codes for multimedia (type 0x0d) ─────────────────────
 
+# These are names for usages, not the set a mouse will send: the X3's
+# descriptor for that report is a plain Consumer Control usage 16 bits wide,
+# and @f-o-o-g-s bound three codes that were not named here and got the right
+# key from evdev each time - 0x0192 as KEY_CALC, 0x0223 as KEY_HOMEPAGE,
+# 0x00b8 as KEY_EJECTCD, on an X3 on its cable (#30).  So those three are
+# named below, and anything else goes through parse_button_function()'s
+# media(0x…) spelling rather than being guessed at here.  Fusion Wireless's
+# own menu also offers Stop web, Search, Email, My computer, Refresh and
+# Favourites; their usages look obvious but nobody has pressed them.
+#
+# A name here must not collide with HID_KEYS: parse_button_function() checks
+# this table first, so adding 'home' would have taken the Home *key* away
+# from --button.  Hence 'homepage'.
 MEDIA_CODES = {
     'play':       0x00cd,
     'next':       0x00b5,
@@ -59,6 +74,9 @@ MEDIA_CODES = {
     'vol+':       0x00e9,
     'vol-':       0x00ea,
     'mediaplayer':0x0183,
+    'eject':      0x00b8,
+    'calc':       0x0192,
+    'homepage':   0x0223,
 }
 MEDIA_CODE_NAMES = {v: k for k, v in MEDIA_CODES.items()}
 
@@ -147,7 +165,9 @@ def parse_button_function(spec: str) -> tuple[int, int, int]:
       dpi+ / dpi- / dpiloop
       profile+ / profile-
       xclick
-      play / next / prev / stop / mute / vol+ / vol- / mediaplayer
+      play / next / prev / stop / mute / vol+ / vol- / mediaplayer /
+        eject / calc / homepage
+      media(0x0192)                       (any HID Consumer usage)
       ctrl+c / shift+f5 / alt+tab / ...  (keyboard shortcut)
       disabled
     """
@@ -168,6 +188,16 @@ def parse_button_function(spec: str) -> tuple[int, int, int]:
     if s in MEDIA_CODES:
         code = MEDIA_CODES[s]
         return (BTN_TYPE_MEDIA, code & 0xff, (code >> 8) & 0xff)
+    # The spelling describe_button() emits for a usage with no name here.
+    # Without this, a binding Fusion made outside MEDIA_CODES could not
+    # survive export -> import or the GUI's remap dialog, which is the same
+    # trap 'xclick-double' fell into - see XCLICK_ALIASES above.
+    named = re.fullmatch(r'media\(0x([0-9a-f]{1,4})\)', s)
+    if named:
+        code = int(named.group(1), 16)
+        if not code:
+            raise ValueError("A media binding needs a usage, not 0")
+        return (BTN_TYPE_MEDIA, code & 0xff, (code >> 8) & 0xff)
 
     # Keyboard shortcut: mod+mod+key
     mod = 0
@@ -184,7 +214,8 @@ def parse_button_function(spec: str) -> tuple[int, int, int]:
                 f"  Scroll: scrollup, scrolldown\n"
                 f"  DPI: dpi+, dpi-, dpiloop\n"
                 f"  Profile: profile+, profile-\n"
-                f"  Media: {', '.join(MEDIA_CODES)}\n"
+                f"  Media: {', '.join(MEDIA_CODES)}, "
+                f"or media(0xNNNN) for any HID Consumer usage\n"
                 f"  Keyboard: [modifier+]key  e.g. ctrl+c, shift+f5"
             )
     if key:
