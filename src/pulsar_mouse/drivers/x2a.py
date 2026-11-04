@@ -584,8 +584,46 @@ class PulsarX2A(PulsarDevice):
     # which is why this is a number and not a hardcoded +1.
     _DPI_EVENT_FIRST_STAGE = 0
 
+    # The three unprompted reports this interface sends (#21).  05 05 has
+    # been read since the start; the other two @f-o-o-g-s decoded on an X3
+    # with a listener attached, identically on the cable and through the 1K
+    # dongle.
+    _REPORT_BUTTONS = 0x04      # 04 <mask>, and 04 00 when they come up
+    _REPORT_EVENT = 0x05
+    _EVENT_PROFILE = 0x01       # 05 01 <profile>, counting from 1
+    _EVENT_DPI = 0x05           # 05 05 <stage> <dpi lo> <dpi hi>
+
+    # Which bit 04 <mask> sets for each button.  Back, forward and the DPI
+    # button were pressed with a listener attached; the remaining three are
+    # the obvious leftover bits and nobody has pressed them, so they are
+    # named here and not relied on anywhere.
+    _BUTTON_BITS = {
+        0x01: 'left',           # inferred
+        0x02: 'right',          # inferred
+        0x04: 'wheel',          # inferred
+        0x08: 'backward',       # measured
+        0x10: 'forward',        # measured
+        0x20: 'dpi',            # measured
+    }
+
     def parse_hidraw_event(self, data: bytes) -> Optional[dict]:
-        if len(data) >= 7 and data[0] == 0x05 and data[1] == 0x05:
+        if len(data) == 2 and data[0] == self._REPORT_BUTTONS:
+            # Sent for every press whatever the button is bound to, so it
+            # is the one report that says a button went down even when the
+            # host sees nothing else - a button on dpiloop or profile+.
+            # The press that wakes a sleeping mouse is spent waking it and
+            # only its 04 00 gets out, which is the lone release in
+            # @f-o-o-g-s's sleep runs.
+            return {'buttons_down': data[1]}
+        if (len(data) >= 3 and data[0] == self._REPORT_EVENT
+                and data[1] == self._EVENT_PROFILE):
+            # No 05 05 follows, even when the new profile sits on another
+            # DPI stage, so this cannot be patched into the open page - it
+            # has to be read again.  Same contract as the Nordic mice's
+            # profile_changed, which is what the GUI already acts on.
+            return {'profile_changed': True, 'profile': data[2]}
+        if (len(data) >= 7 and data[0] == self._REPORT_EVENT
+                and data[1] == self._EVENT_DPI):
             dpi = struct.unpack_from('<H', data, 3)[0]
             stage = data[2] - self._DPI_EVENT_FIRST_STAGE + 1
             return {'dpi': dpi, 'stage': stage}
