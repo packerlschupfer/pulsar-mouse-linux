@@ -505,6 +505,13 @@ class PulsarMouseApp(Adw.Application):
         )
         self.connect('handle-local-options', self._on_local_options)
         self._sni = None
+        self._no_session_bus = False
+        # The tray menu creates these. A start with no session bus never
+        # builds that menu, and the battery read still runs.
+        self._battery_item = None
+        self._conn_item = None
+        self._battery_text = None
+        self._conn_text = None
         self._win = None
         self._poll_items = {}
         self._tray_refresh_busy = False
@@ -591,16 +598,10 @@ class PulsarMouseApp(Adw.Application):
         # Only this launch skips the window.
         skip_window = self._start_in_tray and device is not None
         self._start_in_tray = False
-        if skip_window:
+        if (skip_window and self._sni is None and not self._no_session_bus
+                and self._build_tray(device)):
             self._open_window_if_no_tray = True
-            try:
-                if self._sni is None:
-                    self._build_tray(device)
-            except GLib.Error:
-                # No session bus, so there is no tray to start in.
-                self._open_window_if_no_tray = False
-                self._open_main_window(device)
-        else:
+        elif not skip_window or self._sni is None:
             self._open_main_window(device)
         self.hold()
 
@@ -612,14 +613,23 @@ class PulsarMouseApp(Adw.Application):
         win = MainWindow(application=self, device=device)
         win.present()
         self._win = win
-        if device and self._sni is None:
+        if device and self._sni is None and not self._no_session_bus:
             self._build_tray(device)
         elif device is None:
             self._start_device_scan()
 
     # ── System-tray ──────────────────────────────────────────────────────────
 
-    def _build_tray(self, device: PulsarDevice):
+    def _build_tray(self, device: PulsarDevice) -> bool:
+        """Put the mouse in the tray. False when there is no session bus."""
+        try:
+            conn = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        except GLib.Error:
+            # The read, the listener and the battery timer still have to run.
+            # Nothing is registered, so a later open must not try the bus again.
+            self._no_session_bus = True
+            GLib.timeout_add(500, self._start_tray_updates)
+            return False
         caps = device.capabilities
         sni = _StatusNotifierItem('pulsar-mouse', 'input-mouse', caps.name)
         sni.set_on_activate(lambda: self.activate())
@@ -630,10 +640,10 @@ class PulsarMouseApp(Adw.Application):
         self._menu_server = server
         sni.set_dbusmenu_server(server)
 
-        conn = Gio.bus_get_sync(Gio.BusType.SESSION, None)
         sni.start(conn)
 
         GLib.timeout_add(500, self._start_tray_updates)
+        return True
 
     def _build_tray_menu(self, device: PulsarDevice):
         """The menu for one mouse.
@@ -987,7 +997,7 @@ class PulsarMouseApp(Adw.Application):
         self._scan_id = 0
         self._device = device
         print(f'{device.capabilities.name} arrived')
-        if self._sni is None:
+        if self._sni is None and not self._no_session_bus:
             self._build_tray(device)
         # The window was built for no device at all - a single banner, not
         # the tabbed layout - so it has to be built again rather than

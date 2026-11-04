@@ -217,7 +217,7 @@ GTK4 + libadwaita settings window with integrated system tray:
 - System tray via D-Bus StatusNotifierItem (no GTK3 conflict)
 - Tray shows DPI/polling rate on change, quick DPI presets, polling rate radio buttons
 - **X** hides the window (tray stays alive), **Quit** from tray menu exits
-- "Start on Login" toggle in the tray menu for autostart
+- "Start on Login" toggle on the Tools page for autostart
 - "Start in Tray", under Start on Login on the Tools page, leaves the window closed at login. The tray icon or a later launch still opens it. If nothing is hosting a tray, the window opens after a short wait
 - Input test dialog with mouse diagram and event log
 - Battery level and charging state (on supported wireless mice) shown on the Home page and as a tray icon overlay - polled every 60s, so plugging/unplugging the charging cable can take up to a minute to be reflected. This is deliberate, not a bug: polling more often would mean more frequent USB interface claims and a higher chance of interfering with the mouse's own wireless power-saving sleep.

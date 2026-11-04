@@ -21,7 +21,7 @@ try:
     import gi
     gi.require_version('Gtk', '4.0')
     gi.require_version('Adw', '1')
-    from gi.repository import Adw, GLib, Gtk
+    from gi.repository import Adw, Gio, GLib, Gtk
     _HAVE_DISPLAY = Gtk.init_check()
     if _HAVE_DISPLAY:
         Adw.init()
@@ -191,7 +191,7 @@ class WindowBuildTests(unittest.TestCase):
         app._start_in_tray = True
         app._find_or_create_device = lambda: device
         app._follow_device_swap = lambda *_a: None
-        app._build_tray = lambda found: seen.append(found)
+        app._build_tray = lambda found: seen.append(found) or True
         app._open_main_window = lambda found: seen.append('window')
         app.hold = lambda: None
         app.get_windows = lambda: []
@@ -215,6 +215,53 @@ class WindowBuildTests(unittest.TestCase):
         app._on_activate(app)
         self.assertEqual(seen, [None])
         self.assertFalse(app._open_window_if_no_tray)
+
+    def test_no_session_bus_still_reads_the_mouse(self):
+        app = self._app_that_does_not_run()
+        scheduled = []
+
+        def fake_add(interval, fn, *args):
+            scheduled.append((interval, fn, args))
+            return 1
+
+        def no_bus(*_args, **_kwargs):
+            try:
+                GLib.file_get_contents('/no/such/pulsar-mouse-bus')
+            except GLib.Error as err:
+                raise err
+
+        with patch.object(GLib, 'timeout_add', fake_add), \
+             patch.object(Gio, 'bus_get_sync', no_bus):
+            self.assertFalse(app._build_tray(object()))
+        self.assertIsNone(app._sni)
+        self.assertTrue(app._no_session_bus)
+        self.assertEqual(scheduled, [(500, app._start_tray_updates, ())])
+
+        # A later start must not try the bus again, and the window opens.
+        device = object()
+        opened = []
+        calls = []
+        app._start_in_tray = True
+        app._find_or_create_device = lambda: device
+        app._follow_device_swap = lambda *_a: None
+        app.hold = lambda: None
+        app.get_windows = lambda: []
+        app._build_tray = lambda found: calls.append(found)
+        app._open_main_window = lambda found: opened.append(found)
+        app._on_activate(app)
+        self.assertEqual(calls, [])
+        self.assertEqual(opened, [device])
+
+    def test_a_battery_reading_needs_no_tray_row(self):
+        app = self._app_that_does_not_run()
+        with tempfile.TemporaryDirectory() as tmp:
+            app._BATTERY_STATE_PATH = os.path.join(tmp, 'battery.json')
+            app._set_battery_label({
+                'battery_percent': 65,
+                'power_connected': False,
+            })
+        self.assertEqual(app._battery_text, 'Battery: 65%')
+        self.assertIsNone(app._battery_item)
 
     def test_no_tray_host_opens_the_window_after_the_wait(self):
         app = self._app_that_does_not_run()

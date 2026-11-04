@@ -64,6 +64,8 @@ class Command:
         return self
 
     def __str__(self):
+        # Flags only, no values. shlex.join quotes with single quotes, and
+        # a desktop Exec line does not.
         return shlex.join(self._argv)
 
 
