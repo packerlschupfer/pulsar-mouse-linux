@@ -1,16 +1,17 @@
 """
 Host-side settings for the GUI.
 
-Three keys, in ~/.config/pulsar-mouse/config.json. There was no app config
-file before this: Start on Login is a desktop file under ~/.config/autostart,
-which is the wrong place for a threshold.
+Four keys, in ~/.config/pulsar-mouse/config.json. Start on Login itself is
+still the desktop file under ~/.config/autostart. start_in_tray only decides
+whether that file's Exec line passes --start-in-tray.
 
-The low-battery warning reads these. It ships off, so a missing file and a
-broken one mean the same thing.
+The low-battery warning reads the other three. Everything ships off, so a
+missing file and a broken one mean the same thing.
 """
 
 import json
 import os
+import shlex
 
 CONFIG_DIR = os.path.expanduser('~/.config/pulsar-mouse')
 CONFIG_PATH = os.path.join(CONFIG_DIR, 'config.json')
@@ -23,13 +24,14 @@ DEFAULTS = {
     'low_battery_notify': False,
     'low_battery_percent': 20,
     'low_battery_resident': False,
+    'start_in_tray': False,
 }
 
 _KEYS = tuple(DEFAULTS)
 
 
 def load(path=None):
-    """The three keys, with defaults for anything missing or unreadable."""
+    """The four keys, with defaults for anything missing or unreadable."""
     raw = _read(path or CONFIG_PATH)
     return {key: _coerce(key, raw.get(key, DEFAULTS[key])) for key in _KEYS}
 
@@ -48,6 +50,27 @@ def save(values, path=None):
         json.dump(current, f, indent=2)
         f.write('\n')
     os.replace(tmp, path)
+
+
+class Command:
+    """One program, plus a flag for each value that is exactly True."""
+
+    def __init__(self, program):
+        self._argv = [program]
+
+    def flag(self, enabled, name):
+        if enabled is True:
+            self._argv.append(name)
+        return self
+
+    def __str__(self):
+        return shlex.join(self._argv)
+
+
+def autostart_command(settings):
+    """Exec value for the login desktop file."""
+    return str(Command('pulsar-mouse-gui')
+               .flag(settings.get('start_in_tray'), '--start-in-tray'))
 
 
 def _read(path):
