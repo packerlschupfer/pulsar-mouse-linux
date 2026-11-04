@@ -261,6 +261,7 @@ sudo pulsar-mouse --profile 1 --stage-color 1 255 0 0    # stage 1 = red
 # Button remapping (per-profile)
 sudo pulsar-mouse --profile 1 --button thumb1 dpi+
 sudo pulsar-mouse --profile 1 --button thumb1 ctrl+c
+sudo pulsar-mouse --profile 1 --button thumb1 vol+       # media keys
 
 # Profile backup/restore (per-profile)
 sudo pulsar-mouse --profile 1 --export profile1.json
@@ -443,7 +444,7 @@ link, and the code comments next to whatever each finding explains.
 - [@martingem](https://github.com/martingem) — The low-battery warning and Start in Tray, each proposed as a design before any code, plus the fix for a missing session bus leaving the GUI with no first read, no event listener and no battery timer
 - [@macieqzz](https://github.com/macieqzz) — Pulsar X2A Wireless button layout confirmed on hardware (thumb3/thumb4/DPI addresses and function slots)
 - [@jonkristian](https://github.com/jonkristian) — Pulsar X3 LHD and 8K dongle support, decoded from hardware including the dongle's stale-header answer, and the log that settled the link-up/down report
-- [@bluesceada](https://github.com/bluesceada) — Xlite V3: found that it shares the X2A Wireless's USB IDs and differs only in the key matrix, the captures that decoded the CID/MID identity read, the readings that corrected the Nordic firmware string, the Cfg.ini model table, the captures that measured the sleep timer, and the libadwaita 1.5 fallback that fixed the GUI on Ubuntu 24.04
+- [@bluesceada](https://github.com/bluesceada) — Xlite V3: found that it shares the X2A Wireless's USB IDs and differs only in the key matrix, the captures that decoded the CID/MID identity read, the readings that corrected the Nordic firmware string, the Cfg.ini model table, the captures that measured the sleep timer, the two dumps that decoded the media-key record, and the libadwaita 1.5 fallback that fixed the GUI on Ubuntu 24.04
 - [@Wyatt-Robinson](https://github.com/Wyatt-Robinson) — Feinmann F01 Noctua Edition: USB capture and screen recording the driver was decoded from, plus hardware testing
 - meniscus- — Found that a wheel turn over a GUI slider silently changed the setting, on an X2 CrazyLight
 - [andrewrabert](https://github.com/andrewrabert) — [python-pulsar-mouse-tool](https://github.com/andrewrabert/python-pulsar-mouse-tool), reference implementation for the Nordic wireless protocol

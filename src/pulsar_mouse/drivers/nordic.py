@@ -254,15 +254,30 @@ BUTTON_MODE_MACRO          = 0x06
 BUTTON_MODE_PROFILE_CHANGE = 0x09
 BUTTON_MODE_DPI_LOCK       = 0x0A
 
-# Keyboard shortcuts live in a separate 16-bit address space (Bibimbap /
-# Fusion layout): base 0x100, 32 bytes per button index.
+# Keyboard shortcuts and media keys live in a separate 16-bit address space
+# (Bibimbap / Fusion layout): base 0x100, 32 bytes per button index.
 # Button slot mode 0x05 stores a pointer (hi, lo) to that record — NOT
 # (modifier, key).  Confirmed via Pulsar Bibimbap cMouse encoding + 
 # andrewrabert ADDR_BUTTON_CUSTOM1 = (0x01, 0x20) == 0x120 == 0x100+32*1.
+# Fusion itself leaves those two bytes 00 00 and lets the button's index
+# imply the address, which is why the read below falls back to it (#30).
 SHORTCUT_BASE = 0x100
 SHORTCUT_SIZE = 32
 HID_EVT_MOD = 0x00
 HID_EVT_KEY = 0x01
+# HID Consumer Control: the media keys.  On this family they are not a
+# button mode of their own (the Sonix mice use 0x0d) but mode 0x05 with a
+# record like any shortcut, carrying the 16-bit Consumer usage little-endian.
+# @bluesceada bound an Xlite V3 thumb button to Volume Up and then to Volume
+# Down and dumped either side (#30): slot 0x70 went to `05 00 00 50` both
+# times, and the record at 0x180 read
+#
+#     02 82 e9 00 42 e9 00 bd   ff ... (vol+, usage 0x00e9)
+#     02 82 ea 00 42 ea 00 bb   ff ... (vol-, usage 0x00ea)
+#
+# - the same press/release shape _pack_shortcut() already built for keys,
+# with 0x02 where the event type had only ever been 0x00 or 0x01.
+HID_EVT_CONSUMER = 0x02
 
 # Nordic mouse action values are bitmasks, Sonix are sequential.
 # Translate so hid.py's describe_button() works universally.
@@ -276,7 +291,7 @@ _NORDIC_MOUSE_TO_SONIX = {
 _SONIX_MOUSE_TO_NORDIC = {v: k for k, v in _NORDIC_MOUSE_TO_SONIX.items()}
 
 from pulsar_mouse.hid import (BTN_TYPE_DISABLED, BTN_TYPE_MOUSE, BTN_TYPE_KEYBOARD,
-                               BTN_TYPE_DPI, BTN_TYPE_PROFILE)
+                               BTN_TYPE_DPI, BTN_TYPE_MEDIA, BTN_TYPE_PROFILE)
 
 
 def _model_km(mid):
@@ -294,18 +309,14 @@ def _shortcut_addr(btn_name: str, addrs: dict = BUTTON_ADDRS) -> int:
     return SHORTCUT_BASE + SHORTCUT_SIZE * index
 
 
-def _build_shortcut_blob(mod: int, key: int) -> bytes:
-    """Bibimbap Qi()-compatible shortcut record (press then release)."""
-    events: list[tuple[int, int]] = []
-    # Modifier values match Bibimbap HID map (LCtrl=1, LShift=2, …).
-    for bit in (0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80):
-        if mod & bit:
-            events.append((HID_EVT_MOD, bit))
-    if key:
-        events.append((HID_EVT_KEY, key))
-    if not events:
-        raise ValueError("Keyboard shortcut needs a key or modifier")
+def _pack_shortcut(events: list[tuple[int, int]]) -> bytes:
+    """Bibimbap Qi()-compatible record: every event pressed, then released.
 
+    The count byte is press and release entries together, so one event
+    reads 02.  Each entry is a type with 0x80 for press or 0x40 for
+    release, then its value little-endian.  The record ends in the same
+    checksum every record in this memory has, 0x55 minus its bytes.
+    """
     buf = bytearray()
     buf.append(2 * len(events))
     for typ, val in events:
@@ -316,31 +327,56 @@ def _build_shortcut_blob(mod: int, key: int) -> bytes:
         buf.append(0x40 | typ)
         buf.append(val & 0xff)
         buf.append((val >> 8) & 0xff)
-    buf.append(0)  # overwritten with checksum
-    buf[-1] = ctypes.c_uint8(0x55 - sum(buf[:-1])).value
+    buf.append(ctypes.c_uint8(0x55 - sum(buf)).value)
     return bytes(buf)
 
 
-def _parse_shortcut_blob(blob: bytes) -> tuple[int, int]:
-    """Return (mod, key) from a shortcut record. Empty → (0, 0)."""
-    if not blob:
-        return (0, 0)
-    n_events = blob[0] // 2
-    if n_events <= 0 or 1 + 3 * n_events > len(blob):
-        return (0, 0)
-    mod = 0
-    key = 0
-    for i in range(n_events):
-        flags = blob[1 + 3 * i]
-        if not (flags & 0x80):
-            continue  # only count press events
-        typ = flags & 0x0f
-        val = blob[2 + 3 * i] | (blob[3 + 3 * i] << 8)
-        if typ == HID_EVT_MOD:
-            mod |= val
-        elif typ == HID_EVT_KEY:
-            key = val
-    return (mod, key)
+def _build_shortcut_blob(mod: int, key: int) -> bytes:
+    """A keyboard shortcut: its modifiers, then its key."""
+    events: list[tuple[int, int]] = []
+    # Modifier values match Bibimbap HID map (LCtrl=1, LShift=2, …).
+    for bit in (0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80):
+        if mod & bit:
+            events.append((HID_EVT_MOD, bit))
+    if key:
+        events.append((HID_EVT_KEY, key))
+    if not events:
+        raise ValueError("Keyboard shortcut needs a key or modifier")
+    return _pack_shortcut(events)
+
+
+def _build_media_blob(code: int) -> bytes:
+    """A media key: one HID Consumer usage - see HID_EVT_CONSUMER."""
+    if not code:
+        raise ValueError("Media binding needs a HID Consumer usage code")
+    return _pack_shortcut([(HID_EVT_CONSUMER, code)])
+
+
+def _parse_shortcut_blob(blob: bytes) -> tuple[int, int, int]:
+    """Sonix-style (type, a1, a2) for whatever a shortcut record holds.
+
+    A record nobody has written, or one this cannot read, is a keyboard
+    shortcut with no key - which is what the slot pointed at before
+    anything bound it, and what describe_button() calls 0x00.
+    """
+    mod = key = media = 0
+    n_events = blob[0] // 2 if blob else 0
+    if n_events > 0 and 1 + 3 * n_events <= len(blob):
+        for i in range(n_events):
+            flags = blob[1 + 3 * i]
+            if not (flags & 0x80):
+                continue  # only count press events
+            typ = flags & 0x0f
+            val = blob[2 + 3 * i] | (blob[3 + 3 * i] << 8)
+            if typ == HID_EVT_MOD:
+                mod |= val
+            elif typ == HID_EVT_KEY:
+                key = val
+            elif typ == HID_EVT_CONSUMER:
+                media = val
+    if media:
+        return (BTN_TYPE_MEDIA, media & 0xff, (media >> 8) & 0xff)
+    return (BTN_TYPE_KEYBOARD, mod, key)
 
 
 # ── DPI encoding (3 bytes per stage) ────────────────────────────────────────
@@ -1218,11 +1254,24 @@ class PulsarNordic(PulsarDevice):
                 blob = self._mem_read_range(sc_addr, SHORTCUT_SIZE)
             except Exception:
                 blob = b''
-            mod, key = _parse_shortcut_blob(blob)
-            return (BTN_TYPE_KEYBOARD, mod, key)
+            # A keyboard shortcut or a media key - the record says which.
+            return _parse_shortcut_blob(blob)
         if raw_type == BUTTON_MODE_DISABLED:
             return (BTN_TYPE_DISABLED, 0x00, 0x00)
         return (raw_type, a1, a2)
+
+    def _write_shortcut(self, name: str, blob: bytes) -> tuple[int, int, int]:
+        """Put one record in the shortcut table, and say what the slot needs.
+
+        The record is padded with ff rather than 00, which is what Fusion
+        leaves behind it (#30): a snapshot diff taken either side of one of
+        our own writes then shows the binding and not 24 bytes of padding.
+        """
+        sc_addr = _shortcut_addr(name, self._BUTTON_ADDRS)
+        # Clear the whole shortcut slot then write the blob.
+        self._mem_write_bytes(
+            sc_addr, blob + b'\xff' * (SHORTCUT_SIZE - len(blob)))
+        return (BUTTON_MODE_CUSTOM, (sc_addr >> 8) & 0xff, sc_addr & 0xff)
 
     def set_button(self, btn_id: int, btn_type: int, a1: int, a2: int,
                    profile: int) -> None:
@@ -1233,7 +1282,7 @@ class PulsarNordic(PulsarDevice):
         shortcuts (Sonix type 0x02) are written as DPI_CHANGE (Nordic 0x02)
         and show up as dpi+/dpi(…) in the UI.
 
-        Keyboard shortcuts also need a 32-byte record at
+        Keyboard shortcuts and media keys also need a 32-byte record at
         SHORTCUT_BASE+32*index; the button slot only holds mode 0x05 plus
         a pointer to that record.
         """
@@ -1250,13 +1299,13 @@ class PulsarNordic(PulsarDevice):
             a1 = _SONIX_MOUSE_TO_NORDIC.get(a1, a1)
             a2 = 0x00
         elif btn_type == BTN_TYPE_KEYBOARD:
-            sc_addr = _shortcut_addr(name, self._BUTTON_ADDRS)
-            blob = _build_shortcut_blob(a1, a2)
-            # Clear the whole shortcut slot then write the blob.
-            self._mem_write_bytes(sc_addr, blob + bytes(SHORTCUT_SIZE - len(blob)))
-            raw_type = BUTTON_MODE_CUSTOM
-            a1 = (sc_addr >> 8) & 0xff
-            a2 = sc_addr & 0xff
+            raw_type, a1, a2 = self._write_shortcut(
+                name, _build_shortcut_blob(a1, a2))
+        elif btn_type == BTN_TYPE_MEDIA:
+            # describe_button()/parse_button_function() carry the Consumer
+            # usage as (low, high); the record wants it whole.
+            raw_type, a1, a2 = self._write_shortcut(
+                name, _build_media_blob(a1 | (a2 << 8)))
         elif btn_type == BTN_TYPE_DPI:
             raw_type = BUTTON_MODE_DPI_CHANGE
         elif btn_type == BTN_TYPE_PROFILE:
