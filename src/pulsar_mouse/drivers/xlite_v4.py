@@ -35,10 +35,14 @@ class PulsarXliteV4(Fusion2LodTenths, PulsarX2A):
     driver offers now write 02 0a and 02 14 instead of 00 00 and 01 01, the
     pairs it had been writing over the mouse's own.
 
-    lod_values stays at 1 and 2 mm: the register would carry 0.7 as 02 07,
-    and the Dongle Kit pages claim it, but those pages are copy-paste and no
-    capture of Fusion2 driving this mouse has been seen.  One line to add
-    when somebody looks.
+    It has the X3's third setting too.  Pulsar's page for this mouse lists
+    2, 1 and 0.7 mm, which on its own would be the same kind of evidence as
+    the Dongle Kit pages that were declined here - copy-paste, no capture of
+    Fusion2 driving this mouse - so the mouse was asked instead: @variasjon
+    wrote 02 07 to one profile and read it back, through the dongle, and it
+    held at 0.7 before being put back to its 1 mm (#34).  The register and
+    its encoding belong to the mouse rather than the connection, which is
+    why a read over the dongle settles the cabled driver as well.
     """
 
     capabilities = DeviceCapabilities(
@@ -74,7 +78,7 @@ class PulsarXliteV4(Fusion2LodTenths, PulsarX2A):
             'dpi':    0x0b,
         },
         polling_rates=[125, 250, 500, 1000],
-        lod_values=[1, 2],
+        lod_values=[0.7, 1, 2],
         button_labels={
             'left': 'Left Click', 'right': 'Right Click',
             'wheel': 'Wheel Click',

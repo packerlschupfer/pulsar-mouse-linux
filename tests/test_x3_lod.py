@@ -243,13 +243,13 @@ class DongleTests(unittest.TestCase):
         self.assertEqual(tuple(dongle.sent[-1][7:9]), (0x02, 0x07))
         self.assertEqual(dongle.get_lod(1), 0.7)
 
-    def test_an_xlite_v4_brings_its_six_profiles_and_two_values(self):
+    def test_an_xlite_v4_brings_its_six_profiles_and_three_values(self):
         dongle = scripted(PulsarXliteV4Wireless, paired=XLITE_V4_PID)
         self.assertTrue(dongle.refine_capabilities())
         caps = dongle.capabilities
         self.assertEqual(caps.name, 'Pulsar Xlite v4 (1K dongle)')
         self.assertEqual(caps.num_profiles, 6)
-        self.assertEqual(caps.lod_values, [1, 2])
+        self.assertEqual(caps.lod_values, [0.7, 1, 2])
 
     def test_a_mouse_with_no_cabled_driver_is_left_alone(self):
         dongle = scripted(PulsarXliteV4Wireless, paired=UNREAD_PID)
@@ -315,10 +315,11 @@ class CabledXliteV4Tests(unittest.TestCase):
         self.assertEqual((caps.dpi_max, caps.dpi_step),
                          (dongle.dpi_max, dongle.dpi_step))
 
-    def test_its_two_choices_are_unchanged(self):
-        # 0.7 would be 02 07, and the Dongle Kit page claims it, but no
-        # capture of Fusion2 driving this mouse has been seen.
-        self.assertEqual(PulsarXliteV4.capabilities.lod_values, [1, 2])
+    def test_it_offers_the_third_setting_the_mouse_kept(self):
+        # Not from Pulsar's page, which claims 0.7 the way the Dongle Kit
+        # pages declined here did: @variasjon wrote 02 07 through the
+        # dongle and read 0.7 back off the mouse (#34).
+        self.assertEqual(PulsarXliteV4.capabilities.lod_values, [0.7, 1, 2])
 
     def test_the_older_sonix_mice_are_untouched(self):
         for cls in (PulsarX2A, PulsarX2H, PulsarXliteWired):
