@@ -593,17 +593,19 @@ class PulsarX2A(PulsarDevice):
     _EVENT_PROFILE = 0x01       # 05 01 <profile>, counting from 1
     _EVENT_DPI = 0x05           # 05 05 <stage> <dpi lo> <dpi hi>
 
-    # Which bit 04 <mask> sets for each button.  Back, forward and the DPI
-    # button were pressed with a listener attached; the remaining three are
-    # the obvious leftover bits and nobody has pressed them, so they are
-    # named here and not relied on anywhere.
+    # Which bit 04 <mask> sets for each button.  All six were pressed with a
+    # listener attached, on an X3 through the 1K dongle and on its cable:
+    # @f-o-o-g-s did back, forward and the DPI button first and the other
+    # three after, each followed by 04 00 on release.  Nothing is inferred
+    # here, so a mask this does not explain is a mouse with more buttons
+    # rather than a gap in the table.
     _BUTTON_BITS = {
-        0x01: 'left',           # inferred
-        0x02: 'right',          # inferred
-        0x04: 'wheel',          # inferred
-        0x08: 'backward',       # measured
-        0x10: 'forward',        # measured
-        0x20: 'dpi',            # measured
+        0x01: 'left',
+        0x02: 'right',
+        0x04: 'wheel',
+        0x08: 'backward',
+        0x10: 'forward',
+        0x20: 'dpi',
     }
 
     def parse_hidraw_event(self, data: bytes) -> Optional[dict]:

@@ -49,27 +49,38 @@ def pressed(mask):
 
 
 class ButtonMaskTests(unittest.TestCase):
-    def test_the_bits_that_were_measured(self):
+    def test_every_bit_was_pressed_on_hardware(self):
+        # All six, on an X3 through the 1K dongle and on its cable.  None of
+        # these is a guess, so the table is a closed statement about this
+        # mouse rather than a partial one.
         mouse = PulsarX3()
-        for mask, name in ((0x08, 'backward'), (0x10, 'forward'),
+        for mask, name in ((0x01, 'left'), (0x02, 'right'), (0x04, 'wheel'),
+                           (0x08, 'backward'), (0x10, 'forward'),
                            (0x20, 'dpi')):
             self.assertEqual(mouse.parse_hidraw_event(pressed(mask)),
                              {'buttons_down': mask})
             self.assertEqual(PulsarX3._BUTTON_BITS[mask], name)
+        self.assertEqual(len(PulsarX3._BUTTON_BITS), 6)
 
     def test_the_bytes_straight_out_of_the_log(self):
-        # @f-o-o-g-s's X3, DPI button down then up, on the cable and
-        # through the 1K dongle alike.
-        down = bytes.fromhex('042000000000000000000000'
-                             '000000000000000000000000')
-        up = bytes.fromhex('040000000000000000000000'
-                           '000000000000000000000000')
+        # @f-o-o-g-s's X3 through the 1K dongle: left, right, wheel click
+        # and the DPI button, each followed by the same 04 00 on release.
+        log = {
+            0x01: '040100000000000000000000000000000000000000000000',
+            0x02: '040200000000000000000000000000000000000000000000',
+            0x04: '040400000000000000000000000000000000000000000000',
+            0x20: '042000000000000000000000000000000000000000000000',
+        }
+        up = bytes.fromhex('040000000000000000000000000000000000000000000000')
+        self.assertEqual(len(up), 24)
         for mouse in (PulsarX3(), PulsarXliteV4Wireless()):
-            self.assertEqual(len(down), 24)
-            self.assertEqual(mouse.parse_hidraw_event(down),
-                             {'buttons_down': 0x20})
-            self.assertEqual(mouse.parse_hidraw_event(up),
-                             {'buttons_down': 0x00})
+            for mask, line in log.items():
+                data = bytes.fromhex(line)
+                self.assertEqual(len(data), 24)
+                self.assertEqual(mouse.parse_hidraw_event(data),
+                                 {'buttons_down': mask})
+                self.assertEqual(mouse.parse_hidraw_event(up),
+                                 {'buttons_down': 0x00})
 
     def test_a_release_is_an_empty_mask(self):
         self.assertEqual(PulsarX2A().parse_hidraw_event(pressed(0x00)),
@@ -86,6 +97,8 @@ class ButtonMaskTests(unittest.TestCase):
 
     def test_every_named_bit_is_a_button_the_mouse_has(self):
         # The names are only worth having if they match the button table.
+        # back/forward are mouse *actions* there, not button names, so only
+        # the four that are both get checked.
         for cls in (PulsarX2A, PulsarX3, PulsarXliteV4Wireless):
             for name in cls._BUTTON_BITS.values():
                 if name in ('left', 'right', 'wheel', 'dpi'):
