@@ -711,6 +711,9 @@ def main():
                     print(f"  (error reading global settings: {e})")
                 print_profile(device, args.profile)
             print()
+    except NotImplementedError as e:
+        # A flag this driver has no setter for.  base's own carries no message.
+        sys.exit(f"Error: {str(e) or f'not supported on {caps.name}'}")
     finally:
         device.close()
 

@@ -62,6 +62,8 @@ regenerates the whole set in one run; see
 | Pulsar Feinmann F01 Noctua Edition (dongle) | `feinmann_noctua` | `3710:5504` | Fully supported, reads and writes confirmed on hardware (Nordic protocol despite the Feinmann name; fan control; no LEDs; DPI to 42000 at 1 DPI steps) |
 | Pulsar Feinmann F01 Noctua Edition (wired) | `feinmann_noctua_wired` | `3710:7507` | Fully supported, reads and writes confirmed on hardware (same protocol as the dongle; 8K Hz over the cable) |
 | Pulsar X2 Wireless (Areson cable) | `x2_areson_wired` | `25a7:fa7b` | Reads and writes confirmed on hardware (Nordic layout; 1K Hz max; GUI tested; charging LED overrides RGB effects while cabled) |
+| Pulsar eS Xlite (wired) | `es` | `3710:9604` | Read-only so far, CLI reads confirmed on hardware (its own protocol: report `0x0e`, `a5` magic, opcode byte; settings and battery of the profile the mouse is on, so one profile is listed of the mouse's four; shows X of a separate X/Y DPI; wins over an idle dongle; GUI not yet tried on the cable) |
+| Pulsar eS Xlite (eS LINK dongle) | `es_link_dongle` | `3710:5602` | Read-only so far, CLI and GUI reads confirmed on hardware (same protocol as the cable; says so when the mouse is off or on its cable) |
 
 Want to add support for your mouse? See [Adding a new driver](#adding-a-new-driver) below.
 
@@ -447,10 +449,11 @@ link, and the code comments next to whatever each finding explains.
 - [@jonkristian](https://github.com/jonkristian) — Pulsar X3 LHD and 8K dongle support, decoded from hardware including the dongle's stale-header answer, and the log that settled the link-up/down report
 - [@bluesceada](https://github.com/bluesceada) — Xlite V3: found that it shares the X2A Wireless's USB IDs and differs only in the key matrix, the captures that decoded the CID/MID identity read, the readings that corrected the Nordic firmware string, the Cfg.ini model table, the captures that measured the sleep timer, the two dumps that decoded the media-key record, and the libadwaita 1.5 fallback that fixed the GUI on Ubuntu 24.04
 - [@Wyatt-Robinson](https://github.com/Wyatt-Robinson) — Feinmann F01 Noctua Edition: USB capture and screen recording the driver was decoded from, plus hardware testing
+- [@itCFBTS](https://github.com/itCFBTS) — Pulsar eS Xlite read-only driver, decoding its protocol and testing on hardware over both the cable and the dongle
 - meniscus- — Found that a wheel turn over a GUI slider silently changed the setting, on an X2 CrazyLight
 - [andrewrabert](https://github.com/andrewrabert) — [python-pulsar-mouse-tool](https://github.com/andrewrabert/python-pulsar-mouse-tool), reference implementation for the Nordic wireless protocol
 
 ## Related Projects
 
 - [python-pulsar-mouse-tool](https://github.com/andrewrabert/python-pulsar-mouse-tool) — Linux tool for the Pulsar X2 V2 Mini (wireless, battery support)
-- [espulse](https://github.com/itCFBTS/espulse) — Linux tool for the Pulsar eS line, whose dongles speak a third protocol this app does not: report `0x0e` with an `a5` magic and an opcode byte, documented in that repo
+- [espulse](https://github.com/itCFBTS/espulse) — Linux tool for the Pulsar eS line, showing settings the `es` driver here doesn't yet; its protocol, report `0x0e` with an `a5` magic and an opcode byte, is documented in that repo
