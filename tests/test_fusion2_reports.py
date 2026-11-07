@@ -10,6 +10,11 @@ bytes, the size report 4 is declared at.  The first version of these tests
 used the 2-byte form the issue quoted, which is that report with its
 trailing zeros trimmed for legibility and not something any read returns,
 so they passed against a branch that could never fire on a mouse.
+
+Its top two bits are wheel ticks rather than buttons, and unlike the
+buttons they are momentary: no 04 00 follows a tick, so the mask stays as
+it was until something else happens.  That is why a tick is reported apart
+from buttons_down, and the tests below pin both halves of it.
 """
 
 import unittest
@@ -49,6 +54,49 @@ def pressed(mask):
 
 
 class ButtonMaskTests(unittest.TestCase):
+    def test_a_wheel_tick_is_not_a_button(self):
+        # 0x40 up, 0x80 down, matched against input0's own wheel reports on
+        # the cable and through the 1K dongle.  Reported apart from
+        # buttons_down because no 04 00 follows a tick: a consumer keeping
+        # the last mask as what is held would see the wheel held until the
+        # next scroll.
+        mouse = PulsarX3()
+        self.assertEqual(mouse.parse_hidraw_event(pressed(0x40)),
+                         {'buttons_down': 0x00, 'wheel': 1})
+        self.assertEqual(mouse.parse_hidraw_event(pressed(0x80)),
+                         {'buttons_down': 0x00, 'wheel': -1})
+        for bit in PulsarX3._WHEEL_BITS:
+            self.assertNotIn(bit, PulsarX3._BUTTON_BITS)
+
+    def test_a_tick_while_a_button_is_held_reports_both(self):
+        # Straight out of @f-o-o-g-s's log: the wheel button held down, then
+        # one tick up and one tick down.
+        mouse = PulsarX3()
+        held = '040400000000000000000000000000000000000000000000'
+        up = '044400000000000000000000000000000000000000000000'
+        down = '048400000000000000000000000000000000000000000000'
+        release = '040000000000000000000000000000000000000000000000'
+        self.assertEqual(mouse.parse_hidraw_event(bytes.fromhex(held)),
+                         {'buttons_down': 0x04})
+        self.assertEqual(mouse.parse_hidraw_event(bytes.fromhex(up)),
+                         {'buttons_down': 0x04, 'wheel': 1})
+        self.assertEqual(mouse.parse_hidraw_event(bytes.fromhex(down)),
+                         {'buttons_down': 0x04, 'wheel': -1})
+        self.assertEqual(mouse.parse_hidraw_event(bytes.fromhex(release)),
+                         {'buttons_down': 0x00})
+
+    def test_two_side_buttons_at_once_keep_both_bits(self):
+        # 04 18, one of the masks the October list from the captures missed.
+        self.assertEqual(
+            PulsarX3().parse_hidraw_event(pressed(0x18)),
+            {'buttons_down': 0x18})
+
+    def test_the_button_table_does_not_claim_the_whole_mask(self):
+        # It did, until the wheel ticks turned up in two of the bits it had
+        # left over.  A bit outside _BUTTON_MASK is not a seventh button.
+        self.assertEqual(PulsarX3._BUTTON_MASK, 0x3f)
+        self.assertEqual(sum(PulsarX3._BUTTON_BITS), PulsarX3._BUTTON_MASK)
+
     def test_every_bit_was_pressed_on_hardware(self):
         # All six, on an X3 through the 1K dongle and on its cable.  None of
         # these is a guess, so the table is a closed statement about this
@@ -85,10 +133,6 @@ class ButtonMaskTests(unittest.TestCase):
     def test_a_release_is_an_empty_mask(self):
         self.assertEqual(PulsarX2A().parse_hidraw_event(pressed(0x00)),
                          {'buttons_down': 0x00})
-
-    def test_two_buttons_at_once_are_one_mask(self):
-        self.assertEqual(PulsarX2A().parse_hidraw_event(pressed(0x18)),
-                         {'buttons_down': 0x18})
 
     def test_the_dongle_passes_it_through(self):
         self.assertEqual(

@@ -594,11 +594,8 @@ class PulsarX2A(PulsarDevice):
     _EVENT_DPI = 0x05           # 05 05 <stage> <dpi lo> <dpi hi>
 
     # Which bit 04 <mask> sets for each button.  All six were pressed with a
-    # listener attached, on an X3 through the 1K dongle and on its cable:
-    # @f-o-o-g-s did back, forward and the DPI button first and the other
-    # three after, each followed by 04 00 on release.  Nothing is inferred
-    # here, so a mask this does not explain is a mouse with more buttons
-    # rather than a gap in the table.
+    # listener attached, on an X3 on its cable and through the 1K dongle, and
+    # each is released by its own 04 00.
     _BUTTON_BITS = {
         0x01: 'left',
         0x02: 'right',
@@ -607,6 +604,27 @@ class PulsarX2A(PulsarDevice):
         0x10: 'forward',
         0x20: 'dpi',
     }
+    _BUTTON_MASK = 0x3f
+
+    # The top two bits are not buttons: 0x40 is a wheel tick up and 0x80 a
+    # tick down.  @f-o-o-g-s matched them against input0's own wheel reports
+    # - 9 ticks on the cable, 37 through the dongle, 190 in captures from
+    # August - with every tick getting its 04 inside a millisecond and no
+    # 04 40 or 04 80 ever arriving without one (#21).
+    #
+    # They are momentary where the button bits are state, and that asymmetry
+    # is the reason they are reported apart from buttons_down rather than as
+    # two more entries above.  A tick never gets its own 04 00: the mask just
+    # stays as it was until something else happens, so `04 44` (wheel click
+    # held, one tick up) sat for three seconds and a dongle's last `04 80`
+    # for twenty.  Anything keeping the last mask as "what is held" would see
+    # the wheel held until the next scroll, and anything treating a 04 as a
+    # press would fire on every tick.
+    #
+    # So this table is not a list of everything the mask can hold, and a bit
+    # it cannot explain is not a mouse with more buttons - which is what the
+    # comment here claimed until he measured these two.
+    _WHEEL_BITS = {0x40: 1, 0x80: -1}
 
     def parse_hidraw_event(self, data: bytes) -> Optional[dict]:
         if len(data) >= 2 and data[0] == self._REPORT_BUTTONS:
@@ -624,7 +642,12 @@ class PulsarX2A(PulsarDevice):
             # the issue quoted the reports with their trailing zeros
             # trimmed, which no read ever produces, so this branch could
             # not fire on a real mouse at all.
-            return {'buttons_down': data[1]}
+            event = {'buttons_down': data[1] & self._BUTTON_MASK}
+            for bit, delta in self._WHEEL_BITS.items():
+                if data[1] & bit:
+                    # Never both at once on any mouse that has been watched.
+                    event['wheel'] = delta
+            return event
         if (len(data) >= 3 and data[0] == self._REPORT_EVENT
                 and data[1] == self._EVENT_PROFILE):
             # No 05 05 follows, even when the new profile sits on another
