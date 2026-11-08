@@ -134,6 +134,27 @@ class ButtonMaskTests(unittest.TestCase):
         self.assertEqual(PulsarX2A().parse_hidraw_event(pressed(0x00)),
                          {'buttons_down': 0x00})
 
+    def test_letting_one_go_sends_what_is_still_held(self):
+        # The mask is a snapshot, not a press-and-release pair: 04 00 only
+        # arrives when the last button comes up.  @f-o-o-g-s's log, left and
+        # right and the wheel going down and then coming up one at a time.
+        mouse = PulsarX3()
+        sequence = [(0x03, 0x03), (0x07, 0x07), (0x05, 0x05),
+                    (0x04, 0x04), (0x00, 0x00)]
+        for mask, expected in sequence:
+            self.assertEqual(mouse.parse_hidraw_event(pressed(mask)),
+                             {'buttons_down': expected})
+
+    def test_the_button_bits_in_a_tick_report_are_what_is_held(self):
+        # Across 461 tick reports through the 1K dongle the button bits
+        # agreed with the pointer node's own button byte, so masking is
+        # enough - a reader does not have to skip tick reports to know what
+        # is held.  04 44 is the wheel button still down with a tick up.
+        self.assertEqual(PulsarX3().parse_hidraw_event(pressed(0x44)),
+                         {'buttons_down': 0x04, 'wheel': 1})
+        self.assertEqual(PulsarX3().parse_hidraw_event(pressed(0x04)),
+                         {'buttons_down': 0x04})
+
     def test_the_dongle_passes_it_through(self):
         self.assertEqual(
             PulsarXliteV4Wireless().parse_hidraw_event(pressed(0x20)),

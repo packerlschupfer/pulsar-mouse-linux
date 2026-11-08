@@ -594,8 +594,13 @@ class PulsarX2A(PulsarDevice):
     _EVENT_DPI = 0x05           # 05 05 <stage> <dpi lo> <dpi hi>
 
     # Which bit 04 <mask> sets for each button.  All six were pressed with a
-    # listener attached, on an X3 on its cable and through the 1K dongle, and
-    # each is released by its own 04 00.
+    # listener attached, on an X3 on its cable and through the 1K dongle.
+    #
+    # The mask is a snapshot of what is down, not a press-and-release pair:
+    # letting one go while others are still held sends what is left, 04 14 ->
+    # 04 04 or 04 07 -> 04 05, and 04 00 only arrives when the last one comes
+    # up.  (This said "each is released by its own 04 00", which is only true
+    # of a button pressed on its own.)
     _BUTTON_BITS = {
         0x01: 'left',
         0x02: 'right',
@@ -614,12 +619,22 @@ class PulsarX2A(PulsarDevice):
     #
     # They are momentary where the button bits are state, and that asymmetry
     # is the reason they are reported apart from buttons_down rather than as
-    # two more entries above.  A tick never gets its own 04 00: the mask just
-    # stays as it was until something else happens, so `04 44` (wheel click
-    # held, one tick up) sat for three seconds and a dongle's last `04 80`
-    # for twenty.  Anything keeping the last mask as "what is held" would see
-    # the wheel held until the next scroll, and anything treating a 04 as a
-    # press would fire on every tick.
+    # two more entries above.  Nothing clears a tick: the mask stays as it
+    # was until something else happens, so `04 44` (wheel click held, one
+    # tick up) sat for three seconds and a dongle's last `04 80` for twenty.
+    # Anything keeping the last mask as "what is held" would see the wheel
+    # held until the next scroll, and anything treating a 04 as a press would
+    # fire on every tick.
+    #
+    # Only the tick bits go stale, though.  He logged the pointer node's own
+    # button byte alongside this one through the 1K dongle, holding buttons
+    # while scrolling and letting go just after a tick: across 461 tick
+    # reports the button bits agreed with the pointer every time and the
+    # direction matched its wheel byte, and none of the 77 releases shared a
+    # report with a tick.  So masking to _BUTTON_MASK is enough and a reader
+    # need not skip tick reports to know what is held.  Dongle only, and a
+    # button change has never been seen in the same report as a tick, so what
+    # that would look like is unknown.
     #
     # So this table is not a list of everything the mask can hold, and a bit
     # it cannot explain is not a mouse with more buttons - which is what the
