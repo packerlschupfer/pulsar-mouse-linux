@@ -33,6 +33,8 @@ feinmann_noctua_wired = "pulsar_mouse.drivers.feinmann_noctua_wired:PulsarFeinma
 x2_crazylight_wired = "pulsar_mouse.drivers.x2_crazylight_wired:PulsarX2CrazyLightWired"
 x2_areson_wireless = "pulsar_mouse.drivers.x2_areson_wireless:PulsarX2AresonWireless"
 x2_areson_wired = "pulsar_mouse.drivers.x2_areson_wired:PulsarX2AresonWired"
+es = "pulsar_mouse.drivers.es:PulsarEs"
+es_link_dongle = "pulsar_mouse.drivers.es_link_dongle:PulsarEsLinkDongle"
 
 [tool.setuptools.packages.find]
 where = ["src"]
