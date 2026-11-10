@@ -42,6 +42,46 @@ destructive command.
 from pulsar_mouse.base import DeviceCapabilities
 from pulsar_mouse.drivers.nordic import PulsarNordic
 
+# ── Identity ─────────────────────────────────────────────────────────────
+#
+# What the CrazyLight line answers the identity query (command 0x01,
+# "CheckPsd" in Fusion's own Debug=2 log) with: cid 0x57, and a mid that
+# says which CrazyLight it is.  The pair is read whole and looked up here,
+# never through nordic.MODELS_BY_MID: that table came from Fusion's
+# Cfg.ini, is keyed by the MID alone on cid 6, and collides with this line
+# — an X2 CrazyLight's own capture answers `57 03 05` (see
+# docs/protocol-x2-crazylight.md), and mid 0x03 there reads "Pulsar X2
+# Mini Wireless" in it, which is how a genuine X2 CrazyLight used to be
+# renamed.  nordic.py itself says Cfg.ini "does not list the CrazyLight at
+# all", so on these PIDs that table is never consulted.
+#
+#   (0x57, 0x03)  X2 CrazyLight — the handshake tail in @iamtherobin's
+#                 capture (#7).
+#   (0x57, 0x68)  X3 LHD CrazyLight Medium — read on hardware through the
+#                 dongle and over its USB-C cable alike, same pair both
+#                 ways; its cabled HID string is "Pulsar X3 LHD CrazyLight
+#                 Medium" (2026-11).
+#
+# The second field is the cabled PID: what find_sibling() matches a cabled
+# driver on.  The 5406 dongle now serves more than one model, which is
+# precisely what capabilities.model_key cannot describe — a key is exactly
+# two drivers (see check-drivers' model_key check) — so the pair comes from
+# asking instead, the way the Fusion2 dongles are handled.
+CRAZYLIGHT_MODELS: dict[tuple[int, int], tuple[str, int]] = {
+    (0x57, 0x03): ('Pulsar X2 CrazyLight', 0x3414),
+    (0x57, 0x68): ('Pulsar X3 LHD CrazyLight Medium', 0x3527),
+}
+
+# The PIDs these identity rules speak for.  The Areson and Noctua drivers
+# derive from the class below but are not CrazyLight mice: anything keyed
+# here decides for them, it falls back to what the Nordic family has always
+# done.
+CRAZYLIGHT_PIDS = frozenset({
+    (0x3710, 0x5406),   # the shared 2.4 GHz dongle
+    (0x3710, 0x3414),   # X2 CrazyLight, cable
+    (0x3710, 0x3527),   # X3 LHD CrazyLight Medium, cable
+})
+
 
 class PulsarX2CrazyLight(PulsarNordic):
     """Driver for the Pulsar X2 CrazyLight through its 2.4 GHz dongle."""
@@ -146,3 +186,94 @@ class PulsarX2CrazyLight(PulsarNordic):
     # what they have always done, their register maps were validated against
     # this one's, and nothing says it is wrong for them.
     _AUTOSLEEP_MIRROR = True
+
+    # ── What this mouse turned out to be ──────────────────────────────────
+
+    # (cid, mid) once answered, as an instance attribute: a mouse cannot
+    # change which model it is, and a read that fails later must not undo
+    # one that worked.  Class-level default so every subclass starts there
+    # without an __init__ of its own; see nordic._model_mid for the same
+    # rule on the Cfg.ini family.
+    _cl_ids = None
+
+    def __init__(self):
+        super().__init__()
+        # "Which mouse is here" is a question for the shared dongle alone.
+        # cli.py, gui.py and find_sibling() all gate it on hasattr(), so as
+        # a class attribute it would reach every subclass - the Areson and
+        # Noctua mice, the cabled drivers - and make them answer a question
+        # only a receiver with a mouse on the other end can.  Bound onto the
+        # instance instead, and only for this dongle's own ID: an instance
+        # attribute the class never defines, so the inherited tree is
+        # exactly as it was.
+        if (self.capabilities.wireless
+                and set(self.capabilities.vid_pid_pairs)
+                & {(0x3710, 0x5406)}):
+            self.get_connected_mouse = self._connected_mouse
+
+    def _crazylight_ids(self) -> tuple[int, int] | None:
+        """The (cid, mid) this mouse answered the identity query with.
+
+        Asked once per driver object, remembered after that; None while it
+        has not answered - which includes "asleep right now", so the next
+        ask is free to try again rather than freezing a failure in.
+        """
+        if self._cl_ids is None:
+            try:
+                self._cl_ids = self.get_model_ids()
+            except Exception:
+                return None
+        return self._cl_ids
+
+    def _is_crazylight(self) -> bool:
+        """Whether these capabilities are one of the CrazyLight IDs."""
+        return bool(set(self.capabilities.vid_pid_pairs) & CRAZYLIGHT_PIDS)
+
+    def refine_capabilities(self) -> bool:
+        """Name the CrazyLight this is, from what it answers 0x01 with.
+
+        Replaces the Cfg.ini refine for this family (see CRAZYLIGHT_MODELS
+        for why the two tables must not meet): a pair the table does not
+        know keeps the class description, because an answer nobody has
+        decoded is not evidence for a different name, and after one change
+        this returns False as the GUI's rebuild rule needs.
+
+        The Areson and Noctua drivers inherit this method but not these
+        PIDs, so theirs goes on being the Nordic family's business,
+        unchanged.
+        """
+        if not self._is_crazylight():
+            return super().refine_capabilities()
+        ids = self._crazylight_ids()
+        model = CRAZYLIGHT_MODELS.get(ids) if ids else None
+        if model is None:
+            return False
+        link = 'Wireless' if self.capabilities.wireless else 'Wired'
+        return self._narrow_capabilities(name=f'{model[0]} {link}')
+
+    def model_name(self):
+        """What the identity query says this CrazyLight is, or None."""
+        if not self._is_crazylight():
+            return super().model_name()
+        model = CRAZYLIGHT_MODELS.get(self._crazylight_ids() or ())
+        return model[0] if model else None
+
+    def _connected_mouse(self) -> dict:
+        """{'vid', 'pid', 'name'} of the mouse behind this dongle.
+
+        The 5406 is one receiver for the whole CrazyLight line, so as on
+        the Fusion2 dongles the only way to know which mouse is on it is to
+        ask - and the mouse answers its identity through the dongle,
+        which CRAZYLIGHT_MODELS then maps to the IDs it enumerates with on
+        a cable, the pair find_sibling() matches a cabled driver on.
+
+        Raises when the mouse will not say (asleep, out of range) or says
+        something this repo has not decoded; find_sibling() and the CLI
+        both read that as "cannot tell", never as a guess.
+        """
+        ids = self._crazylight_ids()
+        model = CRAZYLIGHT_MODELS.get(ids) if ids else None
+        if model is None:
+            raise IOError('this dongle would not say which mouse it carries')
+        name, pid = model
+        return {'vid': 0x3710, 'pid': pid, 'name': f'{name} Wired'}

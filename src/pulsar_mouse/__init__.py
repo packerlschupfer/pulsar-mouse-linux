@@ -137,7 +137,14 @@ def find_sibling(device: PulsarDevice) -> PulsarDevice | None:
         for candidate in others:
             if candidate.capabilities.model_key == key:
                 return candidate
-        return None
+        # The key names one mouse and that mouse's other half isn't here —
+        # usually the end of it.  Not for a dongle that can be asked: the
+        # CrazyLight's 5406 carries a whole line, and a second model on it
+        # has no key of its own, because a key is exactly two drivers.  So
+        # an askable dongle falls through to the question below; anything
+        # else keeps the answer the key has always given.
+        if not hasattr(device, 'get_connected_mouse'):
+            return None
 
     if hasattr(device, 'get_connected_mouse'):
         # Ask the dongle only when there is a cabled mouse to match the
