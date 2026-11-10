@@ -73,14 +73,22 @@ CRAZYLIGHT_MODELS: dict[tuple[int, int], tuple[str, int]] = {
 }
 
 # The PIDs these identity rules speak for.  The Areson and Noctua drivers
-# derive from the class below but are not CrazyLight mice: anything keyed
-# here decides for them, it falls back to what the Nordic family has always
-# done.
+# derive from the class below but are not CrazyLight mice, so for anything
+# not keyed here the identity question falls back to what the Nordic family
+# has always done - nordic.MODELS_BY_MID and its Cfg.ini names.
 CRAZYLIGHT_PIDS = frozenset({
     (0x3710, 0x5406),   # the shared 2.4 GHz dongle
     (0x3710, 0x3414),   # X2 CrazyLight, cable
     (0x3710, 0x3527),   # X3 LHD CrazyLight Medium, cable
 })
+
+# Of those, the ones that are a receiver with a mouse on the other end, and
+# so the only ones that can answer "which mouse do you carry".  Named rather
+# than written out in __init__ so it cannot drift from the set above.
+CRAZYLIGHT_DONGLE_PIDS = frozenset({
+    (0x3710, 0x5406),
+})
+assert CRAZYLIGHT_DONGLE_PIDS <= CRAZYLIGHT_PIDS
 
 
 class PulsarX2CrazyLight(PulsarNordic):
@@ -208,7 +216,7 @@ class PulsarX2CrazyLight(PulsarNordic):
         # exactly as it was.
         if (self.capabilities.wireless
                 and set(self.capabilities.vid_pid_pairs)
-                & {(0x3710, 0x5406)}):
+                & CRAZYLIGHT_DONGLE_PIDS):
             self.get_connected_mouse = self._connected_mouse
 
     def _crazylight_ids(self) -> tuple[int, int] | None:
