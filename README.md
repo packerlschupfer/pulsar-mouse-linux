@@ -262,6 +262,7 @@ sudo pulsar-mouse --profile 1 --stage-color 1 255 0 0    # stage 1 = red
 # Button remapping (per-profile)
 sudo pulsar-mouse --profile 1 --button thumb1 dpi+
 sudo pulsar-mouse --profile 1 --button thumb1 ctrl+c
+sudo pulsar-mouse --profile 1 --button thumb1 arrowleft   # 'left' is the click
 sudo pulsar-mouse --profile 1 --button thumb1 vol+       # media keys
 sudo pulsar-mouse --profile 1 --button thumb1 'media(0x0192)'  # any HID usage (quote it)
 

@@ -106,7 +106,33 @@ _special = {
     'pageup': 0x4b, 'pagedown': 0x4e, 'right': 0x4f, 'left': 0x50,
     'down': 0x51, 'up': 0x52, 'insert': 0x49,
 }
-HID_KEYS = {**_alpha, **_digits, **_special}
+# Unambiguous spellings for the arrow keys.  'left' and 'right' are mouse
+# buttons first - parse_button_function() checks MOUSE_ACTIONS before the
+# keyboard path - so a binding described as 'left' parsed back as a left
+# click, and a button Fusion had bound to Left Arrow turned into a click
+# through export -> import or the GUI's remap dialog.  describe_button()
+# emits these instead; the bare words stay accepted, so profile JSON
+# written before this still imports.  All four, not just the two that
+# collided, so the four read alike wherever they are shown.
+_arrows = {'arrowleft': 0x50, 'arrowright': 0x4f,
+           'arrowup': 0x52, 'arrowdown': 0x51}
+HID_KEYS = {**_alpha, **_digits, **_special, **_arrows}
+
+# Every spelling parse_button_function() resolves before it reaches the
+# keyboard path.  A key named here can never be parsed back as that key,
+# so describe_button() must not print it.
+_CLAIMED_BEFORE_KEYS = (
+    {'disabled'} | set(MOUSE_ACTIONS) | set(SCROLL_ACTIONS)
+    | set(DPI_ACTIONS) | set(PROFILE_ACTIONS) | set(MEDIA_CODES)
+)
+
+# What describe_button() calls each key: the spelling that parses back as
+# this key and not as something an earlier table owns.
+_KEY_NAMES = {code: name for name, code in _arrows.items()}
+for _name, _code in HID_KEYS.items():
+    if _name not in _CLAIMED_BEFORE_KEYS:
+        _KEY_NAMES.setdefault(_code, _name)
+del _name, _code
 
 
 # ── Button description / parsing ────────────────────────────────────────────
@@ -120,8 +146,7 @@ def describe_button(btn_type: int, a1: int, a2: int) -> str:
     if btn_type == BTN_TYPE_KEYBOARD:
         mod_parts = [n for n, v in HID_MODS.items()
                      if v & a1 and n in ('ctrl','shift','alt','gui','rctrl','rshift','ralt','rgui')]
-        key_parts = [n for n, v in HID_KEYS.items() if v == a2]
-        key = key_parts[0] if key_parts else f'0x{a2:02x}'
+        key = _KEY_NAMES.get(a2, f'0x{a2:02x}')
         if mod_parts:
             return '+'.join(mod_parts + [key])
         return key
@@ -170,6 +195,7 @@ def parse_button_function(spec: str) -> tuple[int, int, int]:
       'media(0x0192)'                     (any HID Consumer usage;
                                            quote it, the shell eats ( ) )
       ctrl+c / shift+f5 / alt+tab / ...  (keyboard shortcut)
+      arrowleft / arrowright / arrowup / arrowdown
       disabled
     """
     s = spec.strip().lower()
@@ -217,7 +243,8 @@ def parse_button_function(spec: str) -> tuple[int, int, int]:
                 f"  Profile: profile+, profile-\n"
                 f"  Media: {', '.join(MEDIA_CODES)}, "
                 f"or 'media(0xNNNN)' for any HID Consumer usage\n"
-                f"  Keyboard: [modifier+]key  e.g. ctrl+c, shift+f5"
+                f"  Keyboard: [modifier+]key  e.g. ctrl+c, shift+f5, "
+                f"arrowleft (bare 'left' is the mouse button)"
             )
     if key:
         return (BTN_TYPE_KEYBOARD, mod, key)
