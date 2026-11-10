@@ -448,6 +448,7 @@ link, and the code comments next to whatever each finding explains.
 - [@jonkristian](https://github.com/jonkristian) — Pulsar X3 LHD and 8K dongle support, decoded from hardware including the dongle's stale-header answer, and the log that settled the link-up/down report
 - [@bluesceada](https://github.com/bluesceada) — Xlite V3: found that it shares the X2A Wireless's USB IDs and differs only in the key matrix, the captures that decoded the CID/MID identity read, the readings that corrected the Nordic firmware string, the Cfg.ini model table, the captures that measured the sleep timer, the two dumps that decoded the media-key record, and the libadwaita 1.5 fallback that fixed the GUI on Ubuntu 24.04
 - [@Wyatt-Robinson](https://github.com/Wyatt-Robinson) — Feinmann F01 Noctua Edition: USB capture and screen recording the driver was decoded from, plus hardware testing
+- [@pogojonson](https://github.com/pogojonson) — Pulsar X3 LHD CrazyLight Medium driver on both its connections, the CrazyLight line's identity read that tells its models apart, and the fix for a genuine X2 CrazyLight being renamed after a different mouse
 - meniscus- — Found that a wheel turn over a GUI slider silently changed the setting, on an X2 CrazyLight
 - [andrewrabert](https://github.com/andrewrabert) — [python-pulsar-mouse-tool](https://github.com/andrewrabert/python-pulsar-mouse-tool), reference implementation for the Nordic wireless protocol
 
