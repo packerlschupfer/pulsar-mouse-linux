@@ -14,11 +14,12 @@ X2 CrazyLight renamed it to a different mouse.
 Written after the merge, pinning the behaviour verified by hand on the PR.
 """
 
+import contextlib
 import unittest
 
 import pulsar_mouse as P
 from pulsar_mouse.drivers.feinmann_noctua import PulsarFeinmannNoctua
-from pulsar_mouse.drivers.nordic import MODELS_BY_MID
+from pulsar_mouse.drivers.nordic import MODELS_BY_MID, PulsarNordic
 from pulsar_mouse.drivers.x2_areson_wireless import PulsarX2AresonWireless
 from pulsar_mouse.drivers.x2_crazylight import (
     CRAZYLIGHT_DONGLE_PIDS, CRAZYLIGHT_MODELS, CRAZYLIGHT_PIDS,
@@ -32,22 +33,37 @@ X3_LHD_CL = (0x57, 0x68)
 
 
 def asked(cls, ids=X2_CL):
-    """`cls` with a mouse that answers the identity query with `ids`."""
+    """`cls` with a mouse that answers the identity query with `ids`.
+
+    `open()` is the driver's own - with PulsarNordic's USB half stubbed out -
+    so what it does to the remembered identity is under test rather than
+    replaced.  Set `.carries` to re-pair the dongle mid-test.
+    """
 
     class Scripted(cls):
+        carries = ids
+
         def get_model_ids(self):
-            if ids is None:
+            if self.carries is None:
                 raise IOError('asleep, or out of range')
             self.asks = getattr(self, 'asks', 0) + 1
-            return ids
-
-        def open(self):
-            pass
+            return self.carries
 
         def close(self):
             pass
 
     return Scripted()
+
+
+@contextlib.contextmanager
+def no_usb():
+    """PulsarNordic.open() without the USB, so the overrides above it run."""
+    real = PulsarNordic.open
+    PulsarNordic.open = lambda self: None
+    try:
+        yield
+    finally:
+        PulsarNordic.open = real
 
 
 class TheTwoTablesMustNotMeetTests(unittest.TestCase):
@@ -239,8 +255,12 @@ class SiblingTests(unittest.TestCase):
         self.addCleanup(P._CARRIED_CACHE.clear)
 
     def pair(self, me, bus):
+        # no_usb() rather than a stubbed open(): _carried_mouse() opens the
+        # dongle for its one read, so the driver's own open() - and the
+        # identity it forgets there - is part of what this exercises.
         P.scan_devices = lambda: bus
-        return P.find_sibling(me)
+        with no_usb():
+            return P.find_sibling(me)
 
     def test_the_key_still_pairs_the_x2_crazylight(self):
         dongle = asked(PulsarX2CrazyLight, X2_CL)
@@ -267,6 +287,30 @@ class SiblingTests(unittest.TestCase):
         self.assertIsNone(self.pair(dongle, [dongle, wired]))
         self.assertIsNone(self.pair(wired, [wired, dongle]))
 
+    def test_the_key_does_not_pre_empt_the_question(self):
+        # The half this file missed first time round, and the one a reviewer
+        # found: the dongle's key names the X2 CrazyLight pair, so with an
+        # X2 cable plugged in to charge it was returned whatever the dongle
+        # was actually carrying - both directions.
+        dongle = asked(PulsarX2CrazyLight, X3_LHD_CL)
+        x2 = asked(PulsarX2CrazyLightWired, X2_CL)
+        x3 = asked(PulsarX3LHDCrazyLight, X3_LHD_CL)
+        self.assertIsNone(self.pair(dongle, [dongle, x2]))
+        self.assertIsNone(self.pair(x2, [x2, dongle]))
+        # With both cables there, it is the one the dongle names.
+        self.assertIs(self.pair(dongle, [dongle, x2, x3]), x3)
+
+    def test_an_askable_candidate_is_asked_not_taken_on_its_key(self):
+        # Same bug from the cabled side: the X2 cable and the 5406 dongle
+        # share a key, and the dongle can be asked, so it is.
+        x2 = asked(PulsarX2CrazyLightWired, X2_CL)
+        self.assertEqual(x2.capabilities.model_key, 'x2_crazylight')
+        for ids, expected in ((X2_CL, True), (X3_LHD_CL, False)):
+            dongle = asked(PulsarX2CrazyLight, ids)
+            self.assertEqual(dongle.capabilities.model_key, 'x2_crazylight')
+            got = self.pair(x2, [x2, dongle])
+            self.assertEqual(got is dongle, expected, ids)
+
     def test_nothing_cabled_is_not_asked_at_all(self):
         dongle = asked(PulsarX2CrazyLight, X2_CL)
         self.assertIsNone(self.pair(dongle, [dongle]))
@@ -278,6 +322,36 @@ class SiblingTests(unittest.TestCase):
         noctua = asked(PulsarFeinmannNoctua, X2_CL)
         other = asked(PulsarX2A, X2_CL)
         self.assertIsNone(self.pair(noctua, [noctua, other]))
+
+    def test_a_re_paired_dongle_is_asked_again(self):
+        # A receiver's answer is pairing memory, not what it is: pair a
+        # different CrazyLight to the same dongle and it has to say so.
+        # The Fusion2 dongle clears its own per-open memory for exactly
+        # this reason - see xlite_v4_wireless.open().
+        dongle = asked(PulsarX2CrazyLight, X2_CL)
+        with no_usb():
+            dongle.open()
+            self.assertEqual(dongle.get_connected_mouse()['pid'], 0x3414)
+            dongle.carries = X3_LHD_CL
+            self.assertEqual(dongle.get_connected_mouse()['pid'], 0x3414,
+                             'within one open it may be remembered')
+            dongle.open()
+            self.assertEqual(dongle.get_connected_mouse()['pid'], 0x3527)
+            self.assertTrue(dongle.refine_capabilities())
+            self.assertEqual(dongle.capabilities.name,
+                             'Pulsar X3 LHD CrazyLight Medium Wireless')
+
+    def test_a_cabled_mouse_keeps_its_one_ask(self):
+        # It cannot change which model it is, so re-opening must not cost
+        # another handshake.
+        for cls in (PulsarX2CrazyLightWired, PulsarX3LHDCrazyLight):
+            mouse = asked(cls, X3_LHD_CL)
+            with no_usb():
+                mouse.open()
+                mouse._crazylight_ids()
+                mouse.open()
+                mouse._crazylight_ids()
+            self.assertEqual(mouse.asks, 1, cls.__name__)
 
     def test_exactly_one_driver_has_both_a_key_and_the_ask(self):
         from pulsar_mouse.drivers import discover_all

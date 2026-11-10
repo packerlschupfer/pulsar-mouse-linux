@@ -214,10 +214,28 @@ class PulsarX2CrazyLight(PulsarNordic):
         # instance instead, and only for this dongle's own ID: an instance
         # attribute the class never defines, so the inherited tree is
         # exactly as it was.
-        if (self.capabilities.wireless
-                and set(self.capabilities.vid_pid_pairs)
-                & CRAZYLIGHT_DONGLE_PIDS):
+        if self._is_shared_dongle():
             self.get_connected_mouse = self._connected_mouse
+
+    def _is_shared_dongle(self) -> bool:
+        """Whether this object is the receiver rather than a mouse."""
+        return bool(self.capabilities.wireless
+                    and set(self.capabilities.vid_pid_pairs)
+                    & CRAZYLIGHT_DONGLE_PIDS)
+
+    def open(self) -> None:
+        super().open()
+        if self._is_shared_dongle():
+            # The dongle may have been re-paired, which is the same reason
+            # xlite_v4_wireless.open() clears its _lod_tenths.  A mouse
+            # cannot change which model it is, so the cabled drivers keep
+            # their one ask per object; a receiver's answer is pairing
+            # memory and names a different mouse after a re-pair, so
+            # remembering it for the life of the object would leave the
+            # GUI's long-lived dongle - and the _CARRIED_CACHE that
+            # remember_connected_mouse keeps feeding - naming the old
+            # mouse forever.
+            self._cl_ids = None
 
     def _crazylight_ids(self) -> tuple[int, int] | None:
         """The (cid, mid) this mouse answered the identity query with.

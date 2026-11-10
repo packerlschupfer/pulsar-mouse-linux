@@ -132,20 +132,14 @@ def find_sibling(device: PulsarDevice) -> PulsarDevice | None:
     others = [c for c in scan_devices()
               if not mine & set(c.capabilities.vid_pid_pairs)]
 
-    key = device.capabilities.model_key
-    if key:
-        for candidate in others:
-            if candidate.capabilities.model_key == key:
-                return candidate
-        # The key names one mouse and that mouse's other half isn't here —
-        # usually the end of it.  Not for a dongle that can be asked: the
-        # CrazyLight's 5406 carries a whole line, and a second model on it
-        # has no key of its own, because a key is exactly two drivers.  So
-        # an askable dongle falls through to the question below; anything
-        # else keeps the answer the key has always given.
-        if not hasattr(device, 'get_connected_mouse'):
-            return None
-
+    # Asking beats the key, both ways round.  A key names the model a
+    # dongle was *sold* with, and the CrazyLight's 5406 is one receiver for
+    # a whole line: with that dongle carrying an X3 LHD and an X2
+    # CrazyLight plugged in to charge, the key matched the X2 and this
+    # returned somebody's other mouse - the one thing the paragraph above
+    # promises it never does (#44).  So a pairing that can be confirmed by
+    # asking is, and the key is left to the pairs where neither side can be
+    # asked at all.
     if hasattr(device, 'get_connected_mouse'):
         # Ask the dongle only when there is a cabled mouse to match the
         # answer against; this runs on every battery poll.
@@ -157,6 +151,16 @@ def find_sibling(device: PulsarDevice) -> PulsarDevice | None:
             if carried in candidate.capabilities.vid_pid_pairs:
                 return candidate
         return None
+
+    key = device.capabilities.model_key
+    if key:
+        # A candidate that can be asked is not taken on its key, however
+        # well it matches: that is the wrong half of the same bug.  It gets
+        # asked below instead.
+        for candidate in others:
+            if (candidate.capabilities.model_key == key
+                    and not hasattr(candidate, 'get_connected_mouse')):
+                return candidate
 
     for candidate in others:
         if (hasattr(candidate, 'get_connected_mouse')
