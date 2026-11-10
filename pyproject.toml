@@ -31,6 +31,7 @@ x2_crazylight = "pulsar_mouse.drivers.x2_crazylight:PulsarX2CrazyLight"
 feinmann_noctua = "pulsar_mouse.drivers.feinmann_noctua:PulsarFeinmannNoctua"
 feinmann_noctua_wired = "pulsar_mouse.drivers.feinmann_noctua_wired:PulsarFeinmannNoctuaWired"
 x2_crazylight_wired = "pulsar_mouse.drivers.x2_crazylight_wired:PulsarX2CrazyLightWired"
+x3_lhd_crazylight = "pulsar_mouse.drivers.x3_lhd_crazylight:PulsarX3LHDCrazyLight"
 x2_areson_wireless = "pulsar_mouse.drivers.x2_areson_wireless:PulsarX2AresonWireless"
 x2_areson_wired = "pulsar_mouse.drivers.x2_areson_wired:PulsarX2AresonWired"
 
