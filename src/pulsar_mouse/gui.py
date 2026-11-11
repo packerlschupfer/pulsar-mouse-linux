@@ -2362,11 +2362,35 @@ class MainWindow(Adw.ApplicationWindow):
         if caps.has_turbo:
             self._turbo_row = Adw.SwitchRow()
             self._turbo_row.set_title('Turbo Mode')
-            self._turbo_row.set_subtitle(
-                'Locks sensor scan rate at 20,000 FPS for consistent tracking')
-            self._turbo_row.set_tooltip_text(
-                'Keeps tracking at maximum performance regardless of DPI and '
-                'polling rate, but uses more power and drains the battery faster')
+            # Pulsar's own description, attributed because it is theirs and
+            # nothing here has measured it (support.pulsar.gg, "What is
+            # Turbo Mode?"): "a consistent 20,000 FPS sensor scanning rate",
+            # where otherwise the rate follows DPI and polling rate and "may
+            # drop to values like 13KHz or even below 1KHz", and "a higher
+            # energy demand, which translates into having to charge your
+            # battery more often".
+            #
+            # Scoped on purpose.  That article lists Turbo Mode as beta for
+            # "CrazyLight, TenZ, and X2F", and this app also exposes the
+            # 0xB5 register on the Feinmann Noctua, which is in none of those
+            # lines - it is there because the register was seen round-tripping
+            # in a capture of that mouse, which says the byte exists, not
+            # that the sensor does what the article describes.  So the figure
+            # is shown where Pulsar claims it, and the Noctua's row says only
+            # what is true of every mouse here.
+            if 'crazylight' in caps.name.lower().replace(' ', ''):
+                self._turbo_row.set_subtitle(
+                    'Holds the sensor at 20,000 FPS whatever the DPI and '
+                    'polling rate — Pulsar')
+                self._turbo_row.set_tooltip_text(
+                    'Pulsar describe Turbo Mode as locking the sensor\'s scan '
+                    'rate, which otherwise follows DPI and polling rate and '
+                    'can fall below 1 kHz, at the cost of charging more '
+                    'often. Nothing here has measured it.')
+            else:
+                self._turbo_row.set_subtitle(
+                    'Pulsar Fusion offers this; what it changes on this '
+                    'mouse has not been measured')
             global_group.add(self._turbo_row)
 
         # A slider rather than a switch: the one mouse with a fan runs it at

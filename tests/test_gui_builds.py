@@ -321,6 +321,68 @@ class WindowBuildTests(unittest.TestCase):
             self.assertIn(label, found)
 
 
+@unittest.skipUnless(_HAVE_DISPLAY, 'needs a display (run under xvfb-run)')
+class TurboRowTests(unittest.TestCase):
+    """Pulsar's own figure for Turbo Mode, shown only where they claim it.
+
+    Their support article lists it as beta for "CrazyLight, TenZ, and X2F".
+    This app also exposes the 0xB5 register on the Feinmann Noctua, which is
+    in none of those lines - the register was seen round-tripping in a
+    capture of that mouse, which says the byte exists and nothing about what
+    the sensor does.  So a mouse gaining has_turbo must not inherit the
+    claim, which is what this pins.
+    """
+
+    FIGURE = '20,000 FPS'
+
+    def turbo_row(self, name):
+        class Stub(StubX2A):
+            capabilities = replace(StubX2A.capabilities,
+                                   name=name, has_turbo=True)
+
+        win = gui.MainWindow(device=Stub())
+        self.addCleanup(win._stop_listeners)
+        self.assertIsNotNone(win._turbo_row, name)
+        return win._turbo_row
+
+    def test_the_mice_pulsar_claims_it_for_get_the_figure(self):
+        for name in ('Pulsar X2 CrazyLight Wireless',
+                     'Pulsar X3 LHD CrazyLight Medium Wired'):
+            row = self.turbo_row(name)
+            self.assertIn(self.FIGURE, row.get_subtitle(), name)
+            self.assertIn('Pulsar', row.get_subtitle(), name)
+
+    def test_a_mouse_they_do_not_claim_it_for_does_not(self):
+        row = self.turbo_row('Feinmann F01 Noctua Edition Wired')
+        self.assertNotIn(self.FIGURE, row.get_subtitle())
+        self.assertIn('not been measured', row.get_subtitle())
+
+    def test_the_row_is_absent_without_the_register(self):
+        win = gui.MainWindow(device=StubX2A())
+        self.addCleanup(win._stop_listeners)
+        self.assertFalse(StubX2A.capabilities.has_turbo)
+        self.assertIsNone(win._turbo_row)
+
+    def test_every_driver_that_has_it_lands_on_one_side_or_the_other(self):
+        # Not a restatement of the condition: it asserts that each real
+        # driver wearing has_turbo today gets the wording its model earns.
+        from pulsar_mouse.drivers import discover_all
+        claimed = ('crazylight', 'tenz', 'x2f')
+        seen = 0
+        for cls in discover_all().values():
+            caps = cls.capabilities
+            if not caps.has_turbo:
+                continue
+            seen += 1
+            flat = caps.name.lower().replace(' ', '')
+            row = self.turbo_row(caps.name)
+            if any(w in flat for w in claimed):
+                self.assertIn(self.FIGURE, row.get_subtitle(), caps.name)
+            else:
+                self.assertNotIn(self.FIGURE, row.get_subtitle(), caps.name)
+        self.assertEqual(seen, 5, 'drivers with has_turbo changed')
+
+
 class _FakeBusConn:
     """Just enough connection to see which signals an SNI emits."""
 
