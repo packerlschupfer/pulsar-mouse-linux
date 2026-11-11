@@ -596,6 +596,17 @@ class PulsarX2A(PulsarDevice):
     # Which bit 04 <mask> sets for each button.  All six were pressed with a
     # listener attached, on an X3 on its cable and through the 1K dongle.
     #
+    # Not every mouse in this family sends it.  The X2A - the oldest Fusion2
+    # mouse here, and the one that numbers DPI stages from zero - sends
+    # nothing on this node for a button at all: measured on the maintainer's
+    # own, logging /dev/input/event6 beside interface 1, where evdev recorded
+    # the side buttons, the wheel and a right click while the config node
+    # stayed silent.  The same node delivered 05 05 for a DPI press in the
+    # same session, so that is the mouse and not the listener.  The branch
+    # below therefore never fires on an X2A, which costs nothing; what it
+    # means is that anything built on buttons_down would do nothing on this
+    # half of the family.
+    #
     # The mask is a snapshot of what is down, not a press-and-release pair:
     # letting one go while others are still held sends what is left, 04 14 ->
     # 04 04 or 04 07 -> 04 05, and 04 00 only arrives when the last one comes
