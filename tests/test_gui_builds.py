@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from unittest.mock import patch
 
 try:
@@ -318,6 +319,138 @@ class WindowBuildTests(unittest.TestCase):
         found = titles(win._view_stack.get_child_by_name('customize'))
         for label in StubX2A.capabilities.button_labels.values():
             self.assertIn(label, found)
+
+
+class _FakeBusConn:
+    """Just enough connection to see which signals an SNI emits."""
+
+    def __init__(self):
+        self.signals = []
+
+    def emit_signal(self, _dest, _path, _iface, name, *_args):
+        self.signals.append(name)
+
+
+class _SyncThread:
+    """threading.Thread whose target runs on the spot, so a test can read
+    what a background read queued without waiting for it."""
+
+    def __init__(self, target=None, daemon=None, **_kw):
+        self._target = target
+
+    def start(self):
+        self._target()
+
+
+@unittest.skipUnless(_HAVE_DISPLAY, 'needs a display (run under xvfb-run)')
+class TrayTitleTests(unittest.TestCase):
+    # An X3 LHD CrazyLight behind the shared 5406 dongle is found as the
+    # X2 CrazyLight and only named after it has been opened and asked
+    # (refine_capabilities) - which is after the tray is built, so the
+    # tray's title is the one thing in the app that used to never catch up.
+
+    def sni(self, title='Pulsar X2 CrazyLight Wireless'):
+        return gui._StatusNotifierItem('pulsar-mouse', 'input-mouse', title)
+
+    def test_the_same_title_announces_nothing_and_a_new_one_announces_both(self):
+        sni = self.sni()
+        conn = _FakeBusConn()
+        sni._conn, sni._obj_id = conn, 1
+        sni.set_title('Pulsar X2 CrazyLight Wireless')
+        self.assertEqual(conn.signals, [])
+        sni.set_title('Pulsar X3 LHD CrazyLight Medium Wireless')
+        self.assertEqual(conn.signals, ['NewTitle', 'NewToolTip'])
+        # The ToolTip property carries the title as its own field, so a
+        # host that only re-reads that still shows the new name.
+        tip = sni._on_get_prop(None, None, None, None, 'ToolTip').unpack()
+        self.assertEqual(tip[2], 'Pulsar X3 LHD CrazyLight Medium Wireless')
+
+    def test_a_rename_reaches_the_tray(self):
+        app = self._app_that_does_not_run()
+        sni = self.sni()
+        app._sni = sni
+        app._device = StubX2A()
+        app._sync_tray_title()
+        self.assertEqual(sni._title, StubX2A.capabilities.name)
+
+    def test_a_rename_with_nothing_to_update_is_nothing(self):
+        app = self._app_that_does_not_run()
+        app._sni = None
+        app._device = StubX2A()
+        app._sync_tray_title()          # no tray, no session bus: no crash
+        app._sni = self.sni()
+        app._device = None
+        app._sync_tray_title()          # tray up, mouse gone: leave it be
+
+    def test_a_rename_also_rebuilds_an_open_window(self):
+        app = self._app_that_does_not_run()
+        sni = self.sni()
+        app._sni = sni
+        app._device = StubX2A()
+        asked = []
+        app._win = type('_Win', (), {
+            '_capabilities_changed': lambda self: asked.append('rebuilt'),
+        })()
+        app.get_windows = lambda: [app._win]
+        self.assertFalse(app._capabilities_renamed())
+        self.assertEqual(sni._title, StubX2A.capabilities.name)
+        self.assertEqual(asked, ['rebuilt'])
+        # No window (start in tray): the title still moves, nothing else.
+        asked.clear()
+        app.get_windows = lambda: []
+        self.assertFalse(app._capabilities_renamed())
+        self.assertEqual(asked, [])
+
+    def test_the_tray_asks_which_mouse_it_is_with_no_window_around(self):
+        # Start in tray: no window is ever opened, so nothing else would
+        # ever call refine_capabilities() - the title stayed the family's
+        # ("Pulsar X2 CrazyLight Wireless") for the life of the session.
+        app = self._app_that_does_not_run()
+        sni = self.sni()
+        app._sni = sni
+        queued = []
+
+        class Mouse:
+            capabilities = StubX2A.capabilities
+            opened = 0
+
+            def open(self):
+                Mouse.opened += 1
+
+            def close(self):
+                pass
+
+            def get_polling_rate(self):
+                return 1000
+
+            def get_active_profile(self):
+                return 1
+
+            def get_dpi_stages(self, profile):
+                return {'stages': [(800, 0)], 'active': 1}
+
+            def refine_capabilities(self):
+                self.capabilities = replace(
+                    self.capabilities,
+                    name='Pulsar X3 LHD CrazyLight Medium Wired')
+                return True
+
+        app._device = Mouse()
+        with patch.object(GLib, 'idle_add',
+                          lambda fn, *args: queued.append((fn, args)) or 1), \
+                patch('pulsar_mouse.gui.threading.Thread', _SyncThread):
+            app._read_initial_state()
+        self.assertEqual(Mouse.opened, 1)
+        renamed = [fn for fn, _a in queued
+                   if fn == app._capabilities_renamed]
+        self.assertEqual(len(renamed), 1, 'the rename was not passed on')
+        renamed[0]()
+        self.assertEqual(sni._title, 'Pulsar X3 LHD CrazyLight Medium Wired')
+
+    def _app_that_does_not_run(self):
+        app = gui.PulsarMouseApp()
+        self.addCleanup(app.quit)
+        return app
 
 
 if __name__ == '__main__':

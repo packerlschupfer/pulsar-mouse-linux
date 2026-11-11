@@ -438,6 +438,27 @@ class _StatusNotifierItem:
                 None, '/StatusNotifierItem',
                 'org.kde.StatusNotifierItem', 'NewIcon', None)
 
+    def set_title(self, title):
+        """Name the panel shows for this item - the tooltip's first line.
+
+        Frozen at construction until this existed: a driver that serves
+        several models only gets its real name once it has been opened and
+        asked (refine_capabilities), which is after the tray is built, so
+        nothing here could follow the rename.
+        """
+        if title == self._title:
+            return
+        self._title = title
+        if self._conn and self._obj_id:
+            self._conn.emit_signal(
+                None, '/StatusNotifierItem',
+                'org.kde.StatusNotifierItem', 'NewTitle', None)
+            # The ToolTip property carries the title as well as the text
+            # (see _on_get_prop), so both properties are stale together.
+            self._conn.emit_signal(
+                None, '/StatusNotifierItem',
+                'org.kde.StatusNotifierItem', 'NewToolTip', None)
+
     def set_tooltip(self, text):
         """Native hover tooltip (StatusNotifierItem ToolTip property), as
         opposed to set_label()'s always-visible text-next-to-icon label."""
@@ -792,6 +813,7 @@ class PulsarMouseApp(Adw.Application):
         def _read():
             if device is None:
                 return
+            renamed = False
             try:
                 with _USB_LOCK:
                     device.open()
@@ -848,8 +870,24 @@ class PulsarMouseApp(Adw.Application):
                             # memory, answered whether the mouse is awake or
                             # not.
                             remember_connected_mouse(device)
+                        # Last, and last on purpose: a driver that serves
+                        # several models only knows which one this is once
+                        # it is open - the question MainWindow._open_dev()
+                        # asks, asked here too so a session with no window
+                        # (start in tray) gets the mouse's real name rather
+                        # than the family's.  Display-only, so it goes after
+                        # the status reads: a slow or unanswered identity
+                        # question must not delay them or take part in
+                        # failing them.  Cannot tell keeps the family name;
+                        # a later read asks again.
+                        try:
+                            renamed = device.refine_capabilities()
+                        except Exception:
+                            pass
                     finally:
                         device.close()
+                if renamed:
+                    GLib.idle_add(self._capabilities_renamed)
                 if pwr is not None:
                     GLib.idle_add(self._set_battery_label, pwr)
                 elif hasattr(device, 'get_power'):
@@ -1078,6 +1116,9 @@ class PulsarMouseApp(Adw.Application):
                 pass
         self._device = device
         print(f'{reason}; following the mouse to {device.capabilities.name}')
+        # The new half may name itself differently from the one that left
+        # (a dongle answers with the family's name until it is asked).
+        self._sync_tray_title()
 
         if self._menu_server is not None:
             # The whole menu, not the DPI submenu: polling rates, battery and
@@ -1422,6 +1463,37 @@ class PulsarMouseApp(Adw.Application):
         lines = [t for t in (self._battery_text, self._conn_text) if t]
         if lines:
             self._sni.set_tooltip('\n'.join(lines))
+
+    def _sync_tray_title(self):
+        """Point the tray at the name the mouse answers with *now*.
+
+        The title is taken from capabilities once, when the tray is built
+        - and a driver that serves several models cannot know which one it
+        has until it has been opened and asked (refine_capabilities),
+        which is after that.  The window retitles itself when that
+        happens; this is the tray's half of the same news, and it also
+        covers a swap to the mouse's other connection, whose capabilities
+        carry their own name (_adopt_device rebuilds the menu but not the
+        item).
+        """
+        if self._sni is None or self._device is None:
+            return
+        self._sni.set_title(self._device.capabilities.name)
+
+    def _capabilities_renamed(self) -> bool:
+        """The tray learned which mouse this is; an open window must too.
+
+        refine_capabilities() runs wherever the device happens to be open
+        - MainWindow._open_dev(), or the tray's own initial read for a
+        session started with no window.  Whoever called it owns no
+        widgets, so the title is synced here and the window is asked to
+        rebuild; _capabilities_changed() no-ops when its capabilities are
+        already the current ones, so both paths may fire for one rename.
+        """
+        self._sync_tray_title()
+        if self.get_windows() and self._win is not None:
+            self._win._capabilities_changed()
+        return False
 
     def _hidraw_listener(self):
         last_signal_update = 0.0
@@ -2290,6 +2362,11 @@ class MainWindow(Adw.ApplicationWindow):
         if caps.has_turbo:
             self._turbo_row = Adw.SwitchRow()
             self._turbo_row.set_title('Turbo Mode')
+            self._turbo_row.set_subtitle(
+                'Locks sensor scan rate at 20,000 FPS for consistent tracking')
+            self._turbo_row.set_tooltip_text(
+                'Keeps tracking at maximum performance regardless of DPI and '
+                'polling rate, but uses more power and drains the battery faster')
             global_group.add(self._turbo_row)
 
         # A slider rather than a switch: the one mouse with a fan runs it at
@@ -3419,6 +3496,17 @@ X-GNOME-Autostart-enabled=true
             return False
         self._caps = caps
         self.set_title(caps.name)
+        # The tray was built before the mouse was asked what it is, so its
+        # title is the family's - the panel's tooltip would go on naming
+        # the X2 CrazyLight while this window says X3 LHD.  Asked quietly:
+        # a window never handed to GTK (a page built by a test without
+        # __init__) raises rather than answering.
+        try:
+            app = self.get_application()
+        except RuntimeError:
+            app = None
+        if app is not None:
+            app._sync_tray_title()
         self._profile = min(self._profile, caps.num_profiles)
         # The rows below are new, so they hold their construction values and
         # nothing has been read into them - the v0.1.21 rule starts over, or
