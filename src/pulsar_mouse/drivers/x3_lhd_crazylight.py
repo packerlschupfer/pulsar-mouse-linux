@@ -43,6 +43,23 @@ back (debounce, lift-off), 4 profiles (5 and 6 refused, status 0x01),
 battery while charging — and the 5406 dongle answers "which mouse do you
 carry" from its own pairing memory even while this mouse sits on the
 cable, which is what lets find_sibling() pair them on a cold start.
+
+The six buttons are the mouse's own, which was the one thing inherited
+from the X2 CrazyLight on nothing but a shape argument.  All six read on
+every profile and over both connections; all six are real buttons on this
+left-handed body and behave as labelled, side front included.  A write
+round-trip on thumb1 moved that slot's own four bytes and nothing else in
+0x000-0x1ff, with the checksum recomputing as 0x55 minus the record and
+the factory block restored byte for byte.
+
+What it does *not* have is the right-hand flank: 0x78 and 0x7c are
+thumb4 and thumb3 in the family table - the slots #30 is about - and this
+driver offers neither.  They hold 02 02 and 02 03 on this mouse, the same
+as the X2 CrazyLight and Xlite V3 dumps carry.  Through this family's own
+tables that reads as DPI-change with actions 2 and 3, i.e. shaped exactly
+like a dpi- and a dpiloop binding, so what those slots are *for* on a
+six-button mouse is still unidentified rather than known to be firmware
+data.  Not written here, which is the only part that matters.
 """
 
 from dataclasses import replace
