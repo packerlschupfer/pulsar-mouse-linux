@@ -2362,6 +2362,11 @@ class MainWindow(Adw.ApplicationWindow):
         if caps.has_turbo:
             self._turbo_row = Adw.SwitchRow()
             self._turbo_row.set_title('Turbo Mode')
+            self._turbo_row.set_subtitle(
+                'Locks sensor scan rate at 20,000 FPS for consistent tracking')
+            self._turbo_row.set_tooltip_text(
+                'Keeps tracking at maximum performance regardless of DPI and '
+                'polling rate, but uses more power and drains the battery faster')
             global_group.add(self._turbo_row)
 
         # A slider rather than a switch: the one mouse with a fan runs it at
