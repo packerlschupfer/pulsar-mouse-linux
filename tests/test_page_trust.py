@@ -269,7 +269,12 @@ class CapabilitiesChangedTests(unittest.TestCase):
         w = self.page_with(self.narrowed())
         w._capabilities_changed()
         self.assertEqual(w._caps, self.narrowed())
-        self.assertEqual(w.titled, 'Pulsar X3')
+        # The window title is the app's name, not the mouse's: on KDE it
+        # is the taskbar text, and a rename must not push the model back
+        # into it.  The new name reaches the window through _build_ui()'s
+        # rebuilt content_page, whose title the header bar shows.
+        self.assertFalse(hasattr(w, 'titled'),
+                         'the window was retitled to the mouse')
         self.assertEqual((w.built, w.reloads), (1, 1))
 
     def test_the_page_counts_as_unread_again(self):

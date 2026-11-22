@@ -1922,7 +1922,13 @@ class MainWindow(Adw.ApplicationWindow):
         super().__init__(**kwargs)
         self._device = device
         self._caps = device.capabilities if device else None
-        self.set_title(self._caps.name if self._caps else 'Pulsar Mouse')
+        # The app's name, not the mouse's: this string is what KDE's
+        # taskbar, alt-tab and Overview display (they all read the window
+        # title), while the mouse's full name is painted by the content
+        # page's own title in the header bar - see _build_ui()'s
+        # content_page, and _capabilities_changed() below for why it no
+        # longer retitles this window.
+        self.set_title('Pulsar Mouse')
         self.set_default_size(560, 740)
         self.set_icon_name('input-mouse')
         # Not set_hide_on_close(True) - a hidden-not-destroyed GtkWindow
@@ -2218,8 +2224,8 @@ class MainWindow(Adw.ApplicationWindow):
 
         # The application's name, not the model's - the connected mouse is
         # already identified by the Model row in the status group just
-        # below (and by the window title), so repeating it here as the
-        # page heading was redundant.
+        # below (and by the page title in the header bar), so repeating
+        # it here as the page heading was redundant.
         title = Gtk.Label(label=APP_NAME)
         title.add_css_class('title-1')
         title.set_margin_top(12)
@@ -3519,7 +3525,11 @@ X-GNOME-Autostart-enabled=true
         if caps == self._caps:
             return False
         self._caps = caps
-        self.set_title(caps.name)
+        # No set_title(caps.name) here: the window title is the app's name
+        # (KDE's taskbar text).  The mouse's new name reaches the window
+        # through _build_ui() below, which rebuilds content_page with it as
+        # the page title - that is what the header bar shows.
+        #
         # The tray was built before the mouse was asked what it is, so its
         # title is the family's - the panel's tooltip would go on naming
         # the X2 CrazyLight while this window says X3 LHD.  Asked quietly:
