@@ -117,6 +117,16 @@ APP_ID = 'io.github.packerlschupfer.PulsarMouse'
 # Display name of the application itself, as distinct from caps.name (the
 # connected mouse's model). Used for the Home tab's heading under the logo.
 APP_NAME = 'Pulsar Mouse Linux'
+# The shorter name, for the chrome: the window title (which on KDE is the
+# taskbar and alt-tab text), the sidebar page, and the name the notification
+# daemon shows.  Deliberately a constant rather than the three literals it
+# replaced, which could drift apart.
+#
+# It is *not* APP_NAME, and nobody has decided whether it should be: the
+# Home page's heading says "Pulsar Mouse Linux" while the window says
+# "Pulsar Mouse".  Left as it was found rather than quietly unified -
+# changing either is a visible change to the app's own name.
+APP_SHORT_NAME = 'Pulsar Mouse'
 
 # Serialises all USB open/close operations so the tray and window don't collide.
 _USB_LOCK = threading.Lock()
@@ -1411,7 +1421,7 @@ class PulsarMouseApp(Adw.Application):
         # text is the image-path hint, resolved to a file of that icon
         # when the theme has one.
         params = GLib.Variant('(susssasa{sv}i)', (
-            'Pulsar Mouse',
+            APP_SHORT_NAME,
             self._low_battery_notification_id,
             'pulsar-mouse',
             summary,
@@ -1928,7 +1938,7 @@ class MainWindow(Adw.ApplicationWindow):
         # page's own title in the header bar - see _build_ui()'s
         # content_page, and _capabilities_changed() below for why it no
         # longer retitles this window.
-        self.set_title('Pulsar Mouse')
+        self.set_title(APP_SHORT_NAME)
         self.set_default_size(560, 740)
         self.set_icon_name('input-mouse')
         # Not set_hide_on_close(True) - a hidden-not-destroyed GtkWindow
@@ -2080,7 +2090,7 @@ class MainWindow(Adw.ApplicationWindow):
             nav_list.append(row)
         nav_list.connect('row-selected', self._on_nav_row_selected)
         sidebar_toolbar.set_content(nav_list)
-        sidebar_page = Adw.NavigationPage.new(sidebar_toolbar, 'Pulsar Mouse')
+        sidebar_page = Adw.NavigationPage.new(sidebar_toolbar, APP_SHORT_NAME)
         split_view.set_sidebar(sidebar_page)
 
         # ── Content: header bar (Apply/Reload/profile - shared across all
@@ -2142,11 +2152,18 @@ class MainWindow(Adw.ApplicationWindow):
             self._view_stack.add_named(self._build_power_page(), 'power')
         self._view_stack.add_named(self._build_tools_page(), 'tools')
 
-        # Named after the mouse rather than left empty: an AdwNavigationPage
-        # with no title warns on every build, and since _capabilities_changed()
-        # builds this a second time there were two of them.  The header bar
-        # above shows its own title widget, so this one is only what a
-        # screen reader and the back button say.
+        # Named after the mouse, and this is the one place the chrome names
+        # it: the header bar above has no title widget of its own, so
+        # libadwaita draws *this* title in it.  Verified rather than read
+        # off the docs - built under xvfb, content_header.get_title_widget()
+        # is None with show_title True, and the label it renders is this
+        # string.
+        #
+        # So it is not "only what a screen reader and the back button say",
+        # which is what this comment claimed until #46.  That mattered the
+        # moment the window title stopped carrying the mouse's name: get rid
+        # of caps.name here and the model disappears from the window
+        # entirely, leaving only the Home page's Model row.
         content_page = Adw.NavigationPage.new(content_toolbar, caps.name)
         split_view.set_content(content_page)
 

@@ -322,6 +322,89 @@ class WindowBuildTests(unittest.TestCase):
 
 
 @unittest.skipUnless(_HAVE_DISPLAY, 'needs a display (run under xvfb-run)')
+class WindowChromeTests(unittest.TestCase):
+    """Where the app's name goes and where the mouse's does (#46).
+
+    The mouse used to be named twice - the window title, which on KDE is
+    the taskbar and alt-tab text, and the content page's title, which is
+    what the header bar actually draws.  The window title is the app's name
+    now, so that page title is the only place the chrome names the mouse:
+    these pin both halves, because deleting either is a silent loss.
+    """
+
+    def build(self):
+        win = gui.MainWindow(device=StubX2A())
+        self.addCleanup(win._stop_listeners)
+        return win
+
+    def pages(self, win):
+        split = win.get_content()
+        return split.get_sidebar(), split.get_content()
+
+    def header_label(self, page):
+        """The text libadwaita draws in that page's header bar."""
+        found = []
+
+        def walk(w):
+            if isinstance(w, Adw.HeaderBar):
+                self.assertIsNone(w.get_title_widget(),
+                                  'a title widget would hide the page title')
+                self.assertTrue(w.get_show_title())
+                found.append(page.get_title())
+                return
+            child = w.get_first_child()
+            while child is not None:
+                walk(child)
+                child = child.get_next_sibling()
+
+        walk(page.get_child())
+        self.assertTrue(found, 'no header bar under that page')
+        return found[0]
+
+    def test_the_window_title_is_the_app_not_the_mouse(self):
+        win = self.build()
+        self.assertEqual(win.get_title(), gui.APP_SHORT_NAME)
+        self.assertNotEqual(win.get_title(), StubX2A.capabilities.name)
+
+    def test_the_header_bar_is_where_the_mouse_is_named(self):
+        win = self.build()
+        _sidebar, content = self.pages(win)
+        self.assertEqual(content.get_title(), StubX2A.capabilities.name)
+        self.assertEqual(self.header_label(content),
+                         StubX2A.capabilities.name)
+
+    def test_the_sidebar_carries_the_app_name(self):
+        win = self.build()
+        sidebar, _content = self.pages(win)
+        self.assertEqual(sidebar.get_title(), gui.APP_SHORT_NAME)
+
+    def test_the_short_name_is_not_spelled_out_three_times(self):
+        # It was a literal in the window title, the sidebar page and the
+        # notification app-name before #46's follow-up.  Counted rather
+        # than searched for: one occurrence is the constant's own
+        # definition, and assertNotIn on a 200 KB source prints all of it.
+        lines = [l.strip() for l in open(gui.__file__)
+                 if "'Pulsar Mouse'" in l and not l.lstrip().startswith('#')]
+        self.assertEqual(lines, ["APP_SHORT_NAME = 'Pulsar Mouse'"])
+
+    def test_a_rename_moves_the_mouse_name_and_leaves_the_window_alone(self):
+        from dataclasses import replace
+        win = self.build()
+        # _capabilities_changed() defers to a GLib timeout while a read is
+        # in flight, and the build above started one - without these the
+        # rebuild simply never happens here and the test proves nothing.
+        win._reload_in_flight = False
+        win._reload = lambda *_a: None
+        renamed = replace(StubX2A.capabilities, name='Pulsar X3 LHD Wireless')
+        with patch.object(type(win._device), 'capabilities', renamed):
+            self.assertFalse(win._capabilities_changed())
+        self.assertEqual(win._caps.name, 'Pulsar X3 LHD Wireless')
+        self.assertEqual(win.get_title(), gui.APP_SHORT_NAME)
+        _sidebar, content = self.pages(win)
+        self.assertEqual(self.header_label(content), 'Pulsar X3 LHD Wireless')
+
+
+@unittest.skipUnless(_HAVE_DISPLAY, 'needs a display (run under xvfb-run)')
 class TurboRowTests(unittest.TestCase):
     """Pulsar's own figure for Turbo Mode, shown only where they claim it.
 
